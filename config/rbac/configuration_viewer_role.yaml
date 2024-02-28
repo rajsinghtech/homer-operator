@@ -1,0 +1,27 @@
+# permissions for end users to view configurations.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: clusterrole
+    app.kubernetes.io/instance: configuration-viewer-role
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/created-by: homer-operator
+    app.kubernetes.io/part-of: homer-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: configuration-viewer-role
+rules:
+- apiGroups:
+  - homer.rajsingh.info
+  resources:
+  - configurations
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - homer.rajsingh.info
+  resources:
+  - configurations/status
+  verbs:
+  - get

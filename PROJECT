@@ -2,15 +2,20 @@
 # This file is used to track the info used to scaffold your project
 # and allow the plugins properly work.
 # More info: https://book.kubebuilder.io/reference/project-config.html
-domain: homer.rajsingh.info
+domain: rajsingh.info
+multiGroup: true
 layout:
 - go.kubebuilder.io/v4
 projectName: homer-operator
 repo: github.com/rajsinghtech/homer-operator.git
 resources:
-- controller: true
-  group: core
-  kind: Pod
-  path: k8s.io/api/core/v1
-  version: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: rajsingh.info
+  group: homer
+  kind: Configuration
+  path: github.com/rajsinghtech/homer-operator.git/api/v1alpha1
+  version: v1alpha1
 version: "3"

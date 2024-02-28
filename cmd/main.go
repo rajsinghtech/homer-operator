@@ -34,6 +34,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	homerv1alpha1 "github.com/rajsinghtech/homer-operator.git/api/v1alpha1"
 	"github.com/rajsinghtech/homer-operator.git/internal/controller"
 	//+kubebuilder:scaffold:imports
 )
@@ -46,6 +47,7 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
+	utilruntime.Must(homerv1alpha1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 
@@ -102,7 +104,7 @@ func main() {
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "3f6c65b5.homer.rajsingh.info",
+		LeaderElectionID:       "3f6c65b5.rajsingh.info",
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
 		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
@@ -120,11 +122,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controller.PodReconciler{
+	if err = (&controller.ConfigurationReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Pod")
+		setupLog.Error(err, "unable to create controller", "controller", "Configuration")
 		os.Exit(1)
 	}
 	//+kubebuilder:scaffold:builder
