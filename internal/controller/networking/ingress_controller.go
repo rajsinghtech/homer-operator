@@ -47,14 +47,16 @@ type IngressReconciler struct {
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.17.0/pkg/reconcile
 func (r *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	l := log.FromContext(ctx)
-
-	// TODO(user): your logic here
 	ingress := &networkingv1.Ingress{}
+	var hosts []string
 	if err := r.Get(ctx, req.NamespacedName, ingress); err != nil {
 		l.Error(err, "unable to fetch Ingress")
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	l.Info("Ingress", "ingress", ingress)
+	for _, rule := range ingress.Spec.Rules {
+		hosts = append(hosts, rule.Host)		
+	}
+	l.Info("Ingress", "ingress", ingress, "hosts", hosts)
 	return ctrl.Result{}, nil
 }
 
