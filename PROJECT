@@ -3,9 +3,9 @@
 # and allow the plugins properly work.
 # More info: https://book.kubebuilder.io/reference/project-config.html
 domain: rajsingh.info
-multiGroup: true
 layout:
 - go.kubebuilder.io/v4
+multigroup: true
 projectName: homer-operator
 repo: github.com/rajsinghtech/homer-operator.git
 resources:
@@ -18,4 +18,10 @@ resources:
   kind: Configuration
   path: github.com/rajsinghtech/homer-operator.git/api/v1alpha1
   version: v1alpha1
+- controller: true
+  domain: k8s.io
+  group: networking
+  kind: Ingress
+  path: k8s.io/api/networking/v1
+  version: v1
 version: "3"
