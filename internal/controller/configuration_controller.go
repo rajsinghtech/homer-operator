@@ -23,7 +23,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-
+	// corev1 "k8s.io/api/core/v1"
+	appsv1 "k8s.io/api/apps/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	homerv1alpha1 "github.com/rajsinghtech/homer-operator.git/api/v1alpha1"
 )
 
@@ -48,8 +50,6 @@ type ConfigurationReconciler struct {
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.17.0/pkg/reconcile
 func (r *ConfigurationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	l := log.FromContext(ctx)
-
-	// TODO(user): your logic here
 	config := &homerv1alpha1.Configuration{}
 	err := r.Get(ctx, req.NamespacedName, config)
 	if err != nil {
@@ -58,7 +58,15 @@ func (r *ConfigurationReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	l.Info("Configuration", "config", config)
-	
+	spec := createHomerDeploymentConfiguration(config.Name)
+	l.Info("Generated", "Deployment", spec)
+
+	// // Create a slice to store the namespace names
+	// var nsNames []string
+	// for _, ns := range nsList.Items {
+	// 	nsNames = append(nsNames, ns.Name)
+	// }
+	// l.Info("NamespaceList", "nsNames", nsNames)
 	return ctrl.Result{}, nil
 }
 
@@ -66,5 +74,17 @@ func (r *ConfigurationReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 func (r *ConfigurationReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&homerv1alpha1.Configuration{}).
+		Owns(&appsv1.Deployment{}).
 		Complete(r)
+}
+
+func createHomerDeploymentConfiguration(resourceName string) *appsv1.Deployment {
+	overlay:= &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      resourceName,
+			Namespace: "default",
+		},
+		// TODO(user): Specify other spec details if needed.
+	}
+	return overlay
 }

@@ -54,7 +54,7 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		l.Error(err, "unable to fetch ConfigMap")
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	l.Info("ConfigMap", "configMap", configMap)
+	// l.Info("ConfigMap", "configMap", configMap)
 	return ctrl.Result{}, nil
 }
 
