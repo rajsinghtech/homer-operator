@@ -36,6 +36,7 @@ import (
 
 	homerv1alpha1 "github.com/rajsinghtech/homer-operator.git/api/v1alpha1"
 	"github.com/rajsinghtech/homer-operator.git/internal/controller"
+	appscontroller "github.com/rajsinghtech/homer-operator.git/internal/controller/apps"
 	corecontroller "github.com/rajsinghtech/homer-operator.git/internal/controller/core"
 	networkingcontroller "github.com/rajsinghtech/homer-operator.git/internal/controller/networking"
 	//+kubebuilder:scaffold:imports
@@ -143,6 +144,13 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ConfigMap")
+		os.Exit(1)
+	}
+	if err = (&appscontroller.DeploymentReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Deployment")
 		os.Exit(1)
 	}
 	//+kubebuilder:scaffold:builder
