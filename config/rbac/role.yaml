@@ -5,35 +5,9 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
-  - ""
-  resources:
-  - configmaps
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - configmaps/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - ""
-  resources:
-  - configmaps/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
   - homer.rajsingh.info
   resources:
-  - configurations
+  - dashboards
   verbs:
   - create
   - delete
@@ -45,39 +19,13 @@ rules:
 - apiGroups:
   - homer.rajsingh.info
   resources:
-  - configurations/finalizers
+  - dashboards/finalizers
   verbs:
   - update
 - apiGroups:
   - homer.rajsingh.info
   resources:
-  - configurations/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
-  - networking.k8s.io
-  resources:
-  - ingresses
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - networking.k8s.io
-  resources:
-  - ingresses/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - networking.k8s.io
-  resources:
-  - ingresses/status
+  - dashboards/status
   verbs:
   - get
   - patch

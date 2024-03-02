@@ -1,0 +1,14 @@
+apiVersion: homer.rajsingh.info/v1alpha1
+kind: Dashboard
+metadata:
+  # labels:
+  #   app.kubernetes.io/name: dashboard
+  #   app.kubernetes.io/instance: dashboard-sample
+  #   app.kubernetes.io/part-of: homer-operator
+  #   app.kubernetes.io/managed-by: kustomize
+  #   app.kubernetes.io/created-by: homer-operator
+  name: dashboard-sample
+spec:
+  # TODO(user): Add fields here
+  title: "Raj's Title"
+  subtitle: "Raj's Subtitle"

@@ -1,0 +1,27 @@
+# permissions for end users to view dashboards.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: clusterrole
+    app.kubernetes.io/instance: dashboard-viewer-role
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/created-by: homer-operator
+    app.kubernetes.io/part-of: homer-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: dashboard-viewer-role
+rules:
+- apiGroups:
+  - homer.rajsingh.info
+  resources:
+  - dashboards
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - homer.rajsingh.info
+  resources:
+  - dashboards/status
+  verbs:
+  - get
