@@ -12,3 +12,6 @@ spec:
   # TODO(user): Add fields here
   title: "Raj's Title"
   subtitle: "Raj's Subtitle"
+  configMap:
+    name: "raj-config"
+    key: "raj-key" 

@@ -39,6 +39,13 @@ spec:
           spec:
             description: DashboardSpec defines the desired state of Dashboard
             properties:
+              configMap:
+                properties:
+                  key:
+                    type: string
+                  name:
+                    type: string
+                type: object
               subtitle:
                 type: string
               title:
