@@ -29,8 +29,9 @@ type DashboardSpec struct {
 	// Important: Run "make" to regenerate code after modifying this file
 
 	// Foo is an example field of Dashboard. Edit dashboard_types.go to remove/update
-	Title string `json:"title,omitempty"`
+	Title    string `json:"title,omitempty"`
 	Subtitle string `json:"subtitle,omitempty"`
+	ConfigMap configMap `json:"configMap,omitempty"`
 }
 
 // DashboardStatus defines the observed state of Dashboard
@@ -62,4 +63,9 @@ type DashboardList struct {
 
 func init() {
 	SchemeBuilder.Register(&Dashboard{}, &DashboardList{})
+}
+
+type configMap struct {
+	Name string `json:"name,omitempty"`
+	Key  string `json:"key,omitempty"`
 }
