@@ -46,6 +46,10 @@ spec:
                   name:
                     type: string
                 type: object
+              configOverride:
+                additionalProperties:
+                  type: string
+                type: object
               subtitle:
                 type: string
               title:

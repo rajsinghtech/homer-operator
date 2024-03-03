@@ -32,6 +32,7 @@ type DashboardSpec struct {
 	Title    string `json:"title,omitempty"`
 	Subtitle string `json:"subtitle,omitempty"`
 	ConfigMap configMap `json:"configMap,omitempty"`
+	ConfigOverride map[string]string `json:"configOverride,omitempty"`
 }
 
 // DashboardStatus defines the observed state of Dashboard

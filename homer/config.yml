@@ -6,10 +6,10 @@
 # Using this will ignore remaining config in this file
 # externalConfig: https://example.com/server-luci/config.yaml
 
-title: "App dashboard"
-subtitle: "Homer"
+title: "Homer-Operator"
+subtitle: "Kubernetes Dashboard"
 # documentTitle: "Welcome" # Customize the browser tab text
-logo: "assets/logo.png"
+logo: "https://raw.githubusercontent.com/rajsinghtech/homer-operator/main/homer/Homer-Operator.png"
 # Alternatively a fa icon can be provided:
 # icon: "fas fa-skull-crossbones"
 

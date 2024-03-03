@@ -17,7 +17,6 @@ limitations under the License.
 package controller
 
 import (
-	"os"
 	"context"
 	homerv1alpha1 "github.com/rajsinghtech/homer-operator.git/api/v1alpha1"
 	"gopkg.in/yaml.v2"
@@ -25,6 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"os"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -81,8 +81,29 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		log.Error(err, "unable to create ConfigMap", "dashboard", req.NamespacedName)
 		return ctrl.Result{}, err
 	}
-	r.Create(ctx, &configMapSpec)
-	log.Info("ConfigMap created", "configMap", configMapSpec)
+	// Check if the ConfigMap already exists
+	existingConfigMap := &corev1.ConfigMap{}
+	err = r.Get(ctx, client.ObjectKey{Namespace: configMapSpec.Namespace, Name: configMapSpec.Name}, existingConfigMap)
+	if err != nil {
+		if client.IgnoreNotFound(err) != nil {
+			log.Error(err, "unable to fetch ConfigMap", "dashboard", req.NamespacedName)
+			return ctrl.Result{}, client.IgnoreNotFound(err)
+		}
+		// If not found, create the ConfigMap
+		if err := r.Create(ctx, &configMapSpec); err != nil {
+			log.Error(err, "unable to create ConfigMap", "dashboard", req.NamespacedName)
+			return ctrl.Result{}, err
+		}
+		log.Info("ConfigMap created", "ConfigMap", configMapSpec)
+	} else {
+		// If found, update the ConfigMap
+		existingConfigMap.Data = configMapSpec.Data
+		if err := r.Update(ctx, existingConfigMap); err != nil {
+			log.Error(err, "unable to update ConfigMap", "dashboard", req.NamespacedName)
+			return ctrl.Result{}, err
+		}
+		log.Info("ConfigMap updated", "ConfigMap", existingConfigMap)
+	}
 
 	deploymentSpec, err := r.createDeployment(dashboard)
 	if err != nil {
@@ -133,6 +154,8 @@ func (r *DashboardReconciler) createConfigMap(dashboard homerv1alpha1.Dashboard)
 	if err != nil {
 		return corev1.ConfigMap{}, err
 	}
+	obj["title"] = dashboard.Spec.Title
+	obj["subtitle"] = dashboard.Spec.Subtitle
 	// Marshal the obj into YAML
 	objYAML, err := yaml.Marshal(obj)
 	if err != nil {
@@ -203,7 +226,7 @@ func (r *DashboardReconciler) createDeployment(dashboard homerv1alpha1.Dashboard
 								{
 									ContainerPort: 8080,
 								},
-							}, 
+							},
 						},
 					},
 					Volumes: []corev1.Volume{
