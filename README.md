@@ -6,7 +6,6 @@
     <br/>
     Homer-Operator
 </h1>
-## Overview
 
 The `homer-operator` is a Kubernetes operator designed to simplify the deployment and management of dynamic dashboards using the [bastienwirtz/homer](https://github.com/bastienwirtz/homer) container. This operator leverages Homer's extensible YAML configuration methodologies to automatically generate and update dashboards based on existing Ingress and API Gateway resources within the Kubernetes cluster.
 
