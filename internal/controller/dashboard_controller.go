@@ -18,13 +18,16 @@ package controller
 
 import (
 	"context"
+
 	homerv1alpha1 "github.com/rajsinghtech/homer-operator.git/api/v1alpha1"
 	"gopkg.in/yaml.v2"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"os"
+
+	// "os"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -75,6 +78,49 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		}
 		return ctrl.Result{}, nil
 	}
+
+	var services []homerv1alpha1.Service = dashboard.Spec.HomerConfig.Services
+	// get all ingresses in all namespaces
+	ingresses := &networkingv1.IngressList{}
+	err := r.List(ctx, ingresses)
+	if err != nil {
+		log.Error(err, "unable to list Ingresses", "dashboard", req.NamespacedName)
+		return ctrl.Result{}, err
+	}
+	// iterate over all ingresses and add them to the dashboard
+	for _, ingress := range ingresses.Items {
+		for _, rule := range ingress.Spec.Rules {
+			item := homerv1alpha1.Item{}
+			service := homerv1alpha1.Service{}
+			service.Name = ingress.ObjectMeta.Namespace
+			item.Name = ingress.ObjectMeta.Name
+			service.Logo = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/resources/labeled/ns-128.png"
+			if len(ingress.Spec.TLS) > 0 {
+				item.Url = "https://" + rule.Host
+			} else {
+				item.Url = "http://" + rule.Host
+			}
+			item.Logo = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/resources/labeled/ing-128.png"
+			item.Subtitle = rule.Host
+			service.Items = append(service.Items, item)
+			services = append(services, service)
+		}
+	}
+	for _, s1 := range services {
+		complete := false
+		for j, s2 := range dashboard.Spec.HomerConfig.Services {
+			if s1.Name == s2.Name {
+				dashboard.Spec.HomerConfig.Services[j].Items = append(s2.Items, s1.Items[0])
+				complete = true
+				break
+			}
+		}
+		if !complete {
+			dashboard.Spec.HomerConfig.Services = append(dashboard.Spec.HomerConfig.Services, s1)
+		}
+	}
+
+	// dashboard.Spec.HomerConfig.Services = services
 
 	configMapSpec, err := r.createConfigMap(dashboard)
 	if err != nil {
@@ -145,19 +191,7 @@ func (r *DashboardReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 func (r *DashboardReconciler) createConfigMap(dashboard homerv1alpha1.Dashboard) (corev1.ConfigMap, error) {
-	yamlFile, err := os.ReadFile("../homer/config.yml")
-	if err != nil {
-		return corev1.ConfigMap{}, err
-	}
-	obj := make(map[string]interface{})
-	err = yaml.Unmarshal(yamlFile, obj)
-	if err != nil {
-		return corev1.ConfigMap{}, err
-	}
-	obj["title"] = dashboard.Spec.Title
-	obj["subtitle"] = dashboard.Spec.Subtitle
-	// Marshal the obj into YAML
-	objYAML, err := yaml.Marshal(obj)
+	objYAML, err := yaml.Marshal(dashboard.Spec.HomerConfig)
 	if err != nil {
 		return corev1.ConfigMap{}, err
 	}
@@ -166,10 +200,6 @@ func (r *DashboardReconciler) createConfigMap(dashboard homerv1alpha1.Dashboard)
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      dashboard.Spec.ConfigMap.Name,
 			Namespace: dashboard.Namespace,
-			Annotations: map[string]string{
-				"managed-by":               "homer-operator",
-				"homer.rajsingh.info/name": dashboard.Name,
-			},
 			Labels: map[string]string{
 				"managed-by":               "homer-operator",
 				"homer.rajsingh.info/name": dashboard.Name,
@@ -189,10 +219,6 @@ func (r *DashboardReconciler) createDeployment(dashboard homerv1alpha1.Dashboard
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      dashboard.Name,
 			Namespace: dashboard.Namespace,
-			Annotations: map[string]string{
-				"managed-by":               "homer-operator",
-				"homer.rajsingh.info/name": dashboard.Name,
-			},
 			Labels: map[string]string{
 				"managed-by":               "homer-operator",
 				"homer.rajsingh.info/name": dashboard.Name,
@@ -202,13 +228,13 @@ func (r *DashboardReconciler) createDeployment(dashboard homerv1alpha1.Dashboard
 			Replicas: &replicas,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
-					"app": dashboard.Name,
+					"homer.rajsingh.info/name": dashboard.Name,
 				},
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						"app": dashboard.Name,
+						"homer.rajsingh.info/name": dashboard.Name,
 					},
 				},
 				Spec: corev1.PodSpec{

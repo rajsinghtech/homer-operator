@@ -40,22 +40,89 @@ spec:
             description: DashboardSpec defines the desired state of Dashboard
             properties:
               configMap:
+                description: Foo is an example field of Dashboard. Edit dashboard_types.go
+                  to remove/update
                 properties:
                   key:
                     type: string
                   name:
                     type: string
                 type: object
-              configOverride:
-                additionalProperties:
-                  type: string
+              homerConfig:
+                properties:
+                  defaults:
+                    description: |-
+                      Columns          string        `json:"columns"` // Consider changing this to int if it's always a number
+                      ConnectivityCheck bool          `json:"connectivityCheck"`
+                      Proxy            ProxyConfig   `json:"proxy"`
+                    properties:
+                      colorTheme:
+                        type: string
+                      layout:
+                        type: string
+                    required:
+                    - colorTheme
+                    - layout
+                    type: object
+                  footer:
+                    type: string
+                  header:
+                    type: string
+                  logo:
+                    type: string
+                  services:
+                    items:
+                      properties:
+                        icon:
+                          type: string
+                        items:
+                          items:
+                            properties:
+                              background:
+                                type: string
+                              class:
+                                type: string
+                              keywords:
+                                type: string
+                              logo:
+                                type: string
+                              name:
+                                type: string
+                              subtitle:
+                                type: string
+                              tag:
+                                type: string
+                              tagstyle:
+                                type: string
+                              target:
+                                type: string
+                              type:
+                                type: string
+                              url:
+                                type: string
+                            required:
+                            - name
+                            - url
+                            type: object
+                          type: array
+                        logo:
+                          type: string
+                        name:
+                          type: string
+                      required:
+                      - icon
+                      - items
+                      - logo
+                      - name
+                      type: object
+                    type: array
+                  subtitle:
+                    type: string
+                  title:
+                    type: string
+                required:
+                - footer
                 type: object
-              subtitle:
-                type: string
-              title:
-                description: Foo is an example field of Dashboard. Edit dashboard_types.go
-                  to remove/update
-                type: string
             type: object
           status:
             description: DashboardStatus defines the observed state of Dashboard
