@@ -17,11 +17,11 @@ spec:
     footer: '<p>Homer-Operator</p>' 
     # columns: "3"
     logo: "https://raw.githubusercontent.com/rajsinghtech/homer-operator/main/homer/Homer-Operator.png"
-    links:
-    - icon: fab fa-github
-      name: homer-operator
-      target: _blank
-      url: https://github.com/bastienwirtz/homer
+    # links:
+    # - icon: fab fa-github
+    #   name: homer-operator
+    #   target: _blank
+    #   url: https://github.com/bastienwirtz/homer
     defaults:
       layout: list # Either 'columns', or 'list'
       colorTheme: auto

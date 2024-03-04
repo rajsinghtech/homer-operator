@@ -29,7 +29,7 @@ type DashboardSpec struct {
 	// Important: Run "make" to regenerate code after modifying this file
 
 	// Foo is an example field of Dashboard. Edit dashboard_types.go to remove/update
-	ConfigMap ConfigMap `json:"configMap,omitempty"`
+	ConfigMap   ConfigMap   `json:"configMap,omitempty"`
 	HomerConfig HomerConfig `json:"homerConfig,omitempty"`
 }
 
@@ -69,18 +69,17 @@ type ConfigMap struct {
 	Key  string `json:"key,omitempty"`
 }
 
-
 type HomerConfig struct {
-	Title            string        `json:"title,omitempty"`
-	Subtitle         string        `json:"subtitle,omitempty"`
-	Logo             string        `json:"logo,omitempty"`
-	Header           string        `json:"header,omitempty"`
-	Services		 []Service    `json:"services,omitempty"`
-	Footer           string        `json:"footer"`
+	Title    string    `json:"title,omitempty"`
+	Subtitle string    `json:"subtitle,omitempty"`
+	Logo     string    `json:"logo,omitempty"`
+	Header   string    `json:"header,omitempty"`
+	Services []Service `json:"services,omitempty"`
+	Footer   string    `json:"footer"`
 	// Columns          string        `json:"columns"` // Consider changing this to int if it's always a number
 	// ConnectivityCheck bool          `json:"connectivityCheck"`
 	// Proxy            ProxyConfig   `json:"proxy"`
-	Defaults         DefaultConfig `json:"defaults,omitempty"`
+	Defaults DefaultConfig `json:"defaults,omitempty"`
 	// Theme            string        `json:"theme"`
 	// Colors           struct {
 	// 	Light struct {
@@ -145,15 +144,15 @@ type Service struct {
 }
 
 type Item struct {
-	Name     string `json:"name"`
-	Logo     string `json:"logo,omitempty"`
-	Subtitle string `json:"subtitle,omitempty"`
-	Tag      string `json:"tag,omitempty"`
-	Keywords string `json:"keywords,omitempty"`
-	Url      string `json:"url"`
-	Target   string `json:"target,omitempty"`
-	Tagstyle string `json:"tagstyle,omitempty"`
-	Type     string `json:"type,omitempty"`
-	Class    string `json:"class,omitempty"`
+	Name       string `json:"name"`
+	Logo       string `json:"logo,omitempty"`
+	Subtitle   string `json:"subtitle,omitempty"`
+	Tag        string `json:"tag,omitempty"`
+	Keywords   string `json:"keywords,omitempty"`
+	Url        string `json:"url"`
+	Target     string `json:"target,omitempty"`
+	Tagstyle   string `json:"tagstyle,omitempty"`
+	Type       string `json:"type,omitempty"`
+	Class      string `json:"class,omitempty"`
 	Background string `json:"background,omitempty"`
 }

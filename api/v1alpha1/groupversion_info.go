@@ -17,6 +17,11 @@ limitations under the License.
 // Package v1alpha1 contains API Schema definitions for the homer v1alpha1 API group
 // +kubebuilder:object:generate=true
 // +groupName=homer.rajsingh.info
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=configmaps/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=deployments/status,verbs=get;update;patch
 package v1alpha1
 
 import (
