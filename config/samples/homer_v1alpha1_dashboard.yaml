@@ -1,12 +1,6 @@
 apiVersion: homer.rajsingh.info/v1alpha1
 kind: Dashboard
 metadata:
-  # labels:
-  #   app.kubernetes.io/name: dashboard
-  #   app.kubernetes.io/instance: dashboard-sample
-  #   app.kubernetes.io/part-of: homer-operator
-  #   app.kubernetes.io/managed-by: kustomize
-  #   app.kubernetes.io/created-by: homer-operator
   name: dashboard-sample
 spec:
   homerConfig:
@@ -17,11 +11,6 @@ spec:
     footer: '<p>Homer-Operator</p>' 
     # columns: "3"
     logo: "https://raw.githubusercontent.com/rajsinghtech/homer-operator/main/homer/Homer-Operator.png"
-    # links:
-    # - icon: fab fa-github
-    #   name: homer-operator
-    #   target: _blank
-    #   url: https://github.com/bastienwirtz/homer
     defaults:
       layout: list # Either 'columns', or 'list'
       colorTheme: auto
