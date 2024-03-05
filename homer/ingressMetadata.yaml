@@ -1,0 +1,23 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ExampleIngress
+  annotations:
+    homer.rajsingh.info/item/name: dashboard-sample # Dashboard
+    homer.rajsingh.info/: "Awesome app" # Service
+spec:
+  rules:
+  - host: homer.rajsingh.info
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: homer
+            port:
+              number: 80
+  tls:
+  - hosts:
+    - homer.rajsingh.info
+    secretName: homer-rajsingh-info-tls

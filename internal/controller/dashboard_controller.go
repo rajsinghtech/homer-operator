@@ -55,20 +55,18 @@ type DashboardReconciler struct {
 func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 	var dashboard homerv1alpha1.Dashboard
+	// Resource Deleted - Clean up all resources
 	if err := r.Get(ctx, req.NamespacedName, &dashboard); err != nil {
-
 		if client.IgnoreNotFound(err) != nil {
 			log.Error(err, "unable to fetch Dashboard", "dashboard", req.NamespacedName)
 			return ctrl.Result{}, client.IgnoreNotFound(err)
 		}
-		// Delete all resources with "homer.rajsingh.info/name": dashboard.Name annotation
+		// Delete all deployments with "homer.rajsingh.info/name": dashboard.Name annotation
 		deployments := &appsv1.DeploymentList{}
-		err = r.List(ctx, deployments, client.MatchingLabels{"homer.rajsingh.info/name": req.NamespacedName.Name})
-		if err != nil {
+		if err := r.List(ctx, deployments, client.MatchingLabels{"homer.rajsingh.info/name": req.NamespacedName.Name}); err != nil {
 			log.Error(err, "unable to list Deployments", "dashboard", req.NamespacedName)
 			return ctrl.Result{}, err
 		}
-
 		for _, deployment := range deployments.Items {
 			if err := r.Delete(ctx, &deployment); err != nil {
 				log.Error(err, "unable to delete Deployment", "dashboard", req.NamespacedName)
@@ -76,17 +74,103 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			}
 			log.Info("Deployment deleted", "deployment", deployment)
 		}
+		services := &corev1.ServiceList{}
+		if err := r.List(ctx, services, client.MatchingLabels{"homer.rajsingh.info/name": req.NamespacedName.Name}); err != nil {
+			log.Error(err, "unable to list Services", "dashboard", req.NamespacedName)
+			return ctrl.Result{}, err
+		}
+		for _, service := range services.Items {
+			if err := r.Delete(ctx, &service); err != nil {
+				log.Error(err, "unable to delete Service", "dashboard", req.NamespacedName)
+				return ctrl.Result{}, err
+			}
+			log.Info("Service deleted", "service", service)
+		}
+		configMaps := &corev1.ConfigMapList{}
+		if err := r.List(ctx, configMaps, client.MatchingLabels{"homer.rajsingh.info/name": req.NamespacedName.Name}); err != nil {
+			log.Error(err, "unable to list ConfigMaps", "dashboard", req.NamespacedName)
+			return ctrl.Result{}, err
+		}
+		for _, configMap := range configMaps.Items {
+			if err := r.Delete(ctx, &configMap); err != nil {
+				log.Error(err, "unable to delete ConfigMap", "dashboard", req.NamespacedName)
+				return ctrl.Result{}, err
+			}
+			log.Info("ConfigMap deleted", "configMap", configMap)
+		}
 		return ctrl.Result{}, nil
 	}
-
-	var services []homerv1alpha1.Service = dashboard.Spec.HomerConfig.Services
-	// get all ingresses in all namespaces
+	// Get Ingresses
 	ingresses := &networkingv1.IngressList{}
-	err := r.List(ctx, ingresses)
-	if err != nil {
+	if err := r.List(ctx, ingresses); err != nil {
 		log.Error(err, "unable to list Ingresses", "dashboard", req.NamespacedName)
 		return ctrl.Result{}, err
 	}
+	// Generate Dashboard
+	dashboard = updateHomerConfig(dashboard, *ingresses)
+	// Resource Created/Updated - Create/Update resources
+	configMapSpec, err := r.createConfigMap(dashboard)
+	if err != nil {
+		log.Error(err, "unable to create ConfigMap", "dashboard", req.NamespacedName)
+		return ctrl.Result{}, err
+	}
+	// Check if the ConfigMap already exists
+	if err := r.Get(ctx, client.ObjectKey{Namespace: configMapSpec.Namespace, Name: configMapSpec.Name}, &corev1.ConfigMap{}); err != nil {
+		if client.IgnoreNotFound(err) != nil {
+			log.Error(err, "unable to fetch ConfigMap", "dashboard", req.NamespacedName)
+			return ctrl.Result{}, client.IgnoreNotFound(err)
+		}
+		// If not found, create the ConfigMap
+		if err := r.Create(ctx, &configMapSpec); err != nil {
+			log.Error(err, "unable to create ConfigMap", "dashboard", req.NamespacedName)
+			return ctrl.Result{}, err
+		}
+		log.Info("ConfigMap created", "ConfigMap", configMapSpec)
+	} else {
+		// If found, update the ConfigMap
+		if err := r.Update(ctx, &configMapSpec); err != nil {
+			log.Error(err, "unable to update ConfigMap", "dashboard", req.NamespacedName)
+			return ctrl.Result{}, err
+		}
+		log.Info("ConfigMap updated", "ConfigMap", configMapSpec)
+	}
+	deploymentSpec, err := r.createDeployment(dashboard)
+	if err != nil {
+		log.Error(err, "unable to create Deployment", "dashboard", req.NamespacedName)
+		return ctrl.Result{}, err
+	}
+	// Check if the Deployment already exists
+	if err := r.Get(ctx, client.ObjectKey{Namespace: deploymentSpec.Namespace, Name: deploymentSpec.Name}, &appsv1.Deployment{}); err != nil {
+		if client.IgnoreNotFound(err) != nil {
+			log.Error(err, "unable to fetch Deployment", "dashboard", req.NamespacedName)
+			return ctrl.Result{}, client.IgnoreNotFound(err)
+		}
+		// If not found, create the Deployment
+		if err := r.Create(ctx, &deploymentSpec); err != nil {
+			log.Error(err, "unable to create Deployment", "dashboard", req.NamespacedName)
+			return ctrl.Result{}, err
+		}
+		log.Info("Deployment created", "deployment", deploymentSpec)
+	} else {
+		// If found, update the Deployment
+		if err := r.Update(ctx, &deploymentSpec); err != nil {
+			log.Error(err, "unable to update Deployment", "dashboard", req.NamespacedName)
+			return ctrl.Result{}, err
+		}
+		log.Info("Deployment updated", "deployment", deploymentSpec)
+	}
+	return ctrl.Result{}, nil
+}
+
+// SetupWithManager sets up the controller with the Manager.
+func (r *DashboardReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&homerv1alpha1.Dashboard{}).
+		Complete(r)
+}
+
+func updateHomerConfig(dashboard homerv1alpha1.Dashboard, ingresses networkingv1.IngressList) homerv1alpha1.Dashboard {
+	var services []homerv1alpha1.Service = dashboard.Spec.HomerConfig.Services
 	// iterate over all ingresses and add them to the dashboard
 	for _, ingress := range ingresses.Items {
 		for _, rule := range ingress.Spec.Rules {
@@ -119,75 +203,7 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			dashboard.Spec.HomerConfig.Services = append(dashboard.Spec.HomerConfig.Services, s1)
 		}
 	}
-
-	// dashboard.Spec.HomerConfig.Services = services
-
-	configMapSpec, err := r.createConfigMap(dashboard)
-	if err != nil {
-		log.Error(err, "unable to create ConfigMap", "dashboard", req.NamespacedName)
-		return ctrl.Result{}, err
-	}
-	// Check if the ConfigMap already exists
-	existingConfigMap := &corev1.ConfigMap{}
-	err = r.Get(ctx, client.ObjectKey{Namespace: configMapSpec.Namespace, Name: configMapSpec.Name}, existingConfigMap)
-	if err != nil {
-		if client.IgnoreNotFound(err) != nil {
-			log.Error(err, "unable to fetch ConfigMap", "dashboard", req.NamespacedName)
-			return ctrl.Result{}, client.IgnoreNotFound(err)
-		}
-		// If not found, create the ConfigMap
-		if err := r.Create(ctx, &configMapSpec); err != nil {
-			log.Error(err, "unable to create ConfigMap", "dashboard", req.NamespacedName)
-			return ctrl.Result{}, err
-		}
-		log.Info("ConfigMap created", "ConfigMap", configMapSpec)
-	} else {
-		// If found, update the ConfigMap
-		existingConfigMap.Data = configMapSpec.Data
-		if err := r.Update(ctx, existingConfigMap); err != nil {
-			log.Error(err, "unable to update ConfigMap", "dashboard", req.NamespacedName)
-			return ctrl.Result{}, err
-		}
-		log.Info("ConfigMap updated", "ConfigMap", existingConfigMap)
-	}
-
-	deploymentSpec, err := r.createDeployment(dashboard)
-	if err != nil {
-		log.Error(err, "unable to create Deployment", "dashboard", req.NamespacedName)
-		return ctrl.Result{}, err
-	}
-
-	// Check if the Deployment already exists
-	existingDeployment := &appsv1.Deployment{}
-	err = r.Get(ctx, client.ObjectKey{Namespace: deploymentSpec.Namespace, Name: deploymentSpec.Name}, existingDeployment)
-	if err != nil {
-		if client.IgnoreNotFound(err) != nil {
-			log.Error(err, "unable to fetch Deployment", "dashboard", req.NamespacedName)
-			return ctrl.Result{}, client.IgnoreNotFound(err)
-		}
-		// If not found, create the Deployment
-		if err := r.Create(ctx, &deploymentSpec); err != nil {
-			log.Error(err, "unable to create Deployment", "dashboard", req.NamespacedName)
-			return ctrl.Result{}, err
-		}
-		log.Info("Deployment created", "deployment", deploymentSpec)
-	} else {
-		// If found, update the Deployment
-		existingDeployment.Spec = deploymentSpec.Spec
-		if err := r.Update(ctx, existingDeployment); err != nil {
-			log.Error(err, "unable to update Deployment", "dashboard", req.NamespacedName)
-			return ctrl.Result{}, err
-		}
-		log.Info("Deployment updated", "deployment", existingDeployment)
-	}
-	return ctrl.Result{}, nil
-}
-
-// SetupWithManager sets up the controller with the Manager.
-func (r *DashboardReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&homerv1alpha1.Dashboard{}).
-		Complete(r)
+	return dashboard
 }
 
 func (r *DashboardReconciler) createConfigMap(dashboard homerv1alpha1.Dashboard) (corev1.ConfigMap, error) {
