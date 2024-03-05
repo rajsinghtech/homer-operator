@@ -80,6 +80,7 @@ type HomerConfig struct {
 	// ConnectivityCheck bool          `json:"connectivityCheck"`
 	// Proxy            ProxyConfig   `json:"proxy"`
 	Defaults DefaultConfig `json:"defaults,omitempty"`
+	Links   []Link        `json:"links,omitempty"`
 	// Theme            string        `json:"theme"`
 	// Colors           struct {
 	// 	Light struct {
@@ -119,12 +120,7 @@ type HomerConfig struct {
 	// 	Icon    string `json:"icon"`
 	// 	Content string `json:"content"`
 	// } `json:"message"`
-	// Links []struct {
-	// 	Name   string `json:"name"`
-	// 	Icon   string `json:"icon"`
-	// 	Url    string `json:"url"`
-	// 	Target string `json:"target"`
-	// } `json:"links"`
+
 }
 
 type ProxyConfig struct {
@@ -155,4 +151,11 @@ type Item struct {
 	Type       string `json:"type,omitempty"`
 	Class      string `json:"class,omitempty"`
 	Background string `json:"background,omitempty"`
+}
+
+type Link struct {
+	Name   string `json:"name"`
+	Icon   string `json:"icon,omitempty"`
+	Url    string `json:"url"`
+	Target string `json:"target,omitempty"`
 }

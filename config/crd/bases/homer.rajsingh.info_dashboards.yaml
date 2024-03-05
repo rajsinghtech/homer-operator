@@ -68,6 +68,22 @@ spec:
                     type: string
                   header:
                     type: string
+                  links:
+                    items:
+                      properties:
+                        icon:
+                          type: string
+                        name:
+                          type: string
+                        target:
+                          type: string
+                        url:
+                          type: string
+                      required:
+                      - name
+                      - url
+                      type: object
+                    type: array
                   logo:
                     type: string
                   services:

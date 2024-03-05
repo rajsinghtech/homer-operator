@@ -14,6 +14,13 @@ spec:
     defaults:
       layout: list # Either 'columns', or 'list'
       colorTheme: auto
+    links:
+    - name: "Homer-Operator Github"
+      icon: "fab fa-github"
+      url: "https://github.com/rajsinghtech/homer-operator"
+    - name: "Homer Github"
+      icon: "fab fa-github"
+      url: "https://github.com/bastienwirtz/homer"
   configMap:
     name: "raj-config"
     key: "raj-key" 
