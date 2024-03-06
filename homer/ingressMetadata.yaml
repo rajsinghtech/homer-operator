@@ -3,8 +3,9 @@ kind: Ingress
 metadata:
   name: ExampleIngress
   annotations:
-    homer.rajsingh.info/item/name: dashboard-sample # Dashboard
-    homer.rajsingh.info/: "Awesome app" # Service
+    item.homer.rajsingh.info/Name: example-ingress
+    item.homer.rajsingh.info/Logo: example-ingress
+
 spec:
   rules:
   - host: homer.rajsingh.info

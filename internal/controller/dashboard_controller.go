@@ -17,8 +17,10 @@ limitations under the License.
 package controller
 
 import (
+	// "fmt"
 	"context"
-
+	"strings"
+	"reflect"
 	homerv1alpha1 "github.com/rajsinghtech/homer-operator.git/api/v1alpha1"
 	"gopkg.in/yaml.v2"
 	appsv1 "k8s.io/api/apps/v1"
@@ -212,6 +214,16 @@ func updateHomerConfig(dashboard homerv1alpha1.Dashboard, ingresses networkingv1
 			}
 			item.Logo = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/resources/labeled/ing-128.png"
 			item.Subtitle = rule.Host
+			for key, value := range ingress.ObjectMeta.Annotations {
+				if strings.HasPrefix(key, "item.homer.rajsingh.info/"){
+					fieldName := strings.TrimPrefix(key, "item.homer.rajsingh.info/")
+					reflect.ValueOf(&item).Elem().FieldByName(fieldName).SetString(value)
+				}
+				if strings.HasPrefix(key, "service.homer.rajsingh.info/"){
+					fieldName := strings.TrimPrefix(key, "service.homer.rajsingh.info/")
+					reflect.ValueOf(&service).Elem().FieldByName(fieldName).SetString(value)
+				}
+			}
 			service.Items = append(service.Items, item)
 			services = append(services, service)
 		}
