@@ -26,6 +26,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	// "os"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -159,6 +160,31 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		}
 		log.Info("Deployment updated", "deployment", deploymentSpec)
 	}
+	serviceSpec, err := r.createService(dashboard)
+	if err != nil {
+		log.Error(err, "unable to create Service", "dashboard", req.NamespacedName)
+		return ctrl.Result{}, err
+	}
+	// Check if the Service already exists
+	if err := r.Get(ctx, client.ObjectKey{Namespace: serviceSpec.Namespace, Name: serviceSpec.Name}, &corev1.Service{}); err != nil {
+		if client.IgnoreNotFound(err) != nil {
+			log.Error(err, "unable to fetch Service", "dashboard", req.NamespacedName)
+			return ctrl.Result{}, client.IgnoreNotFound(err)
+		}
+		// If not found, create the Service
+		if err := r.Create(ctx, &serviceSpec); err != nil {
+			log.Error(err, "unable to create Service", "dashboard", req.NamespacedName)
+			return ctrl.Result{}, err
+		}
+		log.Info("Service created", "service", serviceSpec)
+	} else {
+		// If found, update the Service
+		if err := r.Update(ctx, &serviceSpec); err != nil {
+			log.Error(err, "unable to update Service", "dashboard", req.NamespacedName)
+			return ctrl.Result{}, err
+		}
+		log.Info("Service updated", "service", serviceSpec)
+	}	
 	return ctrl.Result{}, nil
 }
 
@@ -289,4 +315,28 @@ func (r *DashboardReconciler) createDeployment(dashboard homerv1alpha1.Dashboard
 	}
 
 	return *d, nil
+}
+func (r *DashboardReconciler) createService(dashboard homerv1alpha1.Dashboard) (corev1.Service, error) {
+	s := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      dashboard.Name,
+			Namespace: dashboard.Namespace,
+			Labels: map[string]string{
+				"managed-by":               "homer-operator",
+				"homer.rajsingh.info/name": dashboard.Name,
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Selector: map[string]string{
+				"homer.rajsingh.info/name": dashboard.Name,
+			},
+			Ports: []corev1.ServicePort{
+				{
+					Port:       80,
+					TargetPort: intstr.FromInt(8080),
+				},
+			},
+		},
+	}
+	return *s, nil
 }
