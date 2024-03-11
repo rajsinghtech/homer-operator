@@ -84,15 +84,25 @@ spec:
                         items:
                           items:
                             properties:
+                              apikey:
+                                type: string
                               background:
                                 type: string
                               class:
                                 type: string
+                              danger_value:
+                                type: string
                               keywords:
+                                type: string
+                              legacyApi:
+                                type: string
+                              libraryType:
                                 type: string
                               logo:
                                 type: string
                               name:
+                                type: string
+                              node:
                                 type: string
                               subtitle:
                                 type: string
@@ -105,6 +115,8 @@ spec:
                               type:
                                 type: string
                               url:
+                                type: string
+                              warning_value:
                                 type: string
                             type: object
                           type: array

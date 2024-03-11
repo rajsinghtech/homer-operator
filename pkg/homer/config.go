@@ -41,17 +41,23 @@ type Service struct {
 }
 
 type Item struct {
-	Name       string `json:"name,omitempty"`
-	Logo       string `json:"logo,omitempty"`
-	Subtitle   string `json:"subtitle,omitempty"`
-	Tag        string `json:"tag,omitempty"`
-	Keywords   string `json:"keywords,omitempty"`
-	Url        string `json:"url,omitempty"`
-	Target     string `json:"target,omitempty"`
-	Tagstyle   string `json:"tagstyle,omitempty"`
-	Type       string `json:"type,omitempty"`
-	Class      string `json:"class,omitempty"`
-	Background string `json:"background,omitempty"`
+	Name         string `json:"name,omitempty"`
+	Logo         string `json:"logo,omitempty"`
+	Subtitle     string `json:"subtitle,omitempty"`
+	Tag          string `json:"tag,omitempty"`
+	Keywords     string `json:"keywords,omitempty"`
+	Url          string `json:"url,omitempty"`
+	Target       string `json:"target,omitempty"`
+	Tagstyle     string `json:"tagstyle,omitempty"`
+	Type         string `json:"type,omitempty"`
+	Class        string `json:"class,omitempty"`
+	Background   string `json:"background,omitempty"`
+	Apikey       string `json:"apikey,omitempty"`
+	Node      	 string `json:"node,omitempty"`
+	Legacyapi    string `json:"legacyApi,omitempty"`
+	Librarytype  string `json:"libraryType,omitempty"`
+	Warningvalue string `json:"warning_value,omitempty"`
+	Dangervalue  string `json:"danger_value,omitempty"`
 }
 
 type Link struct {
@@ -87,7 +93,7 @@ func CreateConfigMap(config HomerConfig, name string, namespace string, ingresse
 			Name:      name,
 			Namespace: namespace,
 			Labels: map[string]string{
-				"managed-by":               "homer-operator",
+				"managed-by":                         "homer-operator",
 				"dashboard.homer.rajsingh.info/name": name,
 			},
 		},
@@ -106,7 +112,7 @@ func CreateDeployment(name string, namespace string) appsv1.Deployment {
 			Name:      name,
 			Namespace: namespace,
 			Labels: map[string]string{
-				"managed-by":               "homer-operator",
+				"managed-by":                         "homer-operator",
 				"dashboard.homer.rajsingh.info/name": name,
 			},
 		},
@@ -160,13 +166,13 @@ func CreateDeployment(name string, namespace string) appsv1.Deployment {
 	return *d
 }
 
-func CreateService(name string, namespace string) (corev1.Service) {
+func CreateService(name string, namespace string) corev1.Service {
 	s := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
 			Labels: map[string]string{
-				"managed-by":               "homer-operator",
+				"managed-by":                         "homer-operator",
 				"dashboard.homer.rajsingh.info/name": name,
 			},
 		},
@@ -202,11 +208,11 @@ func UpdateHomerConfig(config HomerConfig, ingresses networkingv1.IngressList) H
 			item.Logo = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/resources/labeled/ing-128.png"
 			item.Subtitle = rule.Host
 			for key, value := range ingress.ObjectMeta.Annotations {
-				if strings.HasPrefix(key, "item.homer.rajsingh.info/"){
+				if strings.HasPrefix(key, "item.homer.rajsingh.info/") {
 					fieldName := strings.TrimPrefix(key, "item.homer.rajsingh.info/")
 					reflect.ValueOf(&item).Elem().FieldByName(fieldName).SetString(value)
 				}
-				if strings.HasPrefix(key, "service.homer.rajsingh.info/"){
+				if strings.HasPrefix(key, "service.homer.rajsingh.info/") {
 					fieldName := strings.TrimPrefix(key, "service.homer.rajsingh.info/")
 					reflect.ValueOf(&service).Elem().FieldByName(fieldName).SetString(value)
 				}

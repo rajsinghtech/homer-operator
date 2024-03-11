@@ -71,35 +71,30 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 				log.Error(err, "unable to list resources", "dashboard", req.NamespacedName)
 				return ctrl.Result{}, err
 			}
-			for _, resource := range resources {
-				switch typedResource := resource.(type) {
-				case *appsv1.DeploymentList:
-					for _, deployment := range typedResource.Items {
-						if err := r.Delete(ctx, &deployment); err != nil {
-							log.Error(err, "unable to delete deployment", "deployment", deployment.Name)
-							return ctrl.Result{}, err
-						}
-						log.Info("Resource deleted", "resource", deployment)
+			switch typedResource := resource.(type) {
+			case *appsv1.DeploymentList:
+				for _, deployment := range typedResource.Items {
+					if err := r.Delete(ctx, &deployment); err != nil {
+						return ctrl.Result{}, err
 					}
-				case *corev1.ServiceList:
-					for _, service := range typedResource.Items {
-						if err := r.Delete(ctx, &service); err != nil {
-							log.Error(err, "unable to delete service", "service", service.Name)
-							return ctrl.Result{}, err
-						}
-						log.Info("Resource deleted", "resource", service)
-					}
-				case *corev1.ConfigMapList:
-					for _, configMap := range typedResource.Items {
-						if err := r.Delete(ctx, &configMap); err != nil {
-							log.Error(err, "unable to delete configMap", "configMap", configMap.Name)
-							return ctrl.Result{}, err
-						}
-						log.Info("Resource deleted", "resource", configMap)
-					}
-				default:
-					log.Info("Unknown resource type", "resource", resource)
+					log.Info("Resource deleted", "resource", deployment.Name)
 				}
+			case *corev1.ServiceList:
+				for _, service := range typedResource.Items {
+					if err := r.Delete(ctx, &service); err != nil {
+						return ctrl.Result{}, err
+					}
+					log.Info("Resource deleted", "resource", service.Name)
+				}
+			case *corev1.ConfigMapList:
+				for _, configMap := range typedResource.Items {
+					if err := r.Delete(ctx, &configMap); err != nil {
+						return ctrl.Result{}, err
+					}
+					log.Info("Resource deleted", "resource", configMap.Name)
+				}
+			default:
+				log.Info("Unknown resource type", "resource", resource)
 			}
 		}
 		return ctrl.Result{}, nil
