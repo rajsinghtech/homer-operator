@@ -51,18 +51,11 @@ spec:
               homerConfig:
                 properties:
                   defaults:
-                    description: |-
-                      Columns          string        `json:"columns"` // Consider changing this to int if it's always a number
-                      ConnectivityCheck bool          `json:"connectivityCheck"`
-                      Proxy            ProxyConfig   `json:"proxy"`
                     properties:
                       colorTheme:
                         type: string
                       layout:
                         type: string
-                    required:
-                    - colorTheme
-                    - layout
                     type: object
                   footer:
                     type: string
@@ -79,9 +72,6 @@ spec:
                           type: string
                         url:
                           type: string
-                      required:
-                      - name
-                      - url
                       type: object
                     type: array
                   logo:
@@ -116,28 +106,18 @@ spec:
                                 type: string
                               url:
                                 type: string
-                            required:
-                            - name
-                            - url
                             type: object
                           type: array
                         logo:
                           type: string
                         name:
                           type: string
-                      required:
-                      - icon
-                      - items
-                      - logo
-                      - name
                       type: object
                     type: array
                   subtitle:
                     type: string
                   title:
                     type: string
-                required:
-                - footer
                 type: object
             type: object
           status:
