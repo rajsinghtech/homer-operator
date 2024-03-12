@@ -83,7 +83,7 @@ func LoadConfigFromFile(filename string) (*HomerConfig, error) {
 }
 
 func CreateConfigMap(config HomerConfig, name string, namespace string, ingresses networkingv1.IngressList) corev1.ConfigMap {
-	config = UpdateHomerConfig(config, ingresses)
+	UpdateHomerConfig(&config, ingresses)
 	objYAML, err := yaml.Marshal(config)
 	if err != nil {
 		return corev1.ConfigMap{}
@@ -190,7 +190,7 @@ func CreateService(name string, namespace string) corev1.Service {
 	}
 	return *s
 }
-func UpdateHomerConfig(config HomerConfig, ingresses networkingv1.IngressList) HomerConfig {
+func UpdateHomerConfig(config *HomerConfig, ingresses networkingv1.IngressList) error {
 	var services []Service
 	// iterate over all ingresses and add them to the dashboard
 	for _, ingress := range ingresses.Items {
@@ -234,5 +234,5 @@ func UpdateHomerConfig(config HomerConfig, ingresses networkingv1.IngressList) H
 			config.Services = append(config.Services, s1)
 		}
 	}
-	return config
+	return nil
 }
