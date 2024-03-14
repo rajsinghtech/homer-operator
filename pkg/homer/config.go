@@ -236,3 +236,52 @@ func UpdateHomerConfig(config *HomerConfig, ingresses networkingv1.IngressList) 
 	}
 	return nil
 }
+func UpdateHomerConfigIngress(homerConfig *HomerConfig, ingress networkingv1.Ingress) {
+	service := Service{}
+	item := Item{}
+	service.Name = ingress.ObjectMeta.Namespace
+	item.Name = ingress.ObjectMeta.Name
+	service.Logo = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/resources/labeled/ns-128.png"
+	if len(ingress.Spec.TLS) > 0 {
+		item.Url = "https://" + ingress.Spec.Rules[0].Host
+	} else {
+		item.Url = "http://" + ingress.Spec.Rules[0].Host
+	}
+	item.Logo = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/resources/labeled/ing-128.png"
+	item.Subtitle = ingress.Spec.Rules[0].Host
+	for key, value := range ingress.ObjectMeta.Annotations {
+		if strings.HasPrefix(key, "item.homer.rajsingh.info/") {
+			fieldName := strings.TrimPrefix(key, "item.homer.rajsingh.info/")
+			reflect.ValueOf(&item).Elem().FieldByName(fieldName).SetString(value)
+		}
+		if strings.HasPrefix(key, "service.homer.rajsingh.info/") {
+			fieldName := strings.TrimPrefix(key, "service.homer.rajsingh.info/")
+			reflect.ValueOf(&service).Elem().FieldByName(fieldName).SetString(value)
+		}
+	}
+	for sx, s := range homerConfig.Services {
+		if s.Name == service.Name {
+			for ix, i := range s.Items {
+				if i.Name == item.Name {
+					homerConfig.Services[sx].Items[ix] = item
+					return
+				}
+			}
+			homerConfig.Services[sx].Items = append(homerConfig.Services[sx].Items, item)
+		}
+	}
+}
+
+func UpdateConfigMapIngress(cm *corev1.ConfigMap, ingress networkingv1.Ingress) {
+	homerConfig := HomerConfig{}
+	err := yaml.Unmarshal([]byte(cm.Data["config.yml"]), &homerConfig)
+	if err != nil {
+		return
+	}
+	UpdateHomerConfigIngress(&homerConfig, ingress)
+	objYAML, err := yaml.Marshal(homerConfig)
+	if err != nil {
+		return
+	}
+	cm.Data["config.yml"] = string(objYAML)
+}
