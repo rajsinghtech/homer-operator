@@ -40,28 +40,40 @@ spec:
             description: DashboardSpec defines the desired state of Dashboard
             properties:
               configMap:
-                description: Foo is an example field of Dashboard. Edit dashboard_types.go
-                  to remove/update
+                description: ConfigMap is where you want said homer configuration
+                  stored.
                 properties:
                   key:
+                    description: Key is the key in the ConfigMap where Homer configuration
+                      is stored.
                     type: string
                   name:
+                    description: Name is the ConfigMap name where Homer configuration
+                      is stored.
                     type: string
                 type: object
               homerConfig:
+                description: HomerConfig is base/default Homer configuration.
                 properties:
                   defaults:
+                    description: Defaults are your default settings for the dashboard.
                     properties:
                       colorTheme:
+                        description: ColorTheme is the name of the color theme to
+                          be used.
                         type: string
                       layout:
+                        description: Layout is the layout of the dashboard.
                         type: string
                     type: object
                   footer:
+                    description: Footer to be displayed on the dashboard.
                     type: string
                   header:
                     type: string
                   links:
+                    description: Links contains any additional links (static) to be
+                      displayed on the dashboard.
                     items:
                       properties:
                         icon:
@@ -75,8 +87,10 @@ spec:
                       type: object
                     type: array
                   logo:
+                    description: Logo used within dashboard.
                     type: string
                   services:
+                    description: List of Services to be displayed on the dashboard.
                     items:
                       properties:
                         icon:
@@ -127,8 +141,10 @@ spec:
                       type: object
                     type: array
                   subtitle:
+                    description: Subtitle
                     type: string
                   title:
+                    description: Title to which is displayed on the dashboard.
                     type: string
                 type: object
             type: object

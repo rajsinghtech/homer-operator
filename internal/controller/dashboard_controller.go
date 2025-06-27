@@ -93,7 +93,7 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// Resource Created - Create all resources
 	deployment := homer.CreateDeployment(dashboard.Name, dashboard.Namespace)
 	service := homer.CreateService(dashboard.Name, dashboard.Namespace)
-	configMap := homer.CreateConfigMap(dashboard.Spec.HomerConfig, dashboard.Name, dashboard.Namespace, *ingresses)
+	configMap := homer.CreateConfigMap(&dashboard.Spec.HomerConfig, dashboard.Name, dashboard.Namespace, *ingresses)
 	// List of resources
 	resources := []client.Object{&deployment, &service, &configMap}
 

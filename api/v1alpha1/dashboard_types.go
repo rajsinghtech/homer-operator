@@ -26,11 +26,13 @@ import (
 
 // DashboardSpec defines the desired state of Dashboard
 type DashboardSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
+	// INSERT ADDITIONAL SPEC FIELDS - desired state of dashboard
 	// Important: Run "make" to regenerate code after modifying this file
 
-	// Foo is an example field of Dashboard. Edit dashboard_types.go to remove/update
+	// ConfigMap is where you want said homer configuration stored.
 	ConfigMap ConfigMap `json:"configMap,omitempty"`
+
+	// HomerConfig is base/default Homer configuration.
 	HomerConfig homer.HomerConfig `json:"homerConfig,omitempty"`
 }
 
@@ -66,6 +68,8 @@ func init() {
 }
 
 type ConfigMap struct {
+	// Name is the ConfigMap name where Homer configuration is stored.
 	Name string `json:"name,omitempty"`
-	Key  string `json:"key,omitempty"`
+	// Key is the key in the ConfigMap where Homer configuration is stored.
+	Key string `json:"key,omitempty"`
 }

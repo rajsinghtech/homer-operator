@@ -1,5 +1,7 @@
 package homer
 
+// +kubebuilder:object:generate=true
+
 import (
 	"os"
 	"reflect"
@@ -13,23 +15,35 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
+// HomerConfig contains base configuration for Homer dashboard.
 type HomerConfig struct {
-	Title    string        `json:"title,omitempty"`
-	Subtitle string        `json:"subtitle,omitempty"`
-	Logo     string        `json:"logo,omitempty"`
-	Header   string        `json:"header,omitempty"`
-	Services []Service     `json:"services,omitempty"`
-	Footer   string        `json:"footer,omitempty"`
+	// Title to which is displayed on the dashboard.
+	Title string `json:"title,omitempty"`
+	// Subtitle
+	Subtitle string `json:"subtitle,omitempty"`
+	// Logo used within dashboard.
+	Logo   string `json:"logo,omitempty"`
+	Header string `json:"header,omitempty"`
+	// List of Services to be displayed on the dashboard.
+	Services []Service `json:"services,omitempty"`
+	// Footer to be displayed on the dashboard.
+	Footer string `json:"footer,omitempty"`
+	// Defaults are your default settings for the dashboard.
 	Defaults DefaultConfig `json:"defaults,omitempty"`
-	Links    []Link        `json:"links,omitempty"`
+	// Links contains any additional links (static) to be displayed on the dashboard.
+	Links []Link `json:"links,omitempty"`
 }
 
+// ProxyConfig contains configuration for proxy settings.
 type ProxyConfig struct {
 	UseCredentials bool `json:"useCredentials,omitempty"`
 }
 
+// DefaultConfig contains default settings for the Homer dashboard.
 type DefaultConfig struct {
-	Layout     string `json:"layout,omitempty"`
+	// Layout is the layout of the dashboard.
+	Layout string `json:"layout,omitempty"`
+	// ColorTheme is the name of the color theme to be used.
 	ColorTheme string `json:"colorTheme,omitempty"`
 }
 
@@ -53,7 +67,7 @@ type Item struct {
 	Class        string `json:"class,omitempty"`
 	Background   string `json:"background,omitempty"`
 	Apikey       string `json:"apikey,omitempty"`
-	Node      	 string `json:"node,omitempty"`
+	Node         string `json:"node,omitempty"`
 	Legacyapi    string `json:"legacyApi,omitempty"`
 	Librarytype  string `json:"libraryType,omitempty"`
 	Warningvalue string `json:"warning_value,omitempty"`
@@ -82,8 +96,8 @@ func LoadConfigFromFile(filename string) (*HomerConfig, error) {
 	return &config, nil
 }
 
-func CreateConfigMap(config HomerConfig, name string, namespace string, ingresses networkingv1.IngressList) corev1.ConfigMap {
-	UpdateHomerConfig(&config, ingresses)
+func CreateConfigMap(config *HomerConfig, name string, namespace string, ingresses networkingv1.IngressList) corev1.ConfigMap {
+	UpdateHomerConfig(config, ingresses)
 	objYAML, err := yaml.Marshal(config)
 	if err != nil {
 		return corev1.ConfigMap{}
