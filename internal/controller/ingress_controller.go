@@ -19,12 +19,12 @@ package controller
 import (
 	"context"
 	homerv1alpha1 "github.com/rajsinghtech/homer-operator.git/api/v1alpha1"
+	homer "github.com/rajsinghtech/homer-operator.git/pkg/homer"
+	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	homer "github.com/rajsinghtech/homer-operator.git/pkg/homer"
-	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
