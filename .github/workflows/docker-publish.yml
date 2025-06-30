@@ -63,6 +63,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
             type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Docker image
         id: build
@@ -81,11 +82,12 @@ jobs:
       # Security scanning
       - name: Run Trivy vulnerability scanner
         if: github.event_name != 'pull_request'
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
           format: 'sarif'
           output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
 
       - name: Upload Trivy scan results to GitHub Security tab
         if: github.event_name != 'pull_request'
@@ -96,9 +98,7 @@ jobs:
       # Image signing
       - name: Install cosign
         if: github.event_name != 'pull_request'
-        uses: sigstore/cosign-installer@v3
-        with:
-          cosign-release: 'v2.2.4'
+        uses: sigstore/cosign-installer@v3.7.0
 
       - name: Sign container image
         if: github.event_name != 'pull_request'
@@ -110,7 +110,7 @@ jobs:
       # Generate SBOM
       - name: Generate SBOM
         if: github.event_name != 'pull_request'
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@v0.17.9
         with:
           image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
           format: 'spdx-json'
@@ -123,10 +123,11 @@ jobs:
         run: |
           cosign attach sbom --sbom sbom.spdx.json ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${DIGEST}
 
-  # Separate job for PR checks
-  lint:
-    name: Lint and Validate
+  # Separate job for PR validation
+  validate:
+    name: Validate
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -136,28 +137,34 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
       - name: Run linters
         run: make lint
 
       - name: Verify manifests
-        run: make manifests && git diff --exit-code
+        run: |
+          make manifests
+          git diff --exit-code
 
       - name: Verify code generation
-        run: make generate && git diff --exit-code
-
-  # Deploy to test environment (optional)
-  deploy-test:
-    name: Deploy to Test
-    needs: build
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Update deployment image
         run: |
-          cd config/manager
-          kustomize edit set image controller=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:main
-          cd ../..
-          make deploy IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:main
+          make generate
+          git diff --exit-code
+
+      - name: Run unit tests with coverage
+        run: |
+          make test
+          go tool cover -html=cover.out -o coverage.html
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.html
