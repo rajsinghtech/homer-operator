@@ -68,7 +68,7 @@ manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and Cust
 		echo '    {{- end }}' >> /tmp/sync-crd-to-helm.sh; \
 		echo 'spec:' >> /tmp/sync-crd-to-helm.sh; \
 		echo 'EOF' >> /tmp/sync-crd-to-helm.sh; \
-		echo 'tail -n +9 $$1 | head -n -1' >> /tmp/sync-crd-to-helm.sh; \
+		echo 'tail -n +9 $$1 | sed "$$d"' >> /tmp/sync-crd-to-helm.sh; \
 		echo 'echo "{{- end }}"' >> /tmp/sync-crd-to-helm.sh; \
 		chmod +x /tmp/sync-crd-to-helm.sh; \
 	fi
