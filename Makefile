@@ -48,11 +48,34 @@ help: ## Display this help.
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
 	@echo "Syncing CRDs to Helm chart..."
-	@mkdir -p charts/homer-operator/crds
-	@cp config/crd/bases/homer.rajsingh.info_dashboards.yaml charts/homer-operator/crds/
-	@if [ -f charts/homer-operator/templates/crd.yaml ]; then \
-		echo "Removing old CRD template from charts/homer-operator/templates/crd.yaml"; \
-		rm charts/homer-operator/templates/crd.yaml; \
+	@mkdir -p charts/homer-operator/templates
+	@cp scripts/sync-crd-to-helm.sh /tmp/sync-crd-to-helm.sh 2>/dev/null || true
+	@if [ ! -f /tmp/sync-crd-to-helm.sh ]; then \
+		echo '#!/bin/bash' > /tmp/sync-crd-to-helm.sh; \
+		echo 'cat <<EOF' >> /tmp/sync-crd-to-helm.sh; \
+		echo '{{- if .Values.crd.create }}' >> /tmp/sync-crd-to-helm.sh; \
+		echo '---' >> /tmp/sync-crd-to-helm.sh; \
+		echo 'apiVersion: apiextensions.k8s.io/v1' >> /tmp/sync-crd-to-helm.sh; \
+		echo 'kind: CustomResourceDefinition' >> /tmp/sync-crd-to-helm.sh; \
+		echo 'metadata:' >> /tmp/sync-crd-to-helm.sh; \
+		echo '  name: dashboards.homer.rajsingh.info' >> /tmp/sync-crd-to-helm.sh; \
+		echo '  labels:' >> /tmp/sync-crd-to-helm.sh; \
+		echo '    {{- include "homer-operator.labels" . | nindent 4 }}' >> /tmp/sync-crd-to-helm.sh; \
+		echo '  annotations:' >> /tmp/sync-crd-to-helm.sh; \
+		echo '    controller-gen.kubebuilder.io/version: v0.14.0' >> /tmp/sync-crd-to-helm.sh; \
+		echo '    {{- with .Values.crd.annotations }}' >> /tmp/sync-crd-to-helm.sh; \
+		echo '    {{- toYaml . | nindent 4 }}' >> /tmp/sync-crd-to-helm.sh; \
+		echo '    {{- end }}' >> /tmp/sync-crd-to-helm.sh; \
+		echo 'spec:' >> /tmp/sync-crd-to-helm.sh; \
+		echo 'EOF' >> /tmp/sync-crd-to-helm.sh; \
+		echo 'tail -n +9 $$1 | head -n -1' >> /tmp/sync-crd-to-helm.sh; \
+		echo 'echo "{{- end }}"' >> /tmp/sync-crd-to-helm.sh; \
+		chmod +x /tmp/sync-crd-to-helm.sh; \
+	fi
+	@/tmp/sync-crd-to-helm.sh config/crd/bases/homer.rajsingh.info_dashboards.yaml > charts/homer-operator/templates/crd.yaml
+	@if [ -d charts/homer-operator/crds ]; then \
+		echo "Removing crds directory to use templates approach"; \
+		rm -rf charts/homer-operator/crds; \
 	fi
 
 .PHONY: generate

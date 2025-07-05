@@ -733,8 +733,12 @@ func UpdateHomerConfigIngress(homerConfig *HomerConfig, ingress networkingv1.Ing
 				}
 			}
 			homerConfig.Services[sx].Items = append(homerConfig.Services[sx].Items, item)
+			return
 		}
 	}
+	// Service not found, add it
+	service.Items = []Item{item}
+	homerConfig.Services = append(homerConfig.Services, service)
 }
 
 func UpdateConfigMapIngress(cm *corev1.ConfigMap, ingress networkingv1.Ingress) {
