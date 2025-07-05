@@ -418,9 +418,15 @@ var _ = Describe("Edge Cases and Error Handling Tests", func() {
 			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
 
 			configYaml := configMap.Data["config.yml"]
-			// Should use the first hostname (wildcard)
+			// Should now include ALL hostnames, not just the first one
 			Expect(configYaml).To(ContainSubstring("*.wildcard.example.com"))
+			Expect(configYaml).To(ContainSubstring("very-long-hostname-that-might-cause-issues-with-url-generation.example.com"))
+			Expect(configYaml).To(ContainSubstring("192.168.1.1"))
+			Expect(configYaml).To(ContainSubstring("[::1]"))
 			Expect(configYaml).To(ContainSubstring("Invalid Hostname Service"))
+
+			// Verify multiple items are created for the same HTTPRoute
+			GinkgoT().Logf("ConfigMap YAML content:\n%s", configYaml)
 		})
 	})
 

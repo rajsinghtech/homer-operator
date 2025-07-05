@@ -18,6 +18,7 @@
 
 ### 🎯 **Core Capabilities**
 - **Automatic Dashboard Generation** - Discover and display services from Ingress & HTTPRoute resources
+- **Ingress & Gateway API Compatible** - Full support for both traditional Ingress and modern Gateway API HTTPRoute
 - **Multi-tenancy Support** - Deploy multiple dashboards in the same namespace
 - **High Availability** - Configurable replicas, HPA, and Pod Disruption Budgets
 - **Production Ready** - Comprehensive Helm chart with RBAC and security contexts
@@ -31,7 +32,7 @@
 ### 🔒 **Security & Integration**
 - **Secret Management** - Kubernetes Secret integration for API keys
 - **RBAC Ready** - Minimal required permissions with owner references
-- **Gateway API Support** - Modern Kubernetes networking with HTTPRoute
+- **Dual Networking Support** - Works with both Ingress (v1) and Gateway API HTTPRoute (v1)
 - **Annotation-driven** - Fine-grained control via Kubernetes annotations
 
 ### 📊 **Operations & Monitoring**
@@ -201,13 +202,14 @@ helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/hom
 
 ### Annotation-driven Service Discovery
 
-Control how your services appear on dashboards using annotations:
+Control how your services appear on dashboards using annotations on both Ingress and HTTPRoute resources:
 
 ```yaml
+# Traditional Ingress
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: my-app
+  name: my-app-ingress
   annotations:
     # Item configuration
     item.homer.rajsingh.info/name: "My Application"
@@ -221,6 +223,23 @@ metadata:
     service.homer.rajsingh.info/icon: "fas fa-server"
 spec:
   # ... ingress configuration
+---
+# Gateway API HTTPRoute
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: my-app-route
+  annotations:
+    # Same annotations work for HTTPRoute!
+    item.homer.rajsingh.info/name: "My Application (Gateway API)"
+    item.homer.rajsingh.info/subtitle: "Modern routing"
+    item.homer.rajsingh.info/logo: "https://example.com/logo.png"
+    item.homer.rajsingh.info/tag: "gateway-api"
+    
+    service.homer.rajsingh.info/name: "Gateway Services"
+    service.homer.rajsingh.info/icon: "fas fa-route"
+spec:
+  # ... httproute configuration
 ```
 
 ### Production Deployment

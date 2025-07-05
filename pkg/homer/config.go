@@ -824,43 +824,87 @@ func UpdateConfigMapIngress(cm *corev1.ConfigMap, ingress networkingv1.Ingress) 
 // UpdateHomerConfigHTTPRoute updates the HomerConfig with HTTPRoute information
 func UpdateHomerConfigHTTPRoute(homerConfig *HomerConfig, httproute *gatewayv1.HTTPRoute) {
 	service := Service{}
-	item := Item{}
 	service.Name = httproute.ObjectMeta.Namespace
-	item.Name = httproute.ObjectMeta.Name
 	service.Logo = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/resources/labeled/ns-128.png"
 
-	// Get the first hostname if available
-	hostname := ""
-	if len(httproute.Spec.Hostnames) > 0 {
-		hostname = string(httproute.Spec.Hostnames[0])
-	}
+	// Process service-level annotations
+	processServiceAnnotations(&service, httproute.ObjectMeta.Annotations)
 
 	// Determine protocol based on parent Gateway listener configuration
 	protocol := determineProtocolFromHTTPRoute(httproute)
 
-	item.Url = protocol + "://" + hostname
+	// Handle multiple hostnames by creating separate items (similar to Ingress approach)
+	var items []Item
+	if len(httproute.Spec.Hostnames) == 0 {
+		// No hostnames specified, create item with empty hostname
+		item := createHTTPRouteItem(httproute, "", protocol)
+		processItemAnnotations(&item, httproute.ObjectMeta.Annotations)
+		items = append(items, item)
+	} else {
+		// Create separate item for each hostname
+		for _, hostname := range httproute.Spec.Hostnames {
+			hostStr := string(hostname)
+			item := createHTTPRouteItem(httproute, hostStr, protocol)
+
+			// If multiple hostnames, append hostname to make names unique
+			if len(httproute.Spec.Hostnames) > 1 {
+				item.Name = httproute.ObjectMeta.Name + "-" + hostStr
+			}
+
+			processItemAnnotations(&item, httproute.ObjectMeta.Annotations)
+			items = append(items, item)
+		}
+	}
+
+	// Update or add the service and items
+	updateOrAddServiceItems(homerConfig, service, items)
+}
+
+// createHTTPRouteItem creates a dashboard item for a specific hostname
+func createHTTPRouteItem(httproute *gatewayv1.HTTPRoute, hostname, protocol string) Item {
+	item := Item{}
+	item.Name = httproute.ObjectMeta.Name
 	item.Logo = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/resources/labeled/svc-128.png"
-	item.Subtitle = hostname
 
-	// Process annotations safely
-	processItemAnnotations(&item, httproute.ObjectMeta.Annotations)
-	processServiceAnnotations(&service, httproute.ObjectMeta.Annotations)
+	if hostname != "" {
+		item.Url = protocol + "://" + hostname
+		item.Subtitle = hostname
+	} else {
+		// Handle case where no hostname is specified
+		item.Url = ""
+		item.Subtitle = ""
+	}
 
-	// Update or add the service
+	return item
+}
+
+// updateOrAddServiceItems updates existing items or adds new ones to the service
+func updateOrAddServiceItems(homerConfig *HomerConfig, service Service, items []Item) {
+	// Find existing service
 	for sx, s := range homerConfig.Services {
 		if s.Name == service.Name {
-			for ix, i := range s.Items {
-				if i.Name == item.Name {
-					homerConfig.Services[sx].Items[ix] = item
-					return
+			// Service exists, update/add items
+			for _, newItem := range items {
+				updated := false
+				// Check if item already exists and update it
+				for ix, existingItem := range s.Items {
+					if existingItem.Name == newItem.Name {
+						homerConfig.Services[sx].Items[ix] = newItem
+						updated = true
+						break
+					}
+				}
+				// If item doesn't exist, add it
+				if !updated {
+					homerConfig.Services[sx].Items = append(homerConfig.Services[sx].Items, newItem)
 				}
 			}
-			homerConfig.Services[sx].Items = append(homerConfig.Services[sx].Items, item)
 			return
 		}
 	}
-	// Service not found, add it
-	service.Items = []Item{item}
+
+	// Service not found, create new service with all items
+	service.Items = items
 	homerConfig.Services = append(homerConfig.Services, service)
 }
 

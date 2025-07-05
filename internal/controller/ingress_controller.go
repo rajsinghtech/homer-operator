@@ -18,6 +18,8 @@ package controller
 
 import (
 	"context"
+	"time"
+
 	homerv1alpha1 "github.com/rajsinghtech/homer-operator.git/api/v1alpha1"
 	homer "github.com/rajsinghtech/homer-operator.git/pkg/homer"
 	corev1 "k8s.io/api/core/v1"
@@ -28,7 +30,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"time"
 )
 
 // IngressReconciler reconciles a Ingress object
