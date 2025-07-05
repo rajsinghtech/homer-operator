@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	yaml "gopkg.in/yaml.v2"
@@ -18,6 +19,33 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+)
+
+// ConflictStrategy defines how to handle conflicts when merging items
+type ConflictStrategy string
+
+const (
+	ConflictStrategyReplace ConflictStrategy = "replace"
+	ConflictStrategyMerge   ConflictStrategy = "merge"
+	ConflictStrategyError   ConflictStrategy = "error"
+)
+
+// ServiceGroupingStrategy defines how services are grouped
+type ServiceGroupingStrategy string
+
+const (
+	ServiceGroupingNamespace ServiceGroupingStrategy = "namespace"
+	ServiceGroupingLabel     ServiceGroupingStrategy = "label"
+	ServiceGroupingCustom    ServiceGroupingStrategy = "custom"
+)
+
+// ValidationLevel defines the strictness of validation
+type ValidationLevel string
+
+const (
+	ValidationLevelStrict ValidationLevel = "strict"
+	ValidationLevelWarn   ValidationLevel = "warn"
+	ValidationLevelNone   ValidationLevel = "none"
 )
 
 // HomerConfig contains base configuration for Homer dashboard.
@@ -108,6 +136,10 @@ type Item struct {
 	Librarytype  string `json:"libraryType,omitempty"`
 	Warningvalue string `json:"warning_value,omitempty"`
 	Dangervalue  string `json:"danger_value,omitempty"`
+	// Metadata for conflict detection
+	Source     string `json:"-"` // Source ingress/httproute name
+	Namespace  string `json:"-"` // Source namespace
+	LastUpdate string `json:"-"` // Last update timestamp
 }
 
 type Link struct {
@@ -207,10 +239,20 @@ func CreateConfigMap(config *HomerConfig, name string, namespace string, ingress
 
 // CreateConfigMapWithHTTPRoutes creates a ConfigMap with both Ingress and HTTPRoute resources
 func CreateConfigMapWithHTTPRoutes(config *HomerConfig, name string, namespace string, ingresses networkingv1.IngressList, httproutes []gatewayv1.HTTPRoute, owner client.Object, domainFilters []string) corev1.ConfigMap {
+	return CreateConfigMapWithHTTPRoutesAndAggregation(config, name, namespace, ingresses, httproutes, owner, domainFilters, nil)
+}
+
+// CreateConfigMapWithHTTPRoutesAndAggregation creates a ConfigMap with advanced aggregation features
+func CreateConfigMapWithHTTPRoutesAndAggregation(config *HomerConfig, name string, namespace string, ingresses networkingv1.IngressList, httproutes []gatewayv1.HTTPRoute, owner client.Object, domainFilters []string, healthConfig *ServiceHealthConfig) corev1.ConfigMap {
 	UpdateHomerConfig(config, ingresses, domainFilters)
 	// Update config with HTTPRoutes
 	for _, httproute := range httproutes {
 		UpdateHomerConfigHTTPRoute(config, &httproute, domainFilters)
+	}
+
+	// Enhance config with aggregation features if health config provided
+	if healthConfig != nil {
+		enhanceHomerConfigWithAggregation(config, healthConfig)
 	}
 
 	// Validate configuration before creating ConfigMap
@@ -777,9 +819,16 @@ func UpdateHomerConfig(config *HomerConfig, ingresses networkingv1.IngressList, 
 	return nil
 }
 func UpdateHomerConfigIngress(homerConfig *HomerConfig, ingress networkingv1.Ingress, domainFilters []string) {
+	UpdateHomerConfigIngressWithGrouping(homerConfig, ingress, domainFilters, nil)
+}
+
+// UpdateHomerConfigIngressWithGrouping updates Homer config with custom grouping strategy
+func UpdateHomerConfigIngressWithGrouping(homerConfig *HomerConfig, ingress networkingv1.Ingress, domainFilters []string, groupingConfig *ServiceGroupingConfig) {
 	service := Service{}
 	item := Item{}
-	service.Name = ingress.ObjectMeta.Namespace
+
+	// Determine service group using flexible grouping
+	service.Name = determineServiceGroup(ingress.ObjectMeta.Namespace, ingress.ObjectMeta.Labels, ingress.ObjectMeta.Annotations, groupingConfig)
 	item.Name = ingress.ObjectMeta.Name
 	service.Logo = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/resources/labeled/ns-128.png"
 
@@ -821,6 +870,11 @@ func UpdateHomerConfigIngress(homerConfig *HomerConfig, ingress networkingv1.Ing
 		}
 		item.Subtitle = host
 
+		// Set metadata for conflict detection
+		item.Source = ingress.ObjectMeta.Name
+		item.Namespace = ingress.ObjectMeta.Namespace
+		item.LastUpdate = ingress.ObjectMeta.CreationTimestamp.Time.Format("2006-01-02T15:04:05Z")
+
 		// Process annotations safely
 		processItemAnnotations(&item, ingress.ObjectMeta.Annotations)
 		items = append(items, item)
@@ -848,8 +902,15 @@ func UpdateConfigMapIngress(cm *corev1.ConfigMap, ingress networkingv1.Ingress, 
 
 // UpdateHomerConfigHTTPRoute updates the HomerConfig with HTTPRoute information
 func UpdateHomerConfigHTTPRoute(homerConfig *HomerConfig, httproute *gatewayv1.HTTPRoute, domainFilters []string) {
+	UpdateHomerConfigHTTPRouteWithGrouping(homerConfig, httproute, domainFilters, nil)
+}
+
+// UpdateHomerConfigHTTPRouteWithGrouping updates Homer config with custom grouping strategy
+func UpdateHomerConfigHTTPRouteWithGrouping(homerConfig *HomerConfig, httproute *gatewayv1.HTTPRoute, domainFilters []string, groupingConfig *ServiceGroupingConfig) {
 	service := Service{}
-	service.Name = httproute.ObjectMeta.Namespace
+
+	// Determine service group using flexible grouping
+	service.Name = determineServiceGroup(httproute.ObjectMeta.Namespace, httproute.ObjectMeta.Labels, httproute.ObjectMeta.Annotations, groupingConfig)
 	service.Logo = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/resources/labeled/ns-128.png"
 
 	// Process service-level annotations
@@ -863,6 +924,11 @@ func UpdateHomerConfigHTTPRoute(homerConfig *HomerConfig, httproute *gatewayv1.H
 	if len(httproute.Spec.Hostnames) == 0 {
 		// No hostnames specified, create item with empty hostname
 		item := createHTTPRouteItem(httproute, "", protocol)
+		// Set metadata for conflict detection
+		item.Source = httproute.ObjectMeta.Name
+		item.Namespace = httproute.ObjectMeta.Namespace
+		item.LastUpdate = httproute.ObjectMeta.CreationTimestamp.Time.Format("2006-01-02T15:04:05Z")
+
 		processItemAnnotations(&item, httproute.ObjectMeta.Annotations)
 		items = append(items, item)
 	} else {
@@ -884,6 +950,11 @@ func UpdateHomerConfigHTTPRoute(homerConfig *HomerConfig, httproute *gatewayv1.H
 			if len(filteredHostnames) > 1 {
 				item.Name = httproute.ObjectMeta.Name + "-" + hostStr
 			}
+
+			// Set metadata for conflict detection
+			item.Source = httproute.ObjectMeta.Name
+			item.Namespace = httproute.ObjectMeta.Namespace
+			item.LastUpdate = httproute.ObjectMeta.CreationTimestamp.Time.Format("2006-01-02T15:04:05Z")
 
 			processItemAnnotations(&item, httproute.ObjectMeta.Annotations)
 			items = append(items, item)
@@ -1009,6 +1080,11 @@ func determineProtocolFromHTTPRoute(httproute *gatewayv1.HTTPRoute) string {
 
 // processItemAnnotations safely processes item annotations without reflection
 func processItemAnnotations(item *Item, annotations map[string]string) {
+	processItemAnnotationsWithValidation(item, annotations, ValidationLevelNone)
+}
+
+// processItemAnnotationsWithValidation processes item annotations with validation
+func processItemAnnotationsWithValidation(item *Item, annotations map[string]string, validationLevel ValidationLevel) {
 	for key, value := range annotations {
 		if strings.HasPrefix(key, "item.homer.rajsingh.info/") {
 			fieldName := strings.TrimPrefix(key, "item.homer.rajsingh.info/")
@@ -1026,10 +1102,32 @@ func processItemAnnotations(item *Item, annotations map[string]string) {
 			case "tagstyle":
 				item.Tagstyle = value
 			case "keywords":
-				item.Keywords = value
+				// Allow both comma-separated and single values
+				if strings.Contains(value, ",") {
+					// Validate and clean up keywords
+					keywords := strings.Split(value, ",")
+					var cleanKeywords []string
+					for _, keyword := range keywords {
+						keyword = strings.TrimSpace(keyword)
+						if keyword != "" {
+							cleanKeywords = append(cleanKeywords, keyword)
+						}
+					}
+					item.Keywords = strings.Join(cleanKeywords, ",")
+				} else {
+					item.Keywords = strings.TrimSpace(value)
+				}
 			case "url":
+				if err := validateAnnotationValue(fieldName, value, validationLevel); err != nil && validationLevel == ValidationLevelStrict {
+					// Skip invalid URL in strict mode
+					continue
+				}
 				item.Url = value
 			case "target":
+				if err := validateAnnotationValue(fieldName, value, validationLevel); err != nil && validationLevel == ValidationLevelStrict {
+					// Skip invalid target in strict mode
+					continue
+				}
 				item.Target = value
 			case "class":
 				item.Class = value
@@ -1048,14 +1146,186 @@ func processItemAnnotations(item *Item, annotations map[string]string) {
 			case "librarytype":
 				item.Librarytype = value
 			case "warning_value":
+				if err := validateAnnotationValue(fieldName, value, validationLevel); err != nil && validationLevel == ValidationLevelStrict {
+					continue
+				}
 				item.Warningvalue = value
 			case "danger_value":
+				if err := validateAnnotationValue(fieldName, value, validationLevel); err != nil && validationLevel == ValidationLevelStrict {
+					continue
+				}
 				item.Dangervalue = value
 			case "usecredentials":
-				item.UseCredentials = strings.ToLower(value) == "true"
+				item.UseCredentials = parseBooleanValue(value)
+			// Support for headers as comma-separated key:value pairs
+			case "headers":
+				if item.Headers == nil {
+					item.Headers = make(map[string]string)
+				}
+				parseHeadersAnnotation(item.Headers, value)
+			}
+			// Support for headers with prefix notation (e.g., headers.authorization)
+			if strings.HasPrefix(strings.ToLower(fieldName), "headers.") {
+				headerName := strings.TrimPrefix(strings.ToLower(fieldName), "headers.")
+				if item.Headers == nil {
+					item.Headers = make(map[string]string)
+				}
+				item.Headers[headerName] = value
 			}
 		}
 	}
+}
+
+// parseBooleanValue parses various boolean representations
+func parseBooleanValue(value string) bool {
+	val := strings.ToLower(strings.TrimSpace(value))
+	return val == "true" || val == "1" || val == "yes" || val == "on"
+}
+
+// parseHeadersAnnotation parses comma-separated key:value pairs into headers map
+func parseHeadersAnnotation(headers map[string]string, value string) {
+	pairs := strings.Split(value, ",")
+	for _, pair := range pairs {
+		part := strings.SplitN(strings.TrimSpace(pair), ":", 2)
+		if len(part) == 2 {
+			headers[strings.TrimSpace(part[0])] = strings.TrimSpace(part[1])
+		}
+	}
+}
+
+// validateAnnotationValue validates annotation values based on field type
+func validateAnnotationValue(fieldName, value string, level ValidationLevel) error {
+	switch strings.ToLower(fieldName) {
+	case "url":
+		if value != "" && !isValidURL(value) {
+			if level == ValidationLevelStrict {
+				return fmt.Errorf("invalid URL format: %s", value)
+			}
+			if level == ValidationLevelWarn {
+				fmt.Printf("Warning: potentially invalid URL format: %s\n", value)
+			}
+		}
+	case "target":
+		if value != "" && value != "_blank" && value != "_self" && value != "_parent" && value != "_top" {
+			if level == ValidationLevelStrict {
+				return fmt.Errorf("invalid target value: %s, must be one of: _blank, _self, _parent, _top", value)
+			}
+			if level == ValidationLevelWarn {
+				fmt.Printf("Warning: potentially invalid target value: %s\n", value)
+			}
+		}
+	case "warning_value", "danger_value":
+		if value != "" {
+			if _, err := strconv.ParseFloat(value, 64); err != nil {
+				if level == ValidationLevelStrict {
+					return fmt.Errorf("invalid numeric value for %s: %s", fieldName, value)
+				}
+				if level == ValidationLevelWarn {
+					fmt.Printf("Warning: potentially invalid numeric value for %s: %s\n", fieldName, value)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// ServiceGroupingConfig defines how services should be grouped
+type ServiceGroupingConfig struct {
+	Strategy    ServiceGroupingStrategy `json:"strategy,omitempty"`
+	LabelKey    string                  `json:"labelKey,omitempty"`
+	CustomRules []GroupingRule          `json:"customRules,omitempty"`
+}
+
+// GroupingRule defines a custom grouping rule
+type GroupingRule struct {
+	Name      string            `json:"name"`
+	Condition map[string]string `json:"condition"`
+	Priority  int               `json:"priority"`
+}
+
+// determineServiceGroup determines the service group name based on strategy
+func determineServiceGroup(namespace string, labels map[string]string, annotations map[string]string, config *ServiceGroupingConfig) string {
+	if config == nil {
+		config = &ServiceGroupingConfig{Strategy: ServiceGroupingNamespace}
+	}
+
+	// Check for explicit service name annotation first
+	if serviceName := getServiceNameFromAnnotations(annotations); serviceName != "" {
+		return serviceName
+	}
+
+	switch config.Strategy {
+	case ServiceGroupingLabel:
+		if config.LabelKey != "" {
+			if labelValue, exists := labels[config.LabelKey]; exists {
+				return labelValue
+			}
+		}
+		// Fallback to namespace if label not found
+		return namespace
+
+	case ServiceGroupingCustom:
+		for _, rule := range config.CustomRules {
+			if matchesCondition(labels, annotations, rule.Condition) {
+				return rule.Name
+			}
+		}
+		// Fallback to namespace if no rules match
+		return namespace
+
+	default: // ServiceGroupingNamespace
+		return namespace
+	}
+}
+
+// getServiceNameFromAnnotations extracts service name from annotations
+func getServiceNameFromAnnotations(annotations map[string]string) string {
+	for key, value := range annotations {
+		if strings.HasPrefix(key, "service.homer.rajsingh.info/") {
+			fieldName := strings.TrimPrefix(key, "service.homer.rajsingh.info/")
+			if strings.ToLower(fieldName) == "name" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+// matchesCondition checks if labels/annotations match a grouping condition
+func matchesCondition(labels map[string]string, annotations map[string]string, condition map[string]string) bool {
+	for key, expectedValue := range condition {
+		// Check labels first
+		if actualValue, exists := labels[key]; exists {
+			if !matchesPattern(actualValue, expectedValue) {
+				return false
+			}
+			continue
+		}
+
+		// Check annotations
+		if actualValue, exists := annotations[key]; exists {
+			if !matchesPattern(actualValue, expectedValue) {
+				return false
+			}
+			continue
+		}
+
+		// Key not found in either labels or annotations
+		return false
+	}
+	return true
+}
+
+// matchesPattern checks if a value matches a pattern (supports wildcards)
+func matchesPattern(value, pattern string) bool {
+	if pattern == "*" {
+		return true
+	}
+	if strings.Contains(pattern, "*") {
+		// Simple wildcard matching
+		return strings.HasPrefix(value, strings.TrimSuffix(pattern, "*"))
+	}
+	return value == pattern
 }
 
 // processServiceAnnotations safely processes service annotations without reflection
@@ -1463,4 +1733,232 @@ func marshalHomerConfigToYAML(config *HomerConfig) ([]byte, error) {
 	}
 
 	return yaml.Marshal(configMap)
+}
+
+// ServiceHealthConfig defines health checking configuration for services
+type ServiceHealthConfig struct {
+	Enabled      bool              `json:"enabled,omitempty"`
+	Interval     string            `json:"interval,omitempty"`     // e.g., "30s", "5m"
+	Timeout      string            `json:"timeout,omitempty"`      // e.g., "10s"
+	HealthPath   string            `json:"healthPath,omitempty"`   // e.g., "/health"
+	ExpectedCode int               `json:"expectedCode,omitempty"` // e.g., 200
+	Headers      map[string]string `json:"headers,omitempty"`
+}
+
+// ServiceDependency represents a dependency between services
+type ServiceDependency struct {
+	ServiceName string `json:"serviceName"`
+	ItemName    string `json:"itemName,omitempty"` // Optional specific item
+	Type        string `json:"type"`               // "hard", "soft", "circular"
+}
+
+// ServiceMetrics contains aggregated metrics for a service
+type ServiceMetrics struct {
+	TotalItems     int               `json:"totalItems"`
+	HealthyItems   int               `json:"healthyItems"`
+	UnhealthyItems int               `json:"unhealthyItems"`
+	LastUpdated    string            `json:"lastUpdated"`
+	CustomMetrics  map[string]string `json:"customMetrics,omitempty"`
+}
+
+// enhanceItemWithHealthCheck adds health checking capabilities to an item
+func enhanceItemWithHealthCheck(item *Item, healthConfig *ServiceHealthConfig) {
+	if healthConfig == nil || !healthConfig.Enabled {
+		return
+	}
+
+	// Add health check URL if not already a smart card
+	if item.Type == "" {
+		item.Type = "Generic"
+	}
+
+	// Set health endpoint
+	if healthConfig.HealthPath != "" && item.Endpoint == "" {
+		if item.Url != "" {
+			item.Endpoint = item.Url + healthConfig.HealthPath
+		}
+	}
+
+	// Merge health check headers
+	if healthConfig.Headers != nil {
+		if item.Headers == nil {
+			item.Headers = make(map[string]string)
+		}
+		for k, v := range healthConfig.Headers {
+			if _, exists := item.Headers[k]; !exists {
+				item.Headers[k] = v
+			}
+		}
+	}
+}
+
+// aggregateServiceMetrics calculates metrics for a service
+func aggregateServiceMetrics(service *Service) ServiceMetrics {
+	metrics := ServiceMetrics{
+		TotalItems:    len(service.Items),
+		LastUpdated:   "unknown",
+		CustomMetrics: make(map[string]string),
+	}
+
+	// Count healthy vs unhealthy items (basic heuristic)
+	for _, item := range service.Items {
+		if item.Type != "" && item.Endpoint != "" {
+			// Assume items with endpoints can be health-checked
+			metrics.HealthyItems++
+		} else {
+			// Items without health check capabilities
+			metrics.UnhealthyItems++
+		}
+
+		// Find the most recent update
+		if item.LastUpdate != "" && (metrics.LastUpdated == "unknown" || item.LastUpdate > metrics.LastUpdated) {
+			metrics.LastUpdated = item.LastUpdate
+		}
+	}
+
+	// Add custom metrics
+	metrics.CustomMetrics["itemsWithUrls"] = fmt.Sprintf("%d", countItemsWithUrls(service.Items))
+	metrics.CustomMetrics["itemsWithTags"] = fmt.Sprintf("%d", countItemsWithTags(service.Items))
+	metrics.CustomMetrics["smartCards"] = fmt.Sprintf("%d", countSmartCards(service.Items))
+
+	return metrics
+}
+
+// countItemsWithUrls counts items that have URLs
+func countItemsWithUrls(items []Item) int {
+	count := 0
+	for _, item := range items {
+		if item.Url != "" {
+			count++
+		}
+	}
+	return count
+}
+
+// countItemsWithTags counts items that have tags
+func countItemsWithTags(items []Item) int {
+	count := 0
+	for _, item := range items {
+		if item.Tag != "" {
+			count++
+		}
+	}
+	return count
+}
+
+// countSmartCards counts smart card items
+func countSmartCards(items []Item) int {
+	count := 0
+	for _, item := range items {
+		if item.Type != "" {
+			count++
+		}
+	}
+	return count
+}
+
+// findServiceDependencies analyzes services to find potential dependencies
+func findServiceDependencies(services []Service) []ServiceDependency {
+	var dependencies []ServiceDependency
+
+	// Create a map of service URLs for quick lookup
+	urlToService := make(map[string]string)
+	for _, service := range services {
+		for _, item := range service.Items {
+			if item.Url != "" {
+				urlToService[item.Url] = service.Name
+			}
+		}
+	}
+
+	// Look for dependencies in service names, keywords, or URLs
+	for _, service := range services {
+		for _, item := range service.Items {
+			// Check if keywords reference other services
+			if item.Keywords != "" {
+				keywords := strings.Split(item.Keywords, ",")
+				for _, keyword := range keywords {
+					keyword = strings.TrimSpace(keyword)
+					for _, otherService := range services {
+						if otherService.Name != service.Name && strings.Contains(strings.ToLower(keyword), strings.ToLower(otherService.Name)) {
+							dependencies = append(dependencies, ServiceDependency{
+								ServiceName: otherService.Name,
+								ItemName:    item.Name,
+								Type:        "soft",
+							})
+						}
+					}
+				}
+			}
+
+			// Check if item subtitle references other services
+			if item.Subtitle != "" {
+				for _, otherService := range services {
+					if otherService.Name != service.Name && strings.Contains(strings.ToLower(item.Subtitle), strings.ToLower(otherService.Name)) {
+						dependencies = append(dependencies, ServiceDependency{
+							ServiceName: otherService.Name,
+							ItemName:    item.Name,
+							Type:        "soft",
+						})
+					}
+				}
+			}
+		}
+	}
+
+	return dependencies
+}
+
+// optimizeServiceLayout optimizes service ordering based on dependencies and usage patterns
+func optimizeServiceLayout(services []Service, dependencies []ServiceDependency) []Service {
+	// Create a copy to avoid modifying the original
+	optimizedServices := make([]Service, len(services))
+	copy(optimizedServices, services)
+
+	// Simple optimization: sort by number of items (descending) and then by name
+	// More complex dependency-based sorting could be implemented here
+	for i := 0; i < len(optimizedServices)-1; i++ {
+		for j := i + 1; j < len(optimizedServices); j++ {
+			// Sort by item count first (descending)
+			if len(optimizedServices[i].Items) < len(optimizedServices[j].Items) {
+				optimizedServices[i], optimizedServices[j] = optimizedServices[j], optimizedServices[i]
+			} else if len(optimizedServices[i].Items) == len(optimizedServices[j].Items) {
+				// If same item count, sort by name (ascending)
+				if optimizedServices[i].Name > optimizedServices[j].Name {
+					optimizedServices[i], optimizedServices[j] = optimizedServices[j], optimizedServices[i]
+				}
+			}
+		}
+	}
+
+	return optimizedServices
+}
+
+// enhanceHomerConfigWithAggregation enhances Homer config with advanced aggregation features
+func enhanceHomerConfigWithAggregation(config *HomerConfig, healthConfig *ServiceHealthConfig) {
+	// Enhance items with health checking
+	for i := range config.Services {
+		for j := range config.Services[i].Items {
+			enhanceItemWithHealthCheck(&config.Services[i].Items[j], healthConfig)
+		}
+	}
+
+	// Find and log dependencies
+	dependencies := findServiceDependencies(config.Services)
+	if len(dependencies) > 0 {
+		fmt.Printf("Found %d service dependencies\n", len(dependencies))
+	}
+
+	// Optimize service layout
+	config.Services = optimizeServiceLayout(config.Services, dependencies)
+
+	// Add service metrics as comments or metadata (if Homer supports it)
+	for i := range config.Services {
+		metrics := aggregateServiceMetrics(&config.Services[i])
+		// Could add metrics to service description or as metadata
+		if config.Services[i].Name != "" {
+			fmt.Printf("Service '%s': %d total items, %d with health checks\n",
+				config.Services[i].Name, metrics.TotalItems, metrics.HealthyItems)
+		}
+	}
 }

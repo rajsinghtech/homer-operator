@@ -39,6 +39,35 @@ spec:
           spec:
             description: DashboardSpec defines the desired state of Dashboard
             properties:
+              advanced:
+                description: Advanced configures advanced aggregation and analysis
+                  features.
+                properties:
+                  enableDependencyAnalysis:
+                    description: EnableDependencyAnalysis enables automatic service
+                      dependency detection
+                    type: boolean
+                  enableLayoutOptimization:
+                    description: EnableLayoutOptimization enables automatic service
+                      layout optimization
+                    type: boolean
+                  enableMetricsAggregation:
+                    description: EnableMetricsAggregation enables service metrics
+                      collection and display
+                    type: boolean
+                  maxItemsPerService:
+                    default: 0
+                    description: MaxItemsPerService limits the number of items per
+                      service (0 = unlimited)
+                    minimum: 0
+                    type: integer
+                  maxServicesPerGroup:
+                    default: 0
+                    description: MaxServicesPerGroup limits the number of services
+                      per group (0 = unlimited)
+                    minimum: 0
+                    type: integer
+                type: object
               assets:
                 description: Assets configures custom assets (logos, icons, CSS) for
                   the dashboard.
@@ -118,6 +147,15 @@ spec:
                       is stored.
                     type: string
                 type: object
+              conflictResolution:
+                default: replace
+                description: ConflictResolution defines how to handle conflicts when
+                  multiple resources define the same item.
+                enum:
+                - replace
+                - merge
+                - error
+                type: string
               domainFilters:
                 description: DomainFilters optionally filters HTTPRoutes and Ingresses
                   by domain names. If not specified, all domains are included.
@@ -171,6 +209,39 @@ spec:
                     type: object
                 type: object
                 x-kubernetes-map-type: atomic
+              healthCheck:
+                description: HealthCheck configures health checking for discovered
+                  services.
+                properties:
+                  enabled:
+                    description: Enabled controls whether health checking is enabled
+                    type: boolean
+                  expectedCode:
+                    default: 200
+                    description: ExpectedCode is the HTTP status code expected for
+                      healthy services
+                    maximum: 599
+                    minimum: 100
+                    type: integer
+                  headers:
+                    additionalProperties:
+                      type: string
+                    description: Headers to include in health check requests
+                    type: object
+                  healthPath:
+                    default: /health
+                    description: HealthPath is the path to append to service URLs
+                      for health checks
+                    type: string
+                  interval:
+                    default: 30s
+                    description: Interval between health checks (e.g., "30s", "5m")
+                    type: string
+                  timeout:
+                    default: 10s
+                    description: Timeout for health check requests (e.g., "10s")
+                    type: string
+                type: object
               homerConfig:
                 description: HomerConfig is base/default Homer configuration.
                 properties:
@@ -599,6 +670,59 @@ spec:
                     - name
                     type: object
                 type: object
+              serviceGrouping:
+                description: ServiceGrouping configures how services are grouped in
+                  the dashboard.
+                properties:
+                  customRules:
+                    description: CustomRules defines custom grouping rules when strategy
+                      is 'custom'
+                    items:
+                      description: GroupingRule defines a custom grouping rule
+                      properties:
+                        condition:
+                          additionalProperties:
+                            type: string
+                          description: Condition defines labels/annotations that must
+                            match for this rule to apply
+                          type: object
+                        name:
+                          description: Name of the service group this rule creates
+                          type: string
+                        priority:
+                          default: 1
+                          description: Priority determines rule evaluation order (higher
+                            priority evaluated first)
+                          minimum: 1
+                          type: integer
+                      required:
+                      - condition
+                      - name
+                      type: object
+                    type: array
+                  labelKey:
+                    description: LabelKey specifies which label to use for grouping
+                      when strategy is 'label'
+                    type: string
+                  strategy:
+                    default: namespace
+                    description: Strategy defines the grouping strategy (namespace,
+                      label, custom)
+                    enum:
+                    - namespace
+                    - label
+                    - custom
+                    type: string
+                type: object
+              validationLevel:
+                default: warn
+                description: ValidationLevel defines the strictness of annotation
+                  validation.
+                enum:
+                - strict
+                - warn
+                - none
+                type: string
             type: object
           status:
             description: DashboardStatus defines the observed state of Dashboard

@@ -57,6 +57,25 @@ type DashboardSpec struct {
 
 	// DomainFilters optionally filters HTTPRoutes and Ingresses by domain names. If not specified, all domains are included.
 	DomainFilters []string `json:"domainFilters,omitempty"`
+
+	// ServiceGrouping configures how services are grouped in the dashboard.
+	ServiceGrouping *ServiceGroupingConfig `json:"serviceGrouping,omitempty"`
+
+	// ConflictResolution defines how to handle conflicts when multiple resources define the same item.
+	// +kubebuilder:validation:Enum=replace;merge;error
+	// +kubebuilder:default="replace"
+	ConflictResolution string `json:"conflictResolution,omitempty"`
+
+	// ValidationLevel defines the strictness of annotation validation.
+	// +kubebuilder:validation:Enum=strict;warn;none
+	// +kubebuilder:default="warn"
+	ValidationLevel string `json:"validationLevel,omitempty"`
+
+	// HealthCheck configures health checking for discovered services.
+	HealthCheck *ServiceHealthConfig `json:"healthCheck,omitempty"`
+
+	// Advanced configures advanced aggregation and analysis features.
+	Advanced *AdvancedConfig `json:"advanced,omitempty"`
 }
 
 // DashboardStatus defines the observed state of Dashboard
@@ -169,4 +188,81 @@ type SmartCardSecrets struct {
 	Username *SecretKeyRef `json:"username,omitempty"`
 	// Headers references Secrets for custom authentication headers
 	Headers map[string]*SecretKeyRef `json:"headers,omitempty"`
+}
+
+// ServiceGroupingConfig defines how services are grouped in the dashboard
+type ServiceGroupingConfig struct {
+	// Strategy defines the grouping strategy (namespace, label, custom)
+	// +kubebuilder:validation:Enum=namespace;label;custom
+	// +kubebuilder:default="namespace"
+	Strategy string `json:"strategy,omitempty"`
+
+	// LabelKey specifies which label to use for grouping when strategy is 'label'
+	LabelKey string `json:"labelKey,omitempty"`
+
+	// CustomRules defines custom grouping rules when strategy is 'custom'
+	CustomRules []GroupingRule `json:"customRules,omitempty"`
+}
+
+// GroupingRule defines a custom grouping rule
+type GroupingRule struct {
+	// Name of the service group this rule creates
+	Name string `json:"name"`
+
+	// Condition defines labels/annotations that must match for this rule to apply
+	Condition map[string]string `json:"condition"`
+
+	// Priority determines rule evaluation order (higher priority evaluated first)
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:default=1
+	Priority int `json:"priority,omitempty"`
+}
+
+// ServiceHealthConfig defines health checking configuration for services
+type ServiceHealthConfig struct {
+	// Enabled controls whether health checking is enabled
+	Enabled bool `json:"enabled,omitempty"`
+
+	// Interval between health checks (e.g., "30s", "5m")
+	// +kubebuilder:default="30s"
+	Interval string `json:"interval,omitempty"`
+
+	// Timeout for health check requests (e.g., "10s")
+	// +kubebuilder:default="10s"
+	Timeout string `json:"timeout,omitempty"`
+
+	// HealthPath is the path to append to service URLs for health checks
+	// +kubebuilder:default="/health"
+	HealthPath string `json:"healthPath,omitempty"`
+
+	// ExpectedCode is the HTTP status code expected for healthy services
+	// +kubebuilder:validation:Minimum=100
+	// +kubebuilder:validation:Maximum=599
+	// +kubebuilder:default=200
+	ExpectedCode int `json:"expectedCode,omitempty"`
+
+	// Headers to include in health check requests
+	Headers map[string]string `json:"headers,omitempty"`
+}
+
+// AdvancedConfig configures advanced aggregation and analysis features
+type AdvancedConfig struct {
+	// EnableDependencyAnalysis enables automatic service dependency detection
+	EnableDependencyAnalysis bool `json:"enableDependencyAnalysis,omitempty"`
+
+	// EnableMetricsAggregation enables service metrics collection and display
+	EnableMetricsAggregation bool `json:"enableMetricsAggregation,omitempty"`
+
+	// EnableLayoutOptimization enables automatic service layout optimization
+	EnableLayoutOptimization bool `json:"enableLayoutOptimization,omitempty"`
+
+	// MaxServicesPerGroup limits the number of services per group (0 = unlimited)
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:default=0
+	MaxServicesPerGroup int `json:"maxServicesPerGroup,omitempty"`
+
+	// MaxItemsPerService limits the number of items per service (0 = unlimited)
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:default=0
+	MaxItemsPerService int `json:"maxItemsPerService,omitempty"`
 }
