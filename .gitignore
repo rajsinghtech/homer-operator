@@ -27,3 +27,4 @@ go.work
 *.swo
 *~
 __debug_bin*
+test-**.yaml

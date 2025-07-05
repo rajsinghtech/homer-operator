@@ -6,7 +6,6 @@ metadata:
   labels:
     {{- include "homer-operator.labels" . | nindent 4 }}
     control-plane: controller-manager
-    app.kubernetes.io/name: manager
     app.kubernetes.io/component: manager
 spec:
   replicas: {{ .Values.replicaCount }}
