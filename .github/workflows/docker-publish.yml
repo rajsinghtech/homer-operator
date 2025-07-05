@@ -96,22 +96,25 @@ jobs:
         if: github.event_name != 'pull_request'
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           # Simple retry for transient Sigstore issues
-          for tag in ${{ steps.meta.outputs.tags }}; do
-            echo "Signing: $tag@${DIGEST}"
-            if ! cosign sign --yes "$tag@${DIGEST}"; then
-              echo "First attempt failed, retrying in 10 seconds..."
-              sleep 10
+          echo "$TAGS" | while IFS= read -r tag; do
+            if [[ -n "$tag" ]]; then
+              echo "Signing: $tag@${DIGEST}"
               if ! cosign sign --yes "$tag@${DIGEST}"; then
-                echo "❌ Failed to sign $tag after retry"
-                echo "::warning::Failed to sign image $tag - continuing with unsigned image"
-                # Continue with other images rather than failing entire workflow
+                echo "First attempt failed, retrying in 10 seconds..."
+                sleep 10
+                if ! cosign sign --yes "$tag@${DIGEST}"; then
+                  echo "❌ Failed to sign $tag after retry"
+                  echo "::warning::Failed to sign image $tag - continuing with unsigned image"
+                  # Continue with other images rather than failing entire workflow
+                else
+                  echo "✅ Successfully signed $tag on retry"
+                fi
               else
-                echo "✅ Successfully signed $tag on retry"
+                echo "✅ Successfully signed $tag"
               fi
-            else
-              echo "✅ Successfully signed $tag"
             fi
           done
 

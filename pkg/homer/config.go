@@ -289,7 +289,7 @@ func CreateDeployment(name string, namespace string, replicas *int32, owner clie
 							Command: []string{
 								"sh",
 								"-c",
-								"cp /config/config.yml /www/assets/config.yml && chmod -R 755 /www/assets",
+								"cp /config/config.yml /www/assets/config.yml",
 							},
 							SecurityContext: &corev1.SecurityContext{
 								AllowPrivilegeEscalation: &[]bool{false}[0],
@@ -591,8 +591,8 @@ func CreateDeploymentWithAssets(name string, namespace string, replicas *int32, 
 		initCommand += " && cat > /www/assets/manifest.json << 'EOF'\n" + pwaManifest + "\nEOF"
 	}
 
-	// Complete init command with permissions
-	initCommand += " && chmod -R 755 /www/assets"
+	// Complete init command (FSGroup handles permissions)
+	// No chmod needed - FSGroup=1000 ensures proper volume permissions
 
 	d := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{

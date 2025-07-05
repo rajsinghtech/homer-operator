@@ -51,12 +51,6 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Check if the HTTPRoute has homer annotations
-	if len(httproute.Annotations) == 0 {
-		log.Info("HTTPRoute has no annotations, skipping", "httproute", req.NamespacedName)
-		return ctrl.Result{}, nil
-	}
-
 	// List all Dashboard CRs
 	dashboardList := &homerv1alpha1.DashboardList{}
 	if err := r.List(ctx, dashboardList); err != nil {
