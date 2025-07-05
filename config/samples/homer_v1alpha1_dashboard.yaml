@@ -2,26 +2,195 @@ apiVersion: homer.rajsingh.info/v1alpha1
 kind: Dashboard
 metadata:
   name: dashboard-sample
+  labels:
+    app: homer-dashboard
+    tier: frontend
 spec:
   replicas: 2
+  
+  # Enhanced Homer Configuration with supported features
   homerConfig:
-    title: "Raj's Dashboard"
-    subtitle: "Raj's Subtitle"
-    # theme: default
-    header: "false"
-    footer: '<p>Homer-Operator</p>' 
-    # columns: "3"
+    title: "Modern Homer Dashboard"
+    subtitle: "Enterprise Service Discovery & Monitoring"
     logo: "https://raw.githubusercontent.com/rajsinghtech/homer-operator/main/homer/Homer-Operator.png"
+    header: true
+    footer: '<p>Powered by <strong>Homer-Operator</strong> | <a href="https://github.com/rajsinghtech/homer-operator">GitHub</a></p>'
+    
+    # Default layout settings
     defaults:
-      layout: list # Either 'columns', or 'list'
-      colorTheme: auto
+      layout: "columns"
+      colorTheme: "auto"
+    
+    # Enhanced links with targets
     links:
-    - name: "Homer-Operator Github"
+    - name: "Homer-Operator GitHub"
       icon: "fab fa-github"
       url: "https://github.com/rajsinghtech/homer-operator"
-    - name: "Homer Github"
-      icon: "fab fa-github"
+      target: "_blank"
+    - name: "Homer Documentation"
+      icon: "fas fa-book"
       url: "https://github.com/bastienwirtz/homer"
+      target: "_blank"
+    - name: "Kubernetes Dashboard"
+      icon: "fas fa-dharmachakra"
+      url: "https://kubernetes.io/docs/tasks/access-application-cluster/web-ui-dashboard/"
+      target: "_blank"
+    
+    # Comprehensive service catalog
+    services:
+    - name: "Infrastructure Services"
+      icon: "fas fa-server"
+      items:
+      - name: "Kubernetes Dashboard"
+        logo: "https://raw.githubusercontent.com/kubernetes/kubernetes/master/logo/logo.png"
+        subtitle: "Cluster Management"
+        tag: "k8s"
+        tagstyle: "is-info"
+        url: "https://kubernetes.example.com"
+        target: "_blank"
+        keywords: "kubernetes cluster management"
+      - name: "Grafana"
+        logo: "https://grafana.com/static/assets/img/grafana_icon.svg"
+        subtitle: "Monitoring & Dashboards"
+        tag: "monitoring"
+        tagstyle: "is-warning"
+        url: "https://grafana.example.com"
+        target: "_blank"
+        type: "Grafana"
+      - name: "Prometheus"
+        logo: "https://prometheus.io/assets/prometheus_logo_grey.svg"
+        subtitle: "Metrics Collection"
+        tag: "metrics"
+        tagstyle: "is-danger"
+        url: "https://prometheus.example.com"
+        target: "_blank"
+        type: "Prometheus"
+    
+    - name: "Development Tools"
+      icon: "fas fa-code"
+      items:
+      - name: "GitLab"
+        logo: "https://about.gitlab.com/images/press/logo/svg/gitlab-icon-rgb.svg"
+        subtitle: "Git Repository & CI/CD"
+        tag: "git"
+        tagstyle: "is-primary"
+        url: "https://gitlab.example.com"
+        target: "_blank"
+      - name: "Jenkins"
+        logo: "https://www.jenkins.io/images/logos/jenkins/jenkins.svg"
+        subtitle: "Build Automation"
+        tag: "ci/cd"
+        tagstyle: "is-success"
+        url: "https://jenkins.example.com"
+        target: "_blank"
+      - name: "SonarQube"
+        logo: "https://www.sonarqube.org/images/downloads/picto.svg"
+        subtitle: "Code Quality"
+        tag: "quality"
+        tagstyle: "is-info"
+        url: "https://sonar.example.com"
+        target: "_blank"
+        type: "SonarQube"
+    
+    - name: "Smart Services"
+      icon: "fas fa-microchip"
+      items:
+      - name: "Proxmox VE"
+        logo: "https://www.proxmox.com/images/proxmox/Proxmox_symbol_standard_hex_400px.png"
+        subtitle: "Virtualization Platform"
+        tag: "virtualization"
+        tagstyle: "is-warning"
+        url: "https://pve.example.com"
+        target: "_blank"
+        type: "Proxmox"
+        node: "pve-node1"
+      - name: "Radarr"
+        logo: "https://github.com/Radarr/Radarr/raw/develop/Logo/256.png"
+        subtitle: "Movie Management"
+        tag: "media"
+        tagstyle: "is-primary"
+        url: "https://radarr.example.com"
+        target: "_blank"
+        type: "Radarr"
+      - name: "Sonarr"
+        logo: "https://github.com/Sonarr/Sonarr/raw/develop/Logo/256.png"
+        subtitle: "TV Series Management"
+        tag: "media"
+        tagstyle: "is-success"
+        url: "https://sonarr.example.com"
+        target: "_blank"
+        type: "Sonarr"
+    
+    - name: "Security & Networking"
+      icon: "fas fa-shield-alt"
+      items:
+      - name: "pfSense"
+        logo: "https://www.pfsense.org/images/pfsense_logo.png"
+        subtitle: "Firewall & Router"
+        tag: "network"
+        tagstyle: "is-danger"
+        url: "https://pfsense.example.com"
+        target: "_blank"
+        type: "pfSense"
+      - name: "Pi-hole"
+        logo: "https://pi-hole.github.io/graphics/Vortex/Vortex_with_Wordmark.svg"
+        subtitle: "DNS Ad Blocker"
+        tag: "dns"
+        tagstyle: "is-info"
+        url: "https://pihole.example.com"
+        target: "_blank"
+        type: "PiHole"
+      - name: "Vault"
+        logo: "https://www.vaultproject.io/img/logo-hashicorp.svg"
+        subtitle: "Secrets Management"
+        tag: "security"
+        tagstyle: "is-warning"
+        url: "https://vault.example.com"
+        target: "_blank"
+  
+  # Custom assets configuration (requires external ConfigMap)
+  # assets:
+  #   configMapRef:
+  #     name: "dashboard-assets"
+  #     namespace: "default"
+  #   icons:
+  #     favicon: "custom-favicon.ico"
+  #     appleTouchIcon: "custom-apple-touch-icon.png"
+  #     pwaIcon192: "custom-pwa-192.png"
+  #     pwaIcon512: "custom-pwa-512.png"
+  #   pwa:
+  #     enabled: true
+  #     name: "Homer Enterprise Dashboard"
+  #     shortName: "Homer"
+  #     description: "Enterprise service discovery and monitoring dashboard"
+  #     themeColor: "#3367d6"
+  #     backgroundColor: "#ffffff"
+  #     display: "standalone"
+  #     startUrl: "/"
+  
+  # Smart card secrets for sensitive data (requires external Secret)
+  # secrets:
+  #   apiKey:
+  #     name: "dashboard-secrets"
+  #     key: "api-key"
+  #   token:
+  #     name: "dashboard-secrets"
+  #     key: "auth-token"
+  #   password:
+  #     name: "dashboard-secrets"
+  #     key: "password"
+  #   username:
+  #     name: "dashboard-secrets"
+  #     key: "username"
+  #   headers:
+  #     "X-API-Key":
+  #       name: "dashboard-secrets"
+  #       key: "custom-api-key"
+  #     "Authorization":
+  #       name: "dashboard-secrets"
+  #       key: "bearer-token"
+  
+  # ConfigMap for Homer configuration
   configMap:
-    name: "raj-config"
-    key: "raj-key" 
+    name: "enterprise-homer-config"
+    key: "config.yaml" 
