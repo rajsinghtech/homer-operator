@@ -273,6 +273,15 @@ func CreateDeployment(name string, namespace string, replicas *int32, owner clie
 					},
 				},
 				Spec: corev1.PodSpec{
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsNonRoot: &[]bool{true}[0],
+						RunAsUser:    &[]int64{1000}[0],
+						RunAsGroup:   &[]int64{1000}[0],
+						FSGroup:      &[]int64{1000}[0],
+						SeccompProfile: &corev1.SeccompProfile{
+							Type: corev1.SeccompProfileTypeRuntimeDefault,
+						},
+					},
 					InitContainers: []corev1.Container{
 						{
 							Name:  "init-assets",
@@ -281,6 +290,18 @@ func CreateDeployment(name string, namespace string, replicas *int32, owner clie
 								"sh",
 								"-c",
 								"cp /config/config.yml /www/assets/config.yml && chown -R 1000:1000 /www/assets && chmod -R 755 /www/assets",
+							},
+							SecurityContext: &corev1.SecurityContext{
+								AllowPrivilegeEscalation: &[]bool{false}[0],
+								RunAsNonRoot:             &[]bool{true}[0],
+								RunAsUser:                &[]int64{1000}[0],
+								RunAsGroup:               &[]int64{1000}[0],
+								Capabilities: &corev1.Capabilities{
+									Drop: []corev1.Capability{"ALL"},
+								},
+								SeccompProfile: &corev1.SeccompProfile{
+									Type: corev1.SeccompProfileTypeRuntimeDefault,
+								},
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
@@ -298,6 +319,18 @@ func CreateDeployment(name string, namespace string, replicas *int32, owner clie
 						{
 							Name:  name,
 							Image: image,
+							SecurityContext: &corev1.SecurityContext{
+								AllowPrivilegeEscalation: &[]bool{false}[0],
+								RunAsNonRoot:             &[]bool{true}[0],
+								RunAsUser:                &[]int64{1000}[0],
+								RunAsGroup:               &[]int64{1000}[0],
+								Capabilities: &corev1.Capabilities{
+									Drop: []corev1.Capability{"ALL"},
+								},
+								SeccompProfile: &corev1.SeccompProfile{
+									Type: corev1.SeccompProfileTypeRuntimeDefault,
+								},
+							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
 									Name:      "assets-volume",
@@ -585,6 +618,15 @@ func CreateDeploymentWithAssets(name string, namespace string, replicas *int32, 
 					},
 				},
 				Spec: corev1.PodSpec{
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsNonRoot: &[]bool{true}[0],
+						RunAsUser:    &[]int64{1000}[0],
+						RunAsGroup:   &[]int64{1000}[0],
+						FSGroup:      &[]int64{1000}[0],
+						SeccompProfile: &corev1.SeccompProfile{
+							Type: corev1.SeccompProfileTypeRuntimeDefault,
+						},
+					},
 					InitContainers: []corev1.Container{
 						{
 							Name:  "init-assets",
@@ -594,6 +636,18 @@ func CreateDeploymentWithAssets(name string, namespace string, replicas *int32, 
 								"-c",
 								initCommand,
 							},
+							SecurityContext: &corev1.SecurityContext{
+								AllowPrivilegeEscalation: &[]bool{false}[0],
+								RunAsNonRoot:             &[]bool{true}[0],
+								RunAsUser:                &[]int64{1000}[0],
+								RunAsGroup:               &[]int64{1000}[0],
+								Capabilities: &corev1.Capabilities{
+									Drop: []corev1.Capability{"ALL"},
+								},
+								SeccompProfile: &corev1.SeccompProfile{
+									Type: corev1.SeccompProfileTypeRuntimeDefault,
+								},
+							},
 							VolumeMounts: initVolumeMounts,
 						},
 					},
@@ -601,6 +655,18 @@ func CreateDeploymentWithAssets(name string, namespace string, replicas *int32, 
 						{
 							Name:  name,
 							Image: image,
+							SecurityContext: &corev1.SecurityContext{
+								AllowPrivilegeEscalation: &[]bool{false}[0],
+								RunAsNonRoot:             &[]bool{true}[0],
+								RunAsUser:                &[]int64{1000}[0],
+								RunAsGroup:               &[]int64{1000}[0],
+								Capabilities: &corev1.Capabilities{
+									Drop: []corev1.Capability{"ALL"},
+								},
+								SeccompProfile: &corev1.SeccompProfile{
+									Type: corev1.SeccompProfileTypeRuntimeDefault,
+								},
+							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
 									Name:      "assets-volume",

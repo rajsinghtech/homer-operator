@@ -20,6 +20,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"strconv"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -76,6 +77,13 @@ func main() {
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
+
+	// Override enableGatewayAPI from environment variable if set
+	if envGateway := os.Getenv("ENABLE_GATEWAY_API"); envGateway != "" {
+		if parsed, err := strconv.ParseBool(envGateway); err == nil {
+			enableGatewayAPI = parsed
+		}
+	}
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
@@ -143,6 +151,7 @@ func main() {
 		os.Exit(1)
 	}
 	if enableGatewayAPI {
+		setupLog.Info("Gateway API support enabled, setting up HTTPRoute controller")
 		if err = (&controller.HTTPRouteReconciler{
 			Client: mgr.GetClient(),
 			Scheme: mgr.GetScheme(),
@@ -150,6 +159,8 @@ func main() {
 			setupLog.Error(err, "unable to create controller", "controller", "HTTPRoute")
 			os.Exit(1)
 		}
+	} else {
+		setupLog.Info("Gateway API support disabled")
 	}
 	//+kubebuilder:scaffold:builder
 
