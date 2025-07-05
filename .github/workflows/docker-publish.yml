@@ -33,7 +33,16 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
       - name: Run tests
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: make test
 
       - name: Set up QEMU
@@ -69,7 +78,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ github.event_name == 'push' && contains(github.ref, 'refs/tags/') && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -88,7 +97,7 @@ jobs:
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          echo "${{ steps.meta.outputs.tags }}" | xargs -I {} cosign sign --yes {}@${DIGEST}
+          echo "${{ steps.meta.outputs.tags }}" | xargs -I {} -P 4 cosign sign --yes {}@${DIGEST}
 
   # Separate job for PR validation
   validate:
