@@ -1261,9 +1261,9 @@ spec:
       - args:
         - --secure-listen-address=0.0.0.0:8443
         - --upstream=http://127.0.0.1:8080/
-        - --logtostderr=true
         - --v=0
         image: gcr.io/kubebuilder/kube-rbac-proxy:v0.15.0
+        imagePullPolicy: Always
         name: kube-rbac-proxy
         ports:
         - containerPort: 8443
@@ -1288,6 +1288,7 @@ spec:
         command:
         - /manager
         image: ghcr.io/rajsinghtech/homer-operator:main
+        imagePullPolicy: Always
         livenessProbe:
           httpGet:
             path: /healthz
