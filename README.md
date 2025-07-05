@@ -151,7 +151,7 @@ spec:
           - name: "Plex Server"
             type: "Emby"  # Smart card type
             url: "https://plex.example.com"
-            # API key will be automatically injected from secret
+            # Note: Configure API key reference in smart card configuration
 ```
 
 ### 🎨 Custom Assets & Styling
@@ -192,7 +192,7 @@ Enable HTTPRoute processing for modern Kubernetes networking:
 
 ```bash
 # Install Gateway API CRDs
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/standard-install.yaml
 
 # Install operator with Gateway API support
 helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator \
@@ -260,7 +260,7 @@ podDisruptionBudget:
 
 ```bash
 helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator \
-  --version 0.0.0-latest -f values.yaml
+  --version 0.1.0 -f values.yaml
 ```
 
 ---
@@ -281,8 +281,7 @@ helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/hom
 **Available Metrics:**
 - `controller_runtime_reconcile_total` - Reconciliation counter
 - `controller_runtime_reconcile_time_seconds` - Reconciliation duration
-- `dashboards_total` - Total number of managed dashboards
-- `ingress_resources_discovered` - Discovered Ingress resources
+- Standard controller-runtime metrics for monitoring operator health
 
 ### Health Endpoints
 

@@ -8,7 +8,6 @@ metadata:
   labels:
     {{- include "homer-operator.labels" . | nindent 4 }}
     control-plane: controller-manager
-    app.kubernetes.io/name: metrics-service
     app.kubernetes.io/component: kube-rbac-proxy
   {{- with .Values.metricsService.annotations }}
   annotations:

@@ -12,7 +12,7 @@ A Helm chart for deploying the Homer Operator on Kubernetes. The Homer Operator 
 ### Install from OCI Registry (Recommended)
 
 ```bash
-helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator --version 0.0.0-latest
+helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator --version 0.0.0-latest -n homer-operator --create-namespace
 ```
 
 ### Install from Source
@@ -20,7 +20,7 @@ helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/hom
 ```bash
 git clone https://github.com/rajsinghtech/homer-operator.git
 cd homer-operator
-helm install homer-operator charts/homer-operator
+helm install homer-operator charts/homer-operator -n homer-operator --create-namespace
 ```
 
 ## Configuration
@@ -50,13 +50,14 @@ The following table lists the configurable parameters of the Homer Operator char
 ### Basic Installation
 
 ```bash
-helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator
+helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator -n homer-operator --create-namespace
 ```
 
 ### With Custom Values
 
 ```bash
 helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator \
+  -n homer-operator --create-namespace \
   --set operator.enableGatewayAPI=true \
   --set operator.metrics.enabled=false \
   --set resources.limits.memory=256Mi
@@ -86,7 +87,7 @@ serviceMonitor:
 ```
 
 ```bash
-helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator -f values.yaml
+helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator -n homer-operator --create-namespace -f values.yaml
 ```
 
 ## Features
@@ -124,6 +125,35 @@ spec:
             subtitle: "Main Application"
 ```
 
+## Troubleshooting
+
+### Namespace Creation Issues
+
+If you encounter the error `namespaces 'homer-operator' not found` when running:
+
+```bash
+helm upgrade --install homer-operator charts/homer-operator -n homer-operator
+```
+
+This is because Helm tries to install into the `homer-operator` namespace before the chart can create it. Use one of these solutions:
+
+**Solution 1: Use --create-namespace flag (Recommended)**
+```bash
+helm upgrade --install homer-operator charts/homer-operator -n homer-operator --create-namespace
+```
+
+**Solution 2: Create namespace manually first**
+```bash
+kubectl create namespace homer-operator
+helm upgrade --install homer-operator charts/homer-operator -n homer-operator
+```
+
+**Solution 3: Install to default namespace**
+```bash
+helm upgrade --install homer-operator charts/homer-operator
+```
+Note: This installs the operator to the default namespace but still creates the `homer-operator` namespace for the operator's resources.
+
 ## Gateway API Support
 
 To enable Gateway API support, set `operator.enableGatewayAPI=true`. This requires Gateway API CRDs to be installed in your cluster.
@@ -154,13 +184,14 @@ The operator follows security best practices:
 ## Uninstalling
 
 ```bash
-helm uninstall homer-operator
+helm uninstall homer-operator -n homer-operator
 ```
 
-Note: This will not remove the CustomResourceDefinitions. To remove them:
+Note: This will not remove the CustomResourceDefinitions or the namespace. To remove them:
 
 ```bash
 kubectl delete crd dashboards.homer.rajsingh.info
+kubectl delete namespace homer-operator
 ```
 
 ## Support
