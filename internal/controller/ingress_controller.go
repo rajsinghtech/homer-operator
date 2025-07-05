@@ -22,10 +22,13 @@ import (
 	homer "github.com/rajsinghtech/homer-operator.git/pkg/homer"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"time"
 )
 
 // IngressReconciler reconciles a Ingress object
@@ -72,9 +75,9 @@ func (r *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				return ctrl.Result{}, error
 			}
 			homer.UpdateConfigMapIngress(&configMap, ingress)
-			if error := r.Update(ctx, &configMap); error != nil {
-				log.Error(error, "unable to update ConfigMap", "configmap", dashboard.Name)
-				return ctrl.Result{}, error
+			if err := r.updateConfigMapWithRetry(ctx, &configMap, dashboard.Name); err != nil {
+				log.Error(err, "unable to update ConfigMap", "configmap", dashboard.Name)
+				return ctrl.Result{}, err
 			}
 			log.Info("Updated ConfigMap", "configmap", dashboard.Name)
 		}
@@ -106,4 +109,48 @@ func getAllDashboard(ctx context.Context, r *IngressReconciler) (*homerv1alpha1.
 		return nil, err
 	}
 	return &dashboardList, nil
+}
+
+// updateConfigMapWithRetry updates a ConfigMap with exponential backoff retry on conflicts
+func (r *IngressReconciler) updateConfigMapWithRetry(ctx context.Context, configMap *corev1.ConfigMap, dashboardName string) error {
+	log := log.FromContext(ctx)
+
+	backoff := wait.Backoff{
+		Steps:    5,
+		Duration: 100 * time.Millisecond,
+		Factor:   2.0,
+		Jitter:   0.1,
+		Cap:      5 * time.Second,
+	}
+
+	return wait.ExponentialBackoffWithContext(ctx, backoff, func(ctx context.Context) (bool, error) {
+		// Get the latest version of the ConfigMap before updating
+		latestConfigMap := &corev1.ConfigMap{}
+		key := client.ObjectKeyFromObject(configMap)
+		if err := r.Get(ctx, key, latestConfigMap); err != nil {
+			if apierrors.IsNotFound(err) {
+				// ConfigMap was deleted, no need to retry
+				return false, err
+			}
+			log.V(1).Info("Failed to get latest ConfigMap, retrying", "error", err)
+			return false, nil // Retry
+		}
+
+		// Copy our changes to the latest version
+		latestConfigMap.Data = configMap.Data
+		latestConfigMap.BinaryData = configMap.BinaryData
+
+		// Attempt to update
+		if err := r.Update(ctx, latestConfigMap); err != nil {
+			if apierrors.IsConflict(err) {
+				log.V(1).Info("ConfigMap update conflict, retrying", "configmap", dashboardName)
+				return false, nil // Retry
+			}
+			// Non-conflict error, don't retry
+			return false, err
+		}
+
+		// Success
+		return true, nil
+	})
 }
