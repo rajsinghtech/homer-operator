@@ -12,7 +12,7 @@ A Helm chart for deploying the Homer Operator on Kubernetes. The Homer Operator 
 ### Install from OCI Registry (Recommended)
 
 ```bash
-helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator --version 0.1.0
+helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator --version 0.0.0-latest
 ```
 
 ### Install from Source

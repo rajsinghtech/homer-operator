@@ -67,7 +67,7 @@ crd:
 # Namespace configuration
 namespace:
   # Specifies whether a namespace should be created
-  create: true
+  create: false
   # Name of the namespace (defaults to release namespace if not specified)
   name: ""
   # Annotations to add to the namespace

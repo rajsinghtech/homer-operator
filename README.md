@@ -260,7 +260,7 @@ podDisruptionBudget:
 
 ```bash
 helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator \
-  --version 0.1.0 -f values.yaml
+  --version 0.0.0-latest -f values.yaml
 ```
 
 ---
@@ -289,22 +289,6 @@ helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/hom
 - **Liveness**: `GET /healthz`
 - **Readiness**: `GET /readyz`  
 - **Metrics**: `GET /metrics`
-
----
-
-## 🎯 Use Cases
-
-### 🏢 **Enterprise Service Catalog**
-Create organization-wide service directories automatically from existing infrastructure.
-
-### 🔧 **DevOps Dashboards**
-Monitor and access development, staging, and production environments from a single interface.
-
-### 🏠 **Homelab Management**
-Organize personal services and applications with beautiful, mobile-friendly dashboards.
-
-### 📱 **Mobile-first Applications**
-Deploy PWA-enabled dashboards that install like native mobile apps.
 
 ---
 
@@ -338,8 +322,6 @@ The operator supports both simultaneously - migrate gradually:
 
 ---
 
-## 🔧 Development & Contributing
-
 ### Local Development
 
 ```bash
@@ -370,23 +352,6 @@ make test-e2e
 # Generate manifests
 make manifests
 ```
-
----
-
-## 📚 Documentation
-
-- **[API Reference](docs/api.md)** - Complete API documentation
-- **[Helm Chart](charts/homer-operator/README.md)** - Chart configuration options
-- **[Examples](config/samples/)** - Sample Dashboard configurations
-- **[Contributing](CONTRIBUTING.md)** - Development guidelines
-
----
-
-## 🤝 Community & Support
-
-- **🐛 Issues**: [GitHub Issues](https://github.com/rajsinghtech/homer-operator/issues)
-- **💬 Discussions**: [GitHub Discussions](https://github.com/rajsinghtech/homer-operator/discussions)
-- **📖 Documentation**: [Wiki](https://github.com/rajsinghtech/homer-operator/wiki)
 
 ---
 
