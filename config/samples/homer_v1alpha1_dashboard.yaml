@@ -13,7 +13,7 @@ spec:
     title: "Modern Homer Dashboard"
     subtitle: "Enterprise Service Discovery & Monitoring"
     logo: "https://raw.githubusercontent.com/rajsinghtech/homer-operator/main/homer/Homer-Operator.png"
-    header: true
+    header: "true"
     footer: '<p>Powered by <strong>Homer-Operator</strong> | <a href="https://github.com/rajsinghtech/homer-operator">GitHub</a></p>'
     
     # Default layout settings

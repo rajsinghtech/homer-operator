@@ -76,7 +76,7 @@ spec:
                     description: Footer to be displayed on the dashboard.
                     type: string
                   header:
-                    type: string
+                    type: boolean
                   links:
                     description: Links contains any additional links (static) to be
                       displayed on the dashboard.
