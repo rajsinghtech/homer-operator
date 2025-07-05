@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"reflect"
+	"strings"
 	"time"
 
 	homerv1alpha1 "github.com/rajsinghtech/homer-operator.git/api/v1alpha1"
@@ -27,6 +28,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -73,6 +76,24 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if err := r.List(ctx, ingresses, client.HasLabels([]string{})); err != nil {
 		log.Error(err, "unable to list Ingresses", "dashboard", req.NamespacedName)
 		return ctrl.Result{}, err
+	}
+
+	// Filter Ingresses based on dashboard selectors
+	filteredIngresses := []networkingv1.Ingress{}
+	for _, ingress := range ingresses.Items {
+		shouldInclude, err := r.shouldIncludeIngressForDashboard(ctx, &ingress, &dashboard)
+		if err != nil {
+			log.Error(err, "unable to determine if Ingress should be included", "dashboard", dashboard.Name, "ingress", ingress.Name)
+			return ctrl.Result{}, err
+		}
+		if shouldInclude {
+			filteredIngresses = append(filteredIngresses, ingress)
+		}
+	}
+
+	// Create filtered Ingress list
+	filteredIngressList := networkingv1.IngressList{
+		Items: filteredIngresses,
 	}
 
 	// Validate theme configuration
@@ -190,9 +211,23 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			log.Error(err, "unable to list HTTPRoutes", "dashboard", req.NamespacedName)
 			return ctrl.Result{}, err
 		}
-		configMap = homer.CreateConfigMapWithHTTPRoutes(homerConfig, dashboard.Name, dashboard.Namespace, *ingresses, httproutes.Items, &dashboard, dashboard.Spec.DomainFilters)
+
+		// Filter HTTPRoutes based on dashboard selectors
+		filteredHTTPRoutes := []gatewayv1.HTTPRoute{}
+		for _, httproute := range httproutes.Items {
+			shouldInclude, err := r.shouldIncludeHTTPRouteForDashboard(ctx, &httproute, &dashboard)
+			if err != nil {
+				log.Error(err, "unable to determine if HTTPRoute should be included", "dashboard", dashboard.Name, "httproute", httproute.Name)
+				return ctrl.Result{}, err
+			}
+			if shouldInclude {
+				filteredHTTPRoutes = append(filteredHTTPRoutes, httproute)
+			}
+		}
+
+		configMap = homer.CreateConfigMapWithHTTPRoutes(homerConfig, dashboard.Name, dashboard.Namespace, filteredIngressList, filteredHTTPRoutes, &dashboard, dashboard.Spec.DomainFilters)
 	} else {
-		configMap = homer.CreateConfigMap(homerConfig, dashboard.Name, dashboard.Namespace, *ingresses, &dashboard)
+		configMap = homer.CreateConfigMap(homerConfig, dashboard.Name, dashboard.Namespace, filteredIngressList, &dashboard)
 	}
 
 	// List of resources
@@ -277,4 +312,157 @@ func (r *DashboardReconciler) updateConfigMapWithRetry(ctx context.Context, conf
 		// Success
 		return true, nil
 	})
+}
+
+// shouldIncludeHTTPRouteForDashboard determines if an HTTPRoute should be included
+// based on the Dashboard's selectors and filters. If no selectors are specified, all HTTPRoutes are included.
+func (r *DashboardReconciler) shouldIncludeHTTPRouteForDashboard(ctx context.Context, httproute *gatewayv1.HTTPRoute, dashboard *homerv1alpha1.Dashboard) (bool, error) {
+	log := log.FromContext(ctx)
+
+	// Check HTTPRoute label selector
+	if dashboard.Spec.HTTPRouteSelector != nil {
+		selector, err := metav1.LabelSelectorAsSelector(dashboard.Spec.HTTPRouteSelector)
+		if err != nil {
+			return false, err
+		}
+		if !selector.Matches(labels.Set(httproute.Labels)) {
+			log.V(1).Info("HTTPRoute excluded by HTTPRoute label selector", "httproute", httproute.Name)
+			return false, nil
+		}
+	}
+
+	// Check domain filters
+	if len(dashboard.Spec.DomainFilters) > 0 {
+		if !r.matchesDomainFilters(httproute.Spec.Hostnames, dashboard.Spec.DomainFilters) {
+			log.Info("HTTPRoute excluded by domain filters", "httproute", httproute.Name, "hostnames", httproute.Spec.Hostnames, "domainFilters", dashboard.Spec.DomainFilters)
+			return false, nil
+		}
+		log.V(1).Info("HTTPRoute included by domain filters", "httproute", httproute.Name, "hostnames", httproute.Spec.Hostnames, "domainFilters", dashboard.Spec.DomainFilters)
+	}
+
+	// Check Gateway selector
+	if dashboard.Spec.GatewaySelector != nil {
+		selector, err := metav1.LabelSelectorAsSelector(dashboard.Spec.GatewaySelector)
+		if err != nil {
+			return false, err
+		}
+
+		gatewayMatched := false
+		// Check each parent Gateway reference in the HTTPRoute
+		for _, parentRef := range httproute.Spec.ParentRefs {
+			// Default to Gateway kind if not specified
+			kind := "Gateway"
+			if parentRef.Kind != nil {
+				kind = string(*parentRef.Kind)
+			}
+
+			// Only check Gateway resources
+			if kind != "Gateway" {
+				continue
+			}
+
+			// Default to same namespace as HTTPRoute if not specified
+			namespace := httproute.Namespace
+			if parentRef.Namespace != nil {
+				namespace = string(*parentRef.Namespace)
+			}
+
+			// Fetch the Gateway
+			gateway := &gatewayv1.Gateway{}
+			gatewayKey := client.ObjectKey{
+				Name:      string(parentRef.Name),
+				Namespace: namespace,
+			}
+
+			if err := r.Get(ctx, gatewayKey, gateway); err != nil {
+				if apierrors.IsNotFound(err) {
+					log.V(1).Info("Gateway not found", "gateway", gatewayKey)
+					continue
+				}
+				return false, err
+			}
+
+			// Check if Gateway labels match the selector
+			if selector.Matches(labels.Set(gateway.Labels)) {
+				gatewayMatched = true
+				break
+			}
+		}
+
+		if !gatewayMatched {
+			log.V(1).Info("HTTPRoute excluded by Gateway selector", "httproute", httproute.Name)
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
+// matchesDomainFilters checks if any hostname matches the domain filters
+func (r *DashboardReconciler) matchesDomainFilters(hostnames []gatewayv1.Hostname, domainFilters []string) bool {
+	if len(domainFilters) == 0 {
+		return true
+	}
+
+	for _, hostname := range hostnames {
+		hostnameStr := string(hostname)
+		for _, filter := range domainFilters {
+			// Support exact match or subdomain match
+			if hostnameStr == filter || strings.HasSuffix(hostnameStr, "."+filter) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// shouldIncludeIngressForDashboard determines if an Ingress should be included
+// based on the Dashboard's selectors and filters. If no selectors are specified, all Ingresses are included.
+func (r *DashboardReconciler) shouldIncludeIngressForDashboard(ctx context.Context, ingress *networkingv1.Ingress, dashboard *homerv1alpha1.Dashboard) (bool, error) {
+	log := log.FromContext(ctx)
+
+	// Check Ingress label selector
+	if dashboard.Spec.IngressSelector != nil {
+		selector, err := metav1.LabelSelectorAsSelector(dashboard.Spec.IngressSelector)
+		if err != nil {
+			return false, err
+		}
+		if !selector.Matches(labels.Set(ingress.Labels)) {
+			log.V(1).Info("Ingress excluded by Ingress label selector", "ingress", ingress.Name)
+			return false, nil
+		}
+	}
+
+	// Check domain filters
+	if len(dashboard.Spec.DomainFilters) > 0 {
+		if !r.matchesIngressDomainFilters(ingress, dashboard.Spec.DomainFilters) {
+			log.V(1).Info("Ingress excluded by domain filters", "ingress", ingress.Name)
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
+// matchesIngressDomainFilters checks if any Ingress rule host matches the domain filters
+func (r *DashboardReconciler) matchesIngressDomainFilters(ingress *networkingv1.Ingress, domainFilters []string) bool {
+	if len(domainFilters) == 0 {
+		return true
+	}
+
+	for _, rule := range ingress.Spec.Rules {
+		if rule.Host == "" {
+			continue
+		}
+
+		for _, filter := range domainFilters {
+			// Support exact match or subdomain match
+			if rule.Host == filter || strings.HasSuffix(rule.Host, "."+filter) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
