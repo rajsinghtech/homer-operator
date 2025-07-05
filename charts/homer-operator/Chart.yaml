@@ -3,7 +3,7 @@ name: homer-operator
 description: A Helm chart for Homer Operator - Kubernetes operator for managing Homer dashboard instances
 type: application
 version: 0.1.0
-appVersion: "1.0.0"
+appVersion: "latest"
 home: https://github.com/rajsinghtech/homer-operator
 sources:
   - https://github.com/rajsinghtech/homer-operator
