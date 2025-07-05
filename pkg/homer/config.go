@@ -289,7 +289,7 @@ func CreateDeployment(name string, namespace string, replicas *int32, owner clie
 							Command: []string{
 								"sh",
 								"-c",
-								"cp /config/config.yml /www/assets/config.yml && chown -R 1000:1000 /www/assets && chmod -R 755 /www/assets",
+								"cp /config/config.yml /www/assets/config.yml && chmod -R 755 /www/assets",
 							},
 							SecurityContext: &corev1.SecurityContext{
 								AllowPrivilegeEscalation: &[]bool{false}[0],
@@ -592,7 +592,7 @@ func CreateDeploymentWithAssets(name string, namespace string, replicas *int32, 
 	}
 
 	// Complete init command with permissions
-	initCommand += " && chown -R 1000:1000 /www/assets && chmod -R 755 /www/assets"
+	initCommand += " && chmod -R 755 /www/assets"
 
 	d := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
