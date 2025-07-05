@@ -48,10 +48,11 @@ type DashboardReconciler struct {
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the Dashboard object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
+// Reconcile manages Dashboard resources by:
+// 1. Creating/updating ConfigMaps for Homer configuration
+// 2. Managing Deployment resources for Homer instances
+// 3. Creating Services for Homer deployments
+// 4. Watching for changes and updating resources accordingly
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.17.0/pkg/reconcile
@@ -59,36 +60,13 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	log := log.FromContext(ctx)
 	var dashboard homerv1alpha1.Dashboard
 	if err := r.Get(ctx, req.NamespacedName, &dashboard); err != nil {
-		if client.IgnoreNotFound(err) != nil {
-			log.Error(err, "unable to fetch Dashboard", "dashboard", req.NamespacedName)
-			return ctrl.Result{}, client.IgnoreNotFound(err)
+		if apierrors.IsNotFound(err) {
+			// Dashboard was deleted, this is normal during deletion
+			log.V(1).Info("Dashboard not found - likely deleted", "dashboard", req.NamespacedName)
+			return ctrl.Result{}, nil
 		}
-		labelSelector := client.MatchingLabels{"dashboard.homer.rajsingh.info/name": req.NamespacedName.Name}
-		// List of resources to delete
-		resourceTypes := []struct {
-			list     client.ObjectList
-			resource string
-		}{
-			{&appsv1.DeploymentList{}, "Deployment"},
-			{&corev1.ServiceList{}, "Service"},
-			{&corev1.ConfigMapList{}, "ConfigMap"},
-		}
-
-		for _, resourceType := range resourceTypes {
-			if err := r.List(ctx, resourceType.list, labelSelector); err != nil {
-				log.Error(err, "unable to list resources", "dashboard", req.NamespacedName)
-				return ctrl.Result{}, err
-			}
-			items := reflect.ValueOf(resourceType.list).Elem().FieldByName("Items")
-			for i := 0; i < items.Len(); i++ {
-				item := items.Index(i).Addr().Interface().(client.Object)
-				if err := r.Delete(ctx, item); err != nil {
-					return ctrl.Result{}, err
-				}
-				log.Info("Resource deleted", "resource", item.GetName())
-			}
-		}
-		return ctrl.Result{}, nil
+		log.Error(err, "unable to fetch Dashboard", "dashboard", req.NamespacedName)
+		return ctrl.Result{}, err
 	}
 	// List ingresses with performance optimization - only get ones with rules
 	ingresses := &networkingv1.IngressList{}
@@ -212,7 +190,7 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			log.Error(err, "unable to list HTTPRoutes", "dashboard", req.NamespacedName)
 			return ctrl.Result{}, err
 		}
-		configMap = homer.CreateConfigMapWithHTTPRoutes(homerConfig, dashboard.Name, dashboard.Namespace, *ingresses, httproutes.Items, &dashboard)
+		configMap = homer.CreateConfigMapWithHTTPRoutes(homerConfig, dashboard.Name, dashboard.Namespace, *ingresses, httproutes.Items, &dashboard, dashboard.Spec.DomainFilters)
 	} else {
 		configMap = homer.CreateConfigMap(homerConfig, dashboard.Name, dashboard.Namespace, *ingresses, &dashboard)
 	}

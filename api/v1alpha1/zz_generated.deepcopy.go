@@ -21,6 +21,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -162,6 +163,26 @@ func (in *DashboardSpec) DeepCopyInto(out *DashboardSpec) {
 		in, out := &in.Secrets, &out.Secrets
 		*out = new(SmartCardSecrets)
 		(*in).DeepCopyInto(*out)
+	}
+	if in.GatewaySelector != nil {
+		in, out := &in.GatewaySelector, &out.GatewaySelector
+		*out = new(v1.LabelSelector)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.HTTPRouteSelector != nil {
+		in, out := &in.HTTPRouteSelector, &out.HTTPRouteSelector
+		*out = new(v1.LabelSelector)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.IngressSelector != nil {
+		in, out := &in.IngressSelector, &out.IngressSelector
+		*out = new(v1.LabelSelector)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.DomainFilters != nil {
+		in, out := &in.DomainFilters, &out.DomainFilters
+		*out = make([]string, len(*in))
+		copy(*out, *in)
 	}
 }
 

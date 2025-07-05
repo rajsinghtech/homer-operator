@@ -190,6 +190,41 @@ spec:
   #       name: "dashboard-secrets"
   #       key: "bearer-token"
   
+  # Optional selectors and filters for controlling which resources are included
+  
+  # Gateway selector for filtering HTTPRoutes by Gateway labels (optional)
+  # If not specified, all HTTPRoutes matching annotation criteria are included
+  gatewaySelector:
+    matchLabels:
+      gateway: public
+  #   matchExpressions:
+  #   - key: "app.kubernetes.io/name"
+  #     operator: In
+  #     values: ["istio", "envoy-gateway", "nginx-gateway"]
+
+  # HTTPRoute selector for filtering HTTPRoutes by their own labels (optional)
+  # httpRouteSelector:
+  #   matchLabels:
+  #     environment: "production"
+  #     team: "platform"
+  #   matchExpressions:
+  #   - key: "app.kubernetes.io/component"
+  #     operator: In
+  #     values: ["api", "frontend", "service"]
+
+  # Ingress selector for filtering Ingresses by labels (optional)
+  ingressSelector:
+    matchLabels:
+      noexist: "true"
+
+  # Domain filters for filtering by hostname/domain (optional)
+  # Only resources with hostnames matching these domains will be included
+  # Supports exact match (example.com) and subdomain match (*.example.com)
+  domainFilters:
+    - "rajsingh.info"
+  #   - "mycompany.com"
+  #   - "internal.local"
+
   # ConfigMap for Homer configuration
   configMap:
     name: "enterprise-homer-config"

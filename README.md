@@ -200,6 +200,79 @@ helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/hom
   --set operator.enableGatewayAPI=true
 ```
 
+#### Advanced Filtering Options
+
+Control exactly which resources are included in your dashboard with comprehensive filtering options:
+
+```yaml
+apiVersion: homer.rajsingh.info/v1alpha1
+kind: Dashboard
+metadata:
+  name: production-dashboard
+spec:
+  # Filter HTTPRoutes by Gateway labels
+  gatewaySelector:
+    matchLabels:
+      environment: "production"
+      gateway: "public"
+    matchExpressions:
+    - key: "app.kubernetes.io/name" 
+      operator: In
+      values: ["istio-gateway", "envoy-gateway", "nginx-gateway"]
+  
+  # Filter HTTPRoutes by their own labels
+  httpRouteSelector:
+    matchLabels:
+      team: "platform"
+      tier: "frontend"
+    matchExpressions:
+    - key: "app.kubernetes.io/component"
+      operator: In
+      values: ["api", "service", "web"]
+  
+  # Filter Ingresses by labels
+  ingressSelector:
+    matchLabels:
+      environment: "production"
+      public: "true"
+    matchExpressions:
+    - key: "kubernetes.io/ingress.class"
+      operator: In
+      values: ["nginx", "traefik"]
+  
+  # Filter by hostname/domain (works for both HTTPRoutes and Ingresses)
+  domainFilters:
+    - "mycompany.com"      # Exact match: mycompany.com
+    - "internal.local"     # Subdomain match: *.internal.local
+    - "rajsingh.info"      # Both exact and subdomain matching
+  
+  homerConfig:
+    title: "🏭 Production Services"
+    subtitle: "Filtered production endpoints"
+    # ... rest of config
+```
+
+**Filtering Capabilities:**
+
+| Filter Type | Description | Applies To | Default Behavior |
+|-------------|-------------|------------|------------------|
+| `gatewaySelector` | Filter HTTPRoutes by parent Gateway labels | HTTPRoutes only | Include all HTTPRoutes |
+| `httpRouteSelector` | Filter HTTPRoutes by their own labels | HTTPRoutes only | Include all HTTPRoutes |
+| `ingressSelector` | Filter Ingresses by their labels | Ingresses only | Include all Ingresses |
+| `domainFilters` | Filter by hostname/domain names | Both HTTPRoutes & Ingresses | Include all domains |
+
+**Domain Filtering Examples:**
+- `example.com` - Matches exactly `example.com`
+- `internal.local` - Matches `api.internal.local`, `web.internal.local`, etc.
+- Multiple filters are OR'd together (any match includes the resource)
+
+**Real-world Use Cases:**
+- **Environment Separation**: Production vs staging dashboards
+- **Team Dashboards**: Platform team vs application team services  
+- **Security Zones**: Public vs internal service separation
+- **Domain Organization**: Company domains vs personal projects
+- **Gateway Migration**: Gradual migration between gateway implementations
+
 ### Annotation-driven Service Discovery
 
 Control how your services appear on dashboards using annotations on both Ingress and HTTPRoute resources:

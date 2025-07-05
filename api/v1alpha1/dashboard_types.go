@@ -45,6 +45,18 @@ type DashboardSpec struct {
 
 	// Secrets configures Secret references for sensitive smart card data.
 	Secrets *SmartCardSecrets `json:"secrets,omitempty"`
+
+	// GatewaySelector optionally filters HTTPRoutes by Gateway labels. If not specified, all HTTPRoutes are included.
+	GatewaySelector *metav1.LabelSelector `json:"gatewaySelector,omitempty"`
+
+	// HTTPRouteSelector optionally filters HTTPRoutes by labels. If not specified, all HTTPRoutes are included.
+	HTTPRouteSelector *metav1.LabelSelector `json:"httpRouteSelector,omitempty"`
+
+	// IngressSelector optionally filters Ingresses by labels. If not specified, all Ingresses are included.
+	IngressSelector *metav1.LabelSelector `json:"ingressSelector,omitempty"`
+
+	// DomainFilters optionally filters HTTPRoutes and Ingresses by domain names. If not specified, all domains are included.
+	DomainFilters []string `json:"domainFilters,omitempty"`
 }
 
 // DashboardStatus defines the observed state of Dashboard

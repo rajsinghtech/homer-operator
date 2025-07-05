@@ -165,15 +165,6 @@ affinity: {}
 # Priority class for the operator pod
 priorityClassName: ""
 
-# Node selection constraints
-nodeSelector: {}
-
-# Tolerations for the operator pod
-tolerations: []
-
-# Affinity rules for the operator pod
-affinity: {}
-
 # Pod disruption budget
 podDisruptionBudget:
   enabled: false

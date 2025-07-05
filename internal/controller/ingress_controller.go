@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	homerv1alpha1 "github.com/rajsinghtech/homer-operator.git/api/v1alpha1"
@@ -25,6 +26,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -44,10 +47,12 @@ type IngressReconciler struct {
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the Ingress object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
+// Reconcile watches Ingress resources and automatically updates Dashboard
+// configurations by:
+// 1. Extracting service information from Ingress rules
+// 2. Finding associated Dashboard resources
+// 3. Updating Dashboard specs with discovered services
+// 4. Triggering Homer configuration regeneration
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.17.0/pkg/reconcile
@@ -69,13 +74,26 @@ func (r *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		// Check if dashboard annotations are a subset of the ingress annotations
 		delete(dashboard.Annotations, "kubectl.kubernetes.io/last-applied-configuration")
 		if isSubset(ingress.Annotations, dashboard.Annotations) {
+			// Check if Ingress should be included based on all filters
+			if shouldIncludeIngress, err := r.shouldIncludeIngressForDashboard(ctx, &ingress, &dashboard); err != nil {
+				log.Error(err, "unable to determine if Ingress should be included", "dashboard", dashboard.Name)
+				return ctrl.Result{}, err
+			} else if !shouldIncludeIngress {
+				log.V(1).Info("Ingress excluded by selectors or filters", "dashboard", dashboard.Name, "ingress", req.NamespacedName)
+				continue
+			}
+
 			configMap := corev1.ConfigMap{}
 			log.Info("Dashboard annotations are a subset of the ingress annotations", "dashboard", dashboard.Name)
 			if error := r.Get(ctx, client.ObjectKey{Namespace: dashboard.Namespace, Name: dashboard.Name + "-homer"}, &configMap); error != nil {
+				if apierrors.IsNotFound(error) {
+					log.V(1).Info("ConfigMap not found - likely not created yet", "configmap", dashboard.Name+"-homer")
+					continue
+				}
 				log.Error(error, "unable to fetch ConfigMap", "configmap", dashboard.Name+"-homer")
 				return ctrl.Result{}, error
 			}
-			homer.UpdateConfigMapIngress(&configMap, ingress)
+			homer.UpdateConfigMapIngress(&configMap, ingress, dashboard.Spec.DomainFilters)
 			if err := r.updateConfigMapWithRetry(ctx, &configMap, dashboard.Name); err != nil {
 				log.Error(err, "unable to update ConfigMap", "configmap", dashboard.Name)
 				return ctrl.Result{}, err
@@ -85,6 +103,56 @@ func (r *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// shouldIncludeIngressForDashboard determines if an Ingress should be included
+// based on the Dashboard's selectors and filters. If no selectors are specified, all Ingresses are included.
+func (r *IngressReconciler) shouldIncludeIngressForDashboard(ctx context.Context, ingress *networkingv1.Ingress, dashboard *homerv1alpha1.Dashboard) (bool, error) {
+	log := log.FromContext(ctx)
+
+	// Check Ingress label selector
+	if dashboard.Spec.IngressSelector != nil {
+		selector, err := metav1.LabelSelectorAsSelector(dashboard.Spec.IngressSelector)
+		if err != nil {
+			return false, err
+		}
+		if !selector.Matches(labels.Set(ingress.Labels)) {
+			log.V(1).Info("Ingress excluded by Ingress label selector", "ingress", ingress.Name)
+			return false, nil
+		}
+	}
+
+	// Check domain filters
+	if len(dashboard.Spec.DomainFilters) > 0 {
+		if !r.matchesIngressDomainFilters(ingress, dashboard.Spec.DomainFilters) {
+			log.V(1).Info("Ingress excluded by domain filters", "ingress", ingress.Name)
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
+// matchesIngressDomainFilters checks if any Ingress rule host matches the domain filters
+func (r *IngressReconciler) matchesIngressDomainFilters(ingress *networkingv1.Ingress, domainFilters []string) bool {
+	if len(domainFilters) == 0 {
+		return true
+	}
+
+	for _, rule := range ingress.Spec.Rules {
+		if rule.Host == "" {
+			continue
+		}
+
+		for _, filter := range domainFilters {
+			// Support exact match or subdomain match
+			if rule.Host == filter || strings.HasSuffix(rule.Host, "."+filter) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // isSubset checks if the first map is a subset of the second map

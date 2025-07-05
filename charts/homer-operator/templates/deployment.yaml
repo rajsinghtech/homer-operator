@@ -41,7 +41,9 @@ spec:
         command:
         - /manager
         args:
+        {{- if .Values.operator.leaderElection.enabled }}
         - --leader-elect
+        {{- end }}
         {{- if .Values.operator.metrics.enabled }}
         - --metrics-bind-address={{ .Values.operator.metrics.bindAddress }}
         {{- if .Values.operator.metrics.secureMetrics }}
@@ -49,9 +51,6 @@ spec:
         {{- end }}
         {{- end }}
         - --health-probe-bind-address={{ .Values.operator.healthProbe.bindAddress }}
-        {{- if .Values.operator.leaderElection.enabled }}
-        - --leader-elect
-        {{- end }}
         env:
         {{- include "homer-operator.env" . | nindent 8 }}
         {{- if .Values.envFrom }}

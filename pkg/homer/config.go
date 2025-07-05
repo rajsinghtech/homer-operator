@@ -172,7 +172,7 @@ func LoadConfigFromFile(filename string) (*HomerConfig, error) {
 }
 
 func CreateConfigMap(config *HomerConfig, name string, namespace string, ingresses networkingv1.IngressList, owner client.Object) corev1.ConfigMap {
-	UpdateHomerConfig(config, ingresses)
+	UpdateHomerConfig(config, ingresses, nil)
 
 	// Validate configuration before creating ConfigMap
 	if err := ValidateHomerConfig(config); err != nil {
@@ -206,11 +206,11 @@ func CreateConfigMap(config *HomerConfig, name string, namespace string, ingress
 }
 
 // CreateConfigMapWithHTTPRoutes creates a ConfigMap with both Ingress and HTTPRoute resources
-func CreateConfigMapWithHTTPRoutes(config *HomerConfig, name string, namespace string, ingresses networkingv1.IngressList, httproutes []gatewayv1.HTTPRoute, owner client.Object) corev1.ConfigMap {
-	UpdateHomerConfig(config, ingresses)
+func CreateConfigMapWithHTTPRoutes(config *HomerConfig, name string, namespace string, ingresses networkingv1.IngressList, httproutes []gatewayv1.HTTPRoute, owner client.Object, domainFilters []string) corev1.ConfigMap {
+	UpdateHomerConfig(config, ingresses, domainFilters)
 	// Update config with HTTPRoutes
 	for _, httproute := range httproutes {
-		UpdateHomerConfigHTTPRoute(config, &httproute)
+		UpdateHomerConfigHTTPRoute(config, &httproute, domainFilters)
 	}
 
 	// Validate configuration before creating ConfigMap
@@ -727,23 +727,33 @@ func CreateService(name string, namespace string, owner client.Object) corev1.Se
 	}
 	return *s
 }
-func UpdateHomerConfig(config *HomerConfig, ingresses networkingv1.IngressList) error {
+func UpdateHomerConfig(config *HomerConfig, ingresses networkingv1.IngressList, domainFilters []string) error {
 	var services []Service
 	// iterate over all ingresses and add them to the dashboard
 	for _, ingress := range ingresses.Items {
 		for _, rule := range ingress.Spec.Rules {
+			host := rule.Host
+			if host == "" {
+				continue // Skip rules without hostnames
+			}
+
+			// Apply domain filtering
+			if !matchesIngressDomainFilters(host, domainFilters) {
+				continue // Skip hosts that don't match domain filters
+			}
+
 			item := Item{}
 			service := Service{}
 			service.Name = ingress.ObjectMeta.Namespace
 			item.Name = ingress.ObjectMeta.Name
 			service.Logo = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/resources/labeled/ns-128.png"
 			if len(ingress.Spec.TLS) > 0 {
-				item.Url = "https://" + rule.Host
+				item.Url = "https://" + host
 			} else {
-				item.Url = "http://" + rule.Host
+				item.Url = "http://" + host
 			}
 			item.Logo = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/resources/labeled/ing-128.png"
-			item.Subtitle = rule.Host
+			item.Subtitle = host
 			// Process annotations safely
 			processItemAnnotations(&item, ingress.ObjectMeta.Annotations)
 			processServiceAnnotations(&service, ingress.ObjectMeta.Annotations)
@@ -766,7 +776,7 @@ func UpdateHomerConfig(config *HomerConfig, ingresses networkingv1.IngressList) 
 	}
 	return nil
 }
-func UpdateHomerConfigIngress(homerConfig *HomerConfig, ingress networkingv1.Ingress) {
+func UpdateHomerConfigIngress(homerConfig *HomerConfig, ingress networkingv1.Ingress, domainFilters []string) {
 	service := Service{}
 	item := Item{}
 	service.Name = ingress.ObjectMeta.Namespace
@@ -779,41 +789,56 @@ func UpdateHomerConfigIngress(homerConfig *HomerConfig, ingress networkingv1.Ing
 		return
 	}
 
-	host := ingress.Spec.Rules[0].Host
-	if len(ingress.Spec.TLS) > 0 {
-		item.Url = "https://" + host
-	} else {
-		item.Url = "http://" + host
-	}
-	item.Logo = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/resources/labeled/ing-128.png"
-	item.Subtitle = host
-	// Process annotations safely
-	processItemAnnotations(&item, ingress.ObjectMeta.Annotations)
+	// Process service-level annotations
 	processServiceAnnotations(&service, ingress.ObjectMeta.Annotations)
-	for sx, s := range homerConfig.Services {
-		if s.Name == service.Name {
-			for ix, i := range s.Items {
-				if i.Name == item.Name {
-					homerConfig.Services[sx].Items[ix] = item
-					return
-				}
-			}
-			homerConfig.Services[sx].Items = append(homerConfig.Services[sx].Items, item)
-			return
+
+	// Process each rule's host with domain filtering
+	var items []Item
+	for _, rule := range ingress.Spec.Rules {
+		host := rule.Host
+		if host == "" {
+			continue // Skip rules without hostnames
 		}
+
+		// Apply domain filtering
+		if !matchesIngressDomainFilters(host, domainFilters) {
+			continue // Skip hosts that don't match domain filters
+		}
+
+		item := Item{}
+		item.Name = ingress.ObjectMeta.Name
+		item.Logo = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/resources/labeled/ing-128.png"
+
+		// If multiple hosts, append hostname to make names unique
+		if len(ingress.Spec.Rules) > 1 {
+			item.Name = ingress.ObjectMeta.Name + "-" + host
+		}
+
+		if len(ingress.Spec.TLS) > 0 {
+			item.Url = "https://" + host
+		} else {
+			item.Url = "http://" + host
+		}
+		item.Subtitle = host
+
+		// Process annotations safely
+		processItemAnnotations(&item, ingress.ObjectMeta.Annotations)
+		items = append(items, item)
 	}
-	// Service not found, add it
-	service.Items = []Item{item}
-	homerConfig.Services = append(homerConfig.Services, service)
+
+	// Only update the service if we have matching items
+	if len(items) > 0 {
+		updateOrAddServiceItems(homerConfig, service, items)
+	}
 }
 
-func UpdateConfigMapIngress(cm *corev1.ConfigMap, ingress networkingv1.Ingress) {
+func UpdateConfigMapIngress(cm *corev1.ConfigMap, ingress networkingv1.Ingress, domainFilters []string) {
 	homerConfig := HomerConfig{}
 	err := yaml.Unmarshal([]byte(cm.Data["config.yml"]), &homerConfig)
 	if err != nil {
 		return
 	}
-	UpdateHomerConfigIngress(&homerConfig, ingress)
+	UpdateHomerConfigIngress(&homerConfig, ingress, domainFilters)
 	objYAML, err := yaml.Marshal(homerConfig)
 	if err != nil {
 		return
@@ -822,7 +847,7 @@ func UpdateConfigMapIngress(cm *corev1.ConfigMap, ingress networkingv1.Ingress) 
 }
 
 // UpdateHomerConfigHTTPRoute updates the HomerConfig with HTTPRoute information
-func UpdateHomerConfigHTTPRoute(homerConfig *HomerConfig, httproute *gatewayv1.HTTPRoute) {
+func UpdateHomerConfigHTTPRoute(homerConfig *HomerConfig, httproute *gatewayv1.HTTPRoute, domainFilters []string) {
 	service := Service{}
 	service.Name = httproute.ObjectMeta.Namespace
 	service.Logo = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/resources/labeled/ns-128.png"
@@ -841,13 +866,22 @@ func UpdateHomerConfigHTTPRoute(homerConfig *HomerConfig, httproute *gatewayv1.H
 		processItemAnnotations(&item, httproute.ObjectMeta.Annotations)
 		items = append(items, item)
 	} else {
-		// Create separate item for each hostname
+		// Create separate item for each hostname that matches domain filters
+		var filteredHostnames []gatewayv1.Hostname
 		for _, hostname := range httproute.Spec.Hostnames {
+			hostStr := string(hostname)
+			if matchesHTTPRouteDomainFilters(hostStr, domainFilters) {
+				filteredHostnames = append(filteredHostnames, hostname)
+			}
+		}
+
+		// Only process hostnames that match the domain filters
+		for _, hostname := range filteredHostnames {
 			hostStr := string(hostname)
 			item := createHTTPRouteItem(httproute, hostStr, protocol)
 
 			// If multiple hostnames, append hostname to make names unique
-			if len(httproute.Spec.Hostnames) > 1 {
+			if len(filteredHostnames) > 1 {
 				item.Name = httproute.ObjectMeta.Name + "-" + hostStr
 			}
 
@@ -858,6 +892,38 @@ func UpdateHomerConfigHTTPRoute(homerConfig *HomerConfig, httproute *gatewayv1.H
 
 	// Update or add the service and items
 	updateOrAddServiceItems(homerConfig, service, items)
+}
+
+// matchesHTTPRouteDomainFilters checks if a hostname matches the domain filters
+func matchesHTTPRouteDomainFilters(hostname string, domainFilters []string) bool {
+	if len(domainFilters) == 0 {
+		return true // No filters means include all
+	}
+
+	for _, filter := range domainFilters {
+		// Support exact match or subdomain match
+		if hostname == filter || strings.HasSuffix(hostname, "."+filter) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// matchesIngressDomainFilters checks if a hostname matches the domain filters for Ingress
+func matchesIngressDomainFilters(hostname string, domainFilters []string) bool {
+	if len(domainFilters) == 0 {
+		return true // No filters means include all
+	}
+
+	for _, filter := range domainFilters {
+		// Support exact match or subdomain match
+		if hostname == filter || strings.HasSuffix(hostname, "."+filter) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // createHTTPRouteItem creates a dashboard item for a specific hostname
@@ -1012,13 +1078,13 @@ func processServiceAnnotations(service *Service, annotations map[string]string) 
 }
 
 // UpdateConfigMapHTTPRoute updates the ConfigMap with HTTPRoute information
-func UpdateConfigMapHTTPRoute(cm *corev1.ConfigMap, httproute *gatewayv1.HTTPRoute) {
+func UpdateConfigMapHTTPRoute(cm *corev1.ConfigMap, httproute *gatewayv1.HTTPRoute, domainFilters []string) {
 	homerConfig := HomerConfig{}
 	err := yaml.Unmarshal([]byte(cm.Data["config.yml"]), &homerConfig)
 	if err != nil {
 		return
 	}
-	UpdateHomerConfigHTTPRoute(&homerConfig, httproute)
+	UpdateHomerConfigHTTPRoute(&homerConfig, httproute, domainFilters)
 	objYAML, err := yaml.Marshal(homerConfig)
 	if err != nil {
 		return
