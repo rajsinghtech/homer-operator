@@ -47,6 +47,13 @@ help: ## Display this help.
 .PHONY: manifests
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+	@echo "Syncing CRDs to Helm chart..."
+	@mkdir -p charts/homer-operator/crds
+	@cp config/crd/bases/homer.rajsingh.info_dashboards.yaml charts/homer-operator/crds/
+	@if [ -f charts/homer-operator/templates/crd.yaml ]; then \
+		echo "Removing old CRD template from charts/homer-operator/templates/crd.yaml"; \
+		rm charts/homer-operator/templates/crd.yaml; \
+	fi
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
@@ -124,6 +131,8 @@ build-installer: manifests generate kustomize ## Generate a consolidated YAML wi
 	echo "---" >> dist/install.yaml  # Add a document separator before appending
 	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
 	$(KUSTOMIZE) build config/default >> dist/install.yaml
+	@echo "Updating deploy/operator.yaml..."
+	@cp dist/install.yaml deploy/operator.yaml
 
 ##@ Deployment
 

@@ -58,10 +58,10 @@ rbac:
   annotations: {}
 
 # Custom Resource Definition configuration
+# Note: CRDs are now managed in the crds/ directory following Helm best practices
+# They will be automatically installed before the chart and upgraded appropriately
 crd:
-  # Specifies whether CRDs should be created
-  create: true
-  # Annotations to add to the CRDs
+  # Annotations to add to the CRDs (applied via crds/ directory)
   annotations: {}
 
 # Namespace configuration
