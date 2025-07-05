@@ -1,0 +1,50 @@
+# CI values for chart testing
+# Minimal configuration for testing
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/rajsinghtech/homer-operator
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+operator:
+  enableGatewayAPI: false
+  metrics:
+    enabled: true
+    secureMetrics: false
+  leaderElection:
+    enabled: true
+
+resources:
+  limits:
+    cpu: 100m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi
+
+serviceAccount:
+  create: true
+  automount: true
+
+rbac:
+  create: true
+
+crd:
+  create: true
+
+namespace:
+  create: true
+
+serviceMonitor:
+  create: false
+
+podDisruptionBudget:
+  enabled: false
+
+autoscaling:
+  enabled: false
+
+networkPolicy:
+  enabled: false

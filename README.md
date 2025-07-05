@@ -1,100 +1,405 @@
-<h1 align="center">
- <img
-  width="180"
-  alt="Homer's donut"
-  src="https://raw.githubusercontent.com/rajsinghtech/homer-operator/main/homer/Homer-Operator.png">
-    <br/>
-    Homer-Operator
-</h1>
+# Homer Operator
 
-The `homer-operator` is a Kubernetes operator designed to simplify the deployment and management of dynamic dashboards using the [bastienwirtz/homer](https://github.com/bastienwirtz/homer) container. This operator leverages Homer's extensible YAML configuration methodologies to automatically generate and update dashboards based on existing Ingress and API Gateway resources within the Kubernetes cluster.
+<div align="center">
+  <img width="200" alt="Homer Operator Logo" src="https://raw.githubusercontent.com/rajsinghtech/homer-operator/main/homer/Homer-Operator.png">
+  
+  [![Go Report Card](https://goreportcard.com/badge/github.com/rajsinghtech/homer-operator)](https://goreportcard.com/report/github.com/rajsinghtech/homer-operator)
+  [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+  [![Kubernetes](https://img.shields.io/badge/Kubernetes-v1.20+-blue.svg)](https://kubernetes.io/)
 
-## Features
+  **🚀 Kubernetes operator for automated Homer dashboard deployment and management**
+  
+  Automatically generate beautiful, dynamic dashboards from your Kubernetes Ingress and Gateway API resources.
+</div>
 
-- Automatic generation of dynamic dashboards based on existing Ingress and API Gateway resources.
-- Simplified management of dashboards through Kubernetes custom resources.
-- Utilizes Kubebuilder for seamless integration with Kubernetes.
+---
 
-## Prerequisites
+## ✨ Features
 
-Before running the `homer-operator`, ensure you have the following prerequisites installed:
+### 🎯 **Core Capabilities**
+- **Automatic Dashboard Generation** - Discover and display services from Ingress & HTTPRoute resources
+- **Multi-tenancy Support** - Deploy multiple dashboards in the same namespace
+- **High Availability** - Configurable replicas, HPA, and Pod Disruption Budgets
+- **Production Ready** - Comprehensive Helm chart with RBAC and security contexts
 
-- Kubernetes cluster (locally or externally accessible)
-- `kubectl` configured to access the cluster
-- Docker (if building the operator locally)
+### 🎨 **Customization & Theming**
+- **Custom Themes** - Built-in support for `default`, `neon`, and `walkxcode` themes
+- **Custom Assets** - Upload logos, icons, and CSS via ConfigMaps
+- **Color Schemes** - Extensive light/dark theme customization
+- **PWA Support** - Progressive Web App manifests for mobile installation
 
-## Installation
+### 🔒 **Security & Integration**
+- **Secret Management** - Kubernetes Secret integration for API keys
+- **RBAC Ready** - Minimal required permissions with owner references
+- **Gateway API Support** - Modern Kubernetes networking with HTTPRoute
+- **Annotation-driven** - Fine-grained control via Kubernetes annotations
 
-### Running Locally
+### 📊 **Operations & Monitoring**
+- **Prometheus Metrics** - Built-in monitoring and observability
+- **Health Checks** - Liveness and readiness probes
+- **OCI Registry** - Helm charts published to GitHub Container Registry
 
-To run the `homer-operator` locally, follow these steps:
+---
 
-1. Clone the repository:
+## 🚀 Quick Start
 
-   ```bash
-   git clone https://github.com/rajsinghtech/homer-operator.git
-   ```
+### Prerequisites
+- Kubernetes cluster (v1.20+)
+- `kubectl` configured
+- Helm 3.x (recommended)
 
-2. Change directory to the project:
-
-   ```bash
-   cd homer-operator
-   ```
-
-3. Build the operator:
-
-   ```bash
-   make install
-   make build
-   ```
-
-4. Deploy the operator to your Kubernetes cluster:
-
-   ```bash
-   make deploy
-   ```
-
-### Running Externally
-
-To run the `homer-operator` on an externally accessible Kubernetes cluster, you can use the pre-built Docker image available on Docker Hub:
+### 1. Install with Helm (Recommended)
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/rajsinghtech/homer-operator/main/deploy/operator.yaml
+# Install latest stable release
+helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator
+
+# Install with Gateway API support
+helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator \
+  --set operator.enableGatewayAPI=true
 ```
 
-This command will deploy the operator to your Kubernetes cluster using the pre-built Docker image.
-
-## Usage
-
-Once the `homer-operator` is running in your Kubernetes cluster, you can start creating dynamic dashboards by defining custom resources.
-
-For example, you can create a dashboard for a specific application by defining a `Dashboard` custom resource:
+### 2. Create Your First Dashboard
 
 ```yaml
 apiVersion: homer.rajsingh.info/v1alpha1
 kind: Dashboard
 metadata:
-  name: dashboard-sample
+  name: my-dashboard
+  namespace: default
 spec:
+  replicas: 2
   homerConfig:
-    title: "Raj's Dashboard"
-    subtitle: "Raj's Subtitle"
-    # theme: default
-    header: "false"
-    footer: '<p>Homer-Operator</p>' 
-    # columns: "3"
+    title: "🏠 My Dashboard"
+    subtitle: "Welcome to my services"
+    theme: "default"
+    header: true
+    footer: '<p>Powered by Homer Operator</p>'
     logo: "https://raw.githubusercontent.com/rajsinghtech/homer-operator/main/homer/Homer-Operator.png"
-    defaults:
-      layout: list
-      colorTheme: auto
-  configMap:
-    name: "raj-config"
-    key: "raj-key" 
-
 ```
 
-This YAML manifest instructs the `homer-operator` to generate a dashboard titled "My Application Dashboard" with a description for monitoring an application labeled `app: my-application` within the namespace `my-namespace`.
+```bash
+kubectl apply -f dashboard.yaml
+```
 
-## Contributing
+### 3. Access Your Dashboard
 
-We welcome contributions from the community. If you have any ideas, feature requests, or bug fixes, please feel free to open an issue or submit a pull request on [GitHub](https://github.com/rajsinghtech/homer-operator).
+```bash
+# Port-forward to access locally
+kubectl port-forward svc/my-dashboard-homer 8080:80
+
+# Open http://localhost:8080
+```
+
+---
+
+## 📖 Configuration Examples
+
+### 🎨 Themed Dashboard with PWA
+
+```yaml
+apiVersion: homer.rajsingh.info/v1alpha1
+kind: Dashboard
+metadata:
+  name: neon-dashboard
+spec:
+  replicas: 1
+  assets:
+    pwa:
+      enabled: true
+      name: "My Dashboard PWA"
+      shortName: "Dashboard"
+      description: "Personal dashboard with PWA support"
+      themeColor: "#00d4aa"
+      backgroundColor: "#1b1b1b"
+      display: "standalone"
+  homerConfig:
+    title: "🌟 Neon Dashboard"
+    subtitle: "Cyberpunk vibes"
+    theme: "neon"
+    header: true
+    defaults:
+      layout: "columns"
+      colorTheme: "dark"
+```
+
+### 🔐 Dashboard with Secret Integration
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: api-keys
+type: Opaque
+data:
+  plex-token: <base64-encoded-token>
+---
+apiVersion: homer.rajsingh.info/v1alpha1
+kind: Dashboard
+metadata:
+  name: media-dashboard
+spec:
+  secrets:
+    apiKey:
+      name: api-keys
+      key: plex-token
+  homerConfig:
+    title: "📺 Media Center"
+    services:
+      - name: "Media Services"
+        items:
+          - name: "Plex Server"
+            type: "Emby"  # Smart card type
+            url: "https://plex.example.com"
+            # API key will be automatically injected from secret
+```
+
+### 🎨 Custom Assets & Styling
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: custom-assets
+binaryData:
+  logo.png: <base64-encoded-image>
+  custom.css: <base64-encoded-css>
+---
+apiVersion: homer.rajsingh.info/v1alpha1
+kind: Dashboard
+metadata:
+  name: custom-dashboard
+spec:
+  assets:
+    configMapRef:
+      name: custom-assets
+    icons:
+      favicon: "logo.png"
+      appleTouchIcon: "logo.png"
+  homerConfig:
+    title: "🎨 Custom Dashboard"
+    stylesheet:
+      - "custom.css"
+```
+
+---
+
+## 🛠️ Advanced Configuration
+
+### Gateway API Support
+
+Enable HTTPRoute processing for modern Kubernetes networking:
+
+```bash
+# Install Gateway API CRDs
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
+
+# Install operator with Gateway API support
+helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator \
+  --set operator.enableGatewayAPI=true
+```
+
+### Annotation-driven Service Discovery
+
+Control how your services appear on dashboards using annotations:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: my-app
+  annotations:
+    # Item configuration
+    item.homer.rajsingh.info/name: "My Application"
+    item.homer.rajsingh.info/subtitle: "Production instance"
+    item.homer.rajsingh.info/logo: "https://example.com/logo.png"
+    item.homer.rajsingh.info/tag: "production"
+    item.homer.rajsingh.info/keywords: "app, api, service"
+    
+    # Service group configuration
+    service.homer.rajsingh.info/name: "Production Services"
+    service.homer.rajsingh.info/icon: "fas fa-server"
+spec:
+  # ... ingress configuration
+```
+
+### Production Deployment
+
+```yaml
+# values.yaml
+replicaCount: 3
+
+operator:
+  enableGatewayAPI: true
+  metrics:
+    enabled: true
+    secureMetrics: true
+
+resources:
+  limits:
+    memory: 512Mi
+    cpu: 1000m
+  requests:
+    memory: 256Mi
+    cpu: 100m
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+
+serviceMonitor:
+  create: true
+  interval: 30s
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+```
+
+```bash
+helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator \
+  --version 0.1.0 -f values.yaml
+```
+
+---
+
+## 📊 Monitoring & Observability
+
+### Prometheus Metrics
+
+The operator exposes comprehensive metrics:
+
+```bash
+# Enable metrics and ServiceMonitor
+helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator \
+  --set operator.metrics.enabled=true \
+  --set serviceMonitor.create=true
+```
+
+**Available Metrics:**
+- `controller_runtime_reconcile_total` - Reconciliation counter
+- `controller_runtime_reconcile_time_seconds` - Reconciliation duration
+- `dashboards_total` - Total number of managed dashboards
+- `ingress_resources_discovered` - Discovered Ingress resources
+
+### Health Endpoints
+
+- **Liveness**: `GET /healthz`
+- **Readiness**: `GET /readyz`  
+- **Metrics**: `GET /metrics`
+
+---
+
+## 🎯 Use Cases
+
+### 🏢 **Enterprise Service Catalog**
+Create organization-wide service directories automatically from existing infrastructure.
+
+### 🔧 **DevOps Dashboards**
+Monitor and access development, staging, and production environments from a single interface.
+
+### 🏠 **Homelab Management**
+Organize personal services and applications with beautiful, mobile-friendly dashboards.
+
+### 📱 **Mobile-first Applications**
+Deploy PWA-enabled dashboards that install like native mobile apps.
+
+---
+
+## 🔄 Migration & Compatibility
+
+### From Static Homer Configurations
+
+The operator maintains 95%+ compatibility with existing Homer configurations:
+
+```yaml
+# Your existing config.yml works directly in homerConfig
+apiVersion: homer.rajsingh.info/v1alpha1
+kind: Dashboard
+metadata:
+  name: migrated-dashboard
+spec:
+  homerConfig:
+    # Paste your existing Homer config here
+    title: "My Existing Dashboard"
+    subtitle: "Migrated from static config"
+    # ... rest of your config
+```
+
+### Ingress to Gateway API Migration
+
+The operator supports both simultaneously - migrate gradually:
+
+1. **Phase 1**: Enable Gateway API alongside existing Ingress
+2. **Phase 2**: Migrate services to HTTPRoute resources  
+3. **Phase 3**: Deprecate Ingress resources
+
+---
+
+## 🔧 Development & Contributing
+
+### Local Development
+
+```bash
+# Clone repository
+git clone https://github.com/rajsinghtech/homer-operator.git
+cd homer-operator
+
+# Install dependencies
+make install
+
+# Run locally against cluster
+make run
+
+# Build and deploy
+make docker-build IMG=your-registry/homer-operator:dev
+make deploy IMG=your-registry/homer-operator:dev
+```
+
+### Testing
+
+```bash
+# Run unit tests
+make test
+
+# Run end-to-end tests
+make test-e2e
+
+# Generate manifests
+make manifests
+```
+
+---
+
+## 📚 Documentation
+
+- **[API Reference](docs/api.md)** - Complete API documentation
+- **[Helm Chart](charts/homer-operator/README.md)** - Chart configuration options
+- **[Examples](config/samples/)** - Sample Dashboard configurations
+- **[Contributing](CONTRIBUTING.md)** - Development guidelines
+
+---
+
+## 🤝 Community & Support
+
+- **🐛 Issues**: [GitHub Issues](https://github.com/rajsinghtech/homer-operator/issues)
+- **💬 Discussions**: [GitHub Discussions](https://github.com/rajsinghtech/homer-operator/discussions)
+- **📖 Documentation**: [Wiki](https://github.com/rajsinghtech/homer-operator/wiki)
+
+---
+
+## 📄 License
+
+This project is licensed under the [Apache License 2.0](LICENSE).
+
+---
+
+<div align="center">
+  
+**⭐ Star this project if you find it useful!**
+
+*Built with ❤️ using [Kubebuilder](https://kubebuilder.io/) and [Homer](https://github.com/bastienwirtz/homer)*
+
+</div>

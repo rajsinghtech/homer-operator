@@ -1,0 +1,49 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: example-httproute
+  namespace: default
+  annotations:
+    # Homer item configuration
+    item.homer.rajsingh.info/name: "My Application"
+    item.homer.rajsingh.info/subtitle: "Main app via Gateway API"
+    item.homer.rajsingh.info/logo: "https://example.com/logo.png"
+    item.homer.rajsingh.info/tag: "gateway"
+    item.homer.rajsingh.info/keywords: "app, gateway"
+    item.homer.rajsingh.info/url: "https://myapp.example.com"
+    
+    # Homer service group configuration
+    service.homer.rajsingh.info/name: "My Applications"
+    service.homer.rajsingh.info/icon: "fas fa-cloud"
+spec:
+  parentRefs:
+  - name: example-gateway
+    namespace: gateway-system
+  hostnames:
+  - "myapp.example.com"
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /
+    backendRefs:
+    - name: myapp-service
+      port: 80
+---
+# Example Gateway that the HTTPRoute would attach to
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: example-gateway
+  namespace: gateway-system
+spec:
+  gatewayClassName: istio
+  listeners:
+  - name: https
+    hostname: "*.example.com"
+    port: 443
+    protocol: HTTPS
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: example-tls-cert

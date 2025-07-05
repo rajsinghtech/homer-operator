@@ -1,0 +1,27 @@
+{{- if .Values.operator.metrics.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "homer-operator.metricsServiceName" . }}
+  namespace: {{ include "homer-operator.namespace" . }}
+  labels:
+    {{- include "homer-operator.labels" . | nindent 4 }}
+    control-plane: controller-manager
+    app.kubernetes.io/name: metrics-service
+    app.kubernetes.io/component: kube-rbac-proxy
+  {{- with .Values.metricsService.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.metricsService.type }}
+  ports:
+  - name: https
+    port: {{ .Values.metricsService.port }}
+    protocol: TCP
+    targetPort: https
+  selector:
+    {{- include "homer-operator.selectorLabels" . | nindent 4 }}
+    control-plane: controller-manager
+{{- end }}

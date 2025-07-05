@@ -1,0 +1,207 @@
+# Default values for homer-operator.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/rajsinghtech/homer-operator
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Operator configuration
+operator:
+  # Enable Gateway API support (requires Gateway API CRDs to be installed)
+  enableGatewayAPI: false
+  # Leader election configuration
+  leaderElection:
+    enabled: true
+    # Lease duration for leader election
+    leaseDuration: "15s"
+    # Renew deadline for leader election
+    renewDeadline: "10s"
+    # Retry period for leader election
+    retryPeriod: "2s"
+  # Metrics configuration
+  metrics:
+    enabled: true
+    # Bind address for metrics server
+    bindAddress: ":8080"
+    # Secure metrics serving
+    secureMetrics: true
+  # Health probe configuration
+  healthProbe:
+    # Bind address for health probe
+    bindAddress: ":8081"
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Automatically mount a ServiceAccount's API credentials?
+  automount: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+# RBAC configuration
+rbac:
+  # Specifies whether RBAC resources should be created
+  create: true
+  # Annotations to add to the RBAC resources
+  annotations: {}
+
+# Custom Resource Definition configuration
+crd:
+  # Specifies whether CRDs should be created
+  create: true
+  # Annotations to add to the CRDs
+  annotations: {}
+
+# Namespace configuration
+namespace:
+  # Specifies whether a namespace should be created
+  create: true
+  # Name of the namespace (defaults to release namespace if not specified)
+  name: ""
+  # Annotations to add to the namespace
+  annotations: {}
+  # Labels to add to the namespace
+  labels: {}
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  port: 8443
+  # Annotations to add to the service
+  annotations: {}
+
+# Metrics service configuration
+metricsService:
+  # Specifies whether a metrics service should be created
+  create: true
+  type: ClusterIP
+  port: 8443
+  # Annotations to add to the metrics service
+  annotations: {}
+
+# ServiceMonitor configuration for Prometheus Operator
+serviceMonitor:
+  # Specifies whether a ServiceMonitor should be created
+  create: false
+  # Interval at which metrics should be scraped
+  interval: 30s
+  # Timeout for scraping
+  scrapeTimeout: 10s
+  # Additional labels for the ServiceMonitor
+  labels: {}
+  # Annotations to add to the ServiceMonitor
+  annotations: {}
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8081
+  initialDelaySeconds: 15
+  periodSeconds: 20
+
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: 8081
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+# Additional volumes on the output Deployment definition.
+volumes: []
+# - name: foo
+#   secret:
+#     secretName: mysecret
+#     optional: false
+
+# Additional volumeMounts on the output Deployment definition.
+volumeMounts: []
+# - name: foo
+#   mountPath: "/etc/foo"
+#   readOnly: true
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# Priority class for the operator pod
+priorityClassName: ""
+
+# Node selection constraints
+nodeSelector: {}
+
+# Tolerations for the operator pod
+tolerations: []
+
+# Affinity rules for the operator pod
+affinity: {}
+
+# Pod disruption budget
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+  # maxUnavailable: 1
+
+# Horizontal Pod Autoscaler
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+# Network policy
+networkPolicy:
+  enabled: false
+  # Additional ingress rules
+  ingress: []
+  # Additional egress rules
+  egress: []
+
+# Additional environment variables
+env: []
+# - name: FOO
+#   value: "bar"
+
+# Additional environment variables from secrets or configmaps
+envFrom: []
+# - secretRef:
+#     name: mySecret
+# - configMapRef:
+#     name: myConfigMap

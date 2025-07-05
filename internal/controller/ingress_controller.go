@@ -67,8 +67,8 @@ func (r *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		if isSubset(ingress.Annotations, dashboard.Annotations) {
 			configMap := corev1.ConfigMap{}
 			log.Info("Dashboard annotations are a subset of the ingress annotations", "dashboard", dashboard.Name)
-			if error := r.Get(ctx, client.ObjectKey{Namespace: dashboard.Namespace, Name: dashboard.Name}, &configMap); error != nil {
-				log.Error(error, "unable to fetch ConfigMap", "configmap", dashboard.Name)
+			if error := r.Get(ctx, client.ObjectKey{Namespace: dashboard.Namespace, Name: dashboard.Name + "-homer"}, &configMap); error != nil {
+				log.Error(error, "unable to fetch ConfigMap", "configmap", dashboard.Name+"-homer")
 				return ctrl.Result{}, error
 			}
 			homer.UpdateConfigMapIngress(&configMap, ingress)

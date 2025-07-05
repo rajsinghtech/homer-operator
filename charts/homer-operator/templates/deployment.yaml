@@ -1,0 +1,130 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "homer-operator.managerName" . }}
+  namespace: {{ include "homer-operator.namespace" . }}
+  labels:
+    {{- include "homer-operator.labels" . | nindent 4 }}
+    control-plane: controller-manager
+    app.kubernetes.io/name: manager
+    app.kubernetes.io/component: manager
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "homer-operator.selectorLabels" . | nindent 6 }}
+      control-plane: controller-manager
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "homer-operator.labels" . | nindent 8 }}
+        control-plane: controller-manager
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "homer-operator.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: 10
+      containers:
+      - name: manager
+        image: {{ include "homer-operator.image" . }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command:
+        - /manager
+        args:
+        - --leader-elect
+        {{- if .Values.operator.metrics.enabled }}
+        - --metrics-bind-address={{ .Values.operator.metrics.bindAddress }}
+        {{- if .Values.operator.metrics.secureMetrics }}
+        - --metrics-secure
+        {{- end }}
+        {{- end }}
+        - --health-probe-bind-address={{ .Values.operator.healthProbe.bindAddress }}
+        {{- if .Values.operator.leaderElection.enabled }}
+        - --leader-elect
+        - --leader-elect-lease-duration={{ .Values.operator.leaderElection.leaseDuration }}
+        - --leader-elect-renew-deadline={{ .Values.operator.leaderElection.renewDeadline }}
+        - --leader-elect-retry-period={{ .Values.operator.leaderElection.retryPeriod }}
+        {{- end }}
+        env:
+        {{- include "homer-operator.env" . | nindent 8 }}
+        {{- if .Values.envFrom }}
+        envFrom:
+        {{- include "homer-operator.envFrom" . | nindent 8 }}
+        {{- end }}
+        ports:
+        {{- if .Values.operator.metrics.enabled }}
+        - containerPort: 8080
+          name: metrics
+          protocol: TCP
+        {{- end }}
+        - containerPort: 8081
+          name: health
+          protocol: TCP
+        livenessProbe:
+          {{- toYaml .Values.livenessProbe | nindent 10 }}
+        readinessProbe:
+          {{- toYaml .Values.readinessProbe | nindent 10 }}
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+        securityContext:
+          {{- toYaml .Values.securityContext | nindent 10 }}
+        {{- with .Values.volumeMounts }}
+        volumeMounts:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      {{- if .Values.operator.metrics.enabled }}
+      - name: kube-rbac-proxy
+        image: gcr.io/kubebuilder/kube-rbac-proxy:v0.15.0
+        args:
+        - --secure-listen-address=0.0.0.0:8443
+        - --upstream=http://127.0.0.1:8080/
+        - --logtostderr=true
+        - --v=0
+        ports:
+        - containerPort: 8443
+          name: https
+          protocol: TCP
+        resources:
+          limits:
+            cpu: 500m
+            memory: 128Mi
+          requests:
+            cpu: 5m
+            memory: 64Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - "ALL"
+      {{- end }}
+      {{- with .Values.volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}

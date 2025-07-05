@@ -29,12 +29,14 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
 // DashboardReconciler reconciles a Dashboard object
 type DashboardReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme           *runtime.Scheme
+	EnableGatewayAPI bool
 }
 
 //+kubebuilder:rbac:groups=homer.rajsingh.info,resources=dashboards,verbs=get;list;watch;create;update;patch;delete
@@ -85,15 +87,133 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		}
 		return ctrl.Result{}, nil
 	}
+	// List ingresses with performance optimization - only get ones with rules
 	ingresses := &networkingv1.IngressList{}
-	if err := r.List(ctx, ingresses); err != nil {
+	if err := r.List(ctx, ingresses, client.HasLabels([]string{})); err != nil {
 		log.Error(err, "unable to list Ingresses", "dashboard", req.NamespacedName)
 		return ctrl.Result{}, err
 	}
+
+	// Validate theme configuration
+	if err := homer.ValidateTheme(dashboard.Spec.HomerConfig.Theme); err != nil {
+		log.Error(err, "invalid theme configuration", "dashboard", req.NamespacedName)
+		return ctrl.Result{}, err
+	}
+
 	// Resource Created - Create all resources
-	deployment := homer.CreateDeployment(dashboard.Name, dashboard.Namespace)
-	service := homer.CreateService(dashboard.Name, dashboard.Namespace)
-	configMap := homer.CreateConfigMap(&dashboard.Spec.HomerConfig, dashboard.Name, dashboard.Namespace, *ingresses)
+	var deployment appsv1.Deployment
+	var assetsConfigMapName string
+	var pwaManifest string
+
+	// Generate PWA manifest if enabled
+	if dashboard.Spec.Assets != nil && dashboard.Spec.Assets.PWA != nil && dashboard.Spec.Assets.PWA.Enabled {
+		pwa := dashboard.Spec.Assets.PWA
+
+		// Set defaults if not provided
+		name := pwa.Name
+		if name == "" {
+			name = dashboard.Spec.HomerConfig.Title
+		}
+		if name == "" {
+			name = dashboard.Name
+		}
+
+		shortName := pwa.ShortName
+		if shortName == "" {
+			shortName = name
+		}
+
+		description := pwa.Description
+		if description == "" {
+			description = dashboard.Spec.HomerConfig.Subtitle
+		}
+		if description == "" {
+			description = "Personal Dashboard"
+		}
+
+		themeColor := pwa.ThemeColor
+		if themeColor == "" {
+			themeColor = "#3367d6"
+		}
+
+		backgroundColor := pwa.BackgroundColor
+		if backgroundColor == "" {
+			backgroundColor = "#ffffff"
+		}
+
+		display := pwa.Display
+		if display == "" {
+			display = "standalone"
+		}
+
+		startURL := pwa.StartURL
+		if startURL == "" {
+			startURL = "/"
+		}
+
+		// Build icons map
+		icons := make(map[string]string)
+		if dashboard.Spec.Assets.Icons != nil {
+			if dashboard.Spec.Assets.Icons.PWAIcon192 != "" {
+				icons["192"] = dashboard.Spec.Assets.Icons.PWAIcon192
+			}
+			if dashboard.Spec.Assets.Icons.PWAIcon512 != "" {
+				icons["512"] = dashboard.Spec.Assets.Icons.PWAIcon512
+			}
+		}
+
+		// Generate PWA manifest
+		pwaManifest = homer.GeneratePWAManifest(name, description, themeColor, backgroundColor, display, startURL, icons)
+	}
+
+	// Check if custom assets are configured
+	if dashboard.Spec.Assets != nil && dashboard.Spec.Assets.ConfigMapRef != nil {
+		assetsConfigMapName = dashboard.Spec.Assets.ConfigMapRef.Name
+		deployment = homer.CreateDeploymentWithAssets(dashboard.Name, dashboard.Namespace, dashboard.Spec.Replicas, &dashboard, assetsConfigMapName, pwaManifest)
+	} else if pwaManifest != "" {
+		// PWA enabled but no custom assets ConfigMap - still need to use CreateDeploymentWithAssets for PWA
+		deployment = homer.CreateDeploymentWithAssets(dashboard.Name, dashboard.Namespace, dashboard.Spec.Replicas, &dashboard, "", pwaManifest)
+	} else {
+		deployment = homer.CreateDeployment(dashboard.Name, dashboard.Namespace, dashboard.Spec.Replicas, &dashboard)
+	}
+
+	service := homer.CreateService(dashboard.Name, dashboard.Namespace, &dashboard)
+
+	// Create a copy of the HomerConfig to avoid modifying the original
+	homerConfig := dashboard.Spec.HomerConfig.DeepCopy()
+
+	// Resolve secrets for smart card items if configured
+	if dashboard.Spec.Secrets != nil && dashboard.Spec.Secrets.APIKey != nil {
+		// Convert API type to local type to avoid circular imports
+		secretRef := &homer.SecretKeyRef{
+			Name:      dashboard.Spec.Secrets.APIKey.Name,
+			Key:       dashboard.Spec.Secrets.APIKey.Key,
+			Namespace: dashboard.Spec.Secrets.APIKey.Namespace,
+		}
+
+		for serviceIdx := range homerConfig.Services {
+			for itemIdx := range homerConfig.Services[serviceIdx].Items {
+				item := &homerConfig.Services[serviceIdx].Items[itemIdx]
+				if err := homer.ResolveAPIKeyFromSecret(ctx, r.Client, item, secretRef, dashboard.Namespace); err != nil {
+					log.Error(err, "failed to resolve API key from secret", "item", item.Name)
+					return ctrl.Result{}, err
+				}
+			}
+		}
+	}
+
+	var configMap corev1.ConfigMap
+	if r.EnableGatewayAPI {
+		httproutes := &gatewayv1.HTTPRouteList{}
+		if err := r.List(ctx, httproutes, client.HasLabels([]string{})); err != nil {
+			log.Error(err, "unable to list HTTPRoutes", "dashboard", req.NamespacedName)
+			return ctrl.Result{}, err
+		}
+		configMap = homer.CreateConfigMapWithHTTPRoutes(homerConfig, dashboard.Name, dashboard.Namespace, *ingresses, httproutes.Items, &dashboard)
+	} else {
+		configMap = homer.CreateConfigMap(homerConfig, dashboard.Name, dashboard.Namespace, *ingresses, &dashboard)
+	}
+
 	// List of resources
 	resources := []client.Object{&deployment, &service, &configMap}
 

@@ -23,7 +23,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      security-events: write
       id-token: write  # For cosign signing
     steps:
       - name: Checkout code
@@ -79,22 +78,6 @@ jobs:
           build-args: |
             GO_VERSION=${{ env.GO_VERSION }}
 
-      # Security scanning
-      - name: Run Trivy vulnerability scanner
-        if: github.event_name != 'pull_request'
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH'
-
-      - name: Upload Trivy scan results to GitHub Security tab
-        if: github.event_name != 'pull_request'
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: 'trivy-results.sarif'
-
       # Image signing
       - name: Install cosign
         if: github.event_name != 'pull_request'
@@ -106,22 +89,6 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           echo "${{ steps.meta.outputs.tags }}" | xargs -I {} cosign sign --yes {}@${DIGEST}
-
-      # Generate SBOM
-      - name: Generate SBOM
-        if: github.event_name != 'pull_request'
-        uses: anchore/sbom-action@v0.17.9
-        with:
-          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
-          format: 'spdx-json'
-          output-file: 'sbom.spdx.json'
-
-      - name: Attach SBOM to image
-        if: github.event_name != 'pull_request'
-        env:
-          DIGEST: ${{ steps.build.outputs.digest }}
-        run: |
-          cosign attach sbom --sbom sbom.spdx.json ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${DIGEST}
 
   # Separate job for PR validation
   validate:

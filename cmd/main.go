@@ -36,6 +36,7 @@ import (
 
 	homerv1alpha1 "github.com/rajsinghtech/homer-operator.git/api/v1alpha1"
 	"github.com/rajsinghtech/homer-operator.git/internal/controller"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	//+kubebuilder:scaffold:imports
 )
 
@@ -48,6 +49,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(homerv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(gatewayv1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 
@@ -57,6 +59,7 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var enableGatewayAPI bool
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
@@ -66,6 +69,8 @@ func main() {
 		"If set the metrics endpoint is served securely")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.BoolVar(&enableGatewayAPI, "enable-gateway-api", false,
+		"Enable Gateway API support for HTTPRoute resources")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -123,8 +128,9 @@ func main() {
 	}
 
 	if err = (&controller.DashboardReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		EnableGatewayAPI: enableGatewayAPI,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Dashboard")
 		os.Exit(1)
@@ -135,6 +141,15 @@ func main() {
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Ingress")
 		os.Exit(1)
+	}
+	if enableGatewayAPI {
+		if err = (&controller.HTTPRouteReconciler{
+			Client: mgr.GetClient(),
+			Scheme: mgr.GetScheme(),
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "HTTPRoute")
+			os.Exit(1)
+		}
 	}
 	//+kubebuilder:scaffold:builder
 

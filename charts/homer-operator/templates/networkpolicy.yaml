@@ -1,0 +1,46 @@
+{{- if .Values.networkPolicy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "homer-operator.fullname" . }}
+  namespace: {{ include "homer-operator.namespace" . }}
+  labels:
+    {{- include "homer-operator.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "homer-operator.selectorLabels" . | nindent 6 }}
+      control-plane: controller-manager
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  {{- if .Values.operator.metrics.enabled }}
+  - from: []
+    ports:
+    - protocol: TCP
+      port: 8443
+  {{- end }}
+  - from: []
+    ports:
+    - protocol: TCP
+      port: 8081
+  {{- with .Values.networkPolicy.ingress }}
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
+  egress:
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 6443
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+  {{- with .Values.networkPolicy.egress }}
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
+{{- end }}
