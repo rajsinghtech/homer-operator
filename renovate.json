@@ -19,7 +19,7 @@
   "docker": {
     "enabled": true
   },
-  "helm": {
+  "helmv3": {
     "enabled": true
   },
   "packageRules": [
@@ -34,7 +34,7 @@
       "schedule": ["before 6am on Monday"]
     },
     {
-      "matchManagers": ["helm"],
+      "matchManagers": ["helmv3"],
       "groupName": "Helm chart dependencies",
       "schedule": ["before 6am on Monday"]
     },
