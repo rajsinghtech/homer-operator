@@ -838,11 +838,27 @@ func UpdateHomerConfigIngressWithGrouping(homerConfig *HomerConfig, ingress netw
 		return
 	}
 
+	// FIRST: Remove any existing items from this Ingress source to ensure clean slate
+	removeItemsFromIngressSource(homerConfig, ingress.ObjectMeta.Name, ingress.ObjectMeta.Namespace)
+
 	// Process service-level annotations
 	processServiceAnnotations(&service, ingress.ObjectMeta.Annotations)
 
 	// Process each rule's host with domain filtering
 	var items []Item
+	validRuleCount := 0
+	// First pass: count valid rules
+	for _, rule := range ingress.Spec.Rules {
+		host := rule.Host
+		if host == "" {
+			continue // Skip rules without hostnames
+		}
+		// Apply domain filtering
+		if !matchesIngressDomainFilters(host, domainFilters) {
+			continue // Skip hosts that don't match domain filters
+		}
+		validRuleCount++
+	}
 	for _, rule := range ingress.Spec.Rules {
 		host := rule.Host
 		if host == "" {
@@ -858,8 +874,8 @@ func UpdateHomerConfigIngressWithGrouping(homerConfig *HomerConfig, ingress netw
 		item.Name = ingress.ObjectMeta.Name
 		item.Logo = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/resources/labeled/ing-128.png"
 
-		// If multiple hosts, append hostname to make names unique
-		if len(ingress.Spec.Rules) > 1 {
+		// If multiple valid hosts, append hostname to make names unique
+		if validRuleCount > 1 {
 			item.Name = ingress.ObjectMeta.Name + "-" + host
 		}
 
@@ -916,21 +932,18 @@ func UpdateHomerConfigHTTPRouteWithGrouping(homerConfig *HomerConfig, httproute 
 	// Process service-level annotations
 	processServiceAnnotations(&service, httproute.ObjectMeta.Annotations)
 
+	// FIRST: Remove any existing items from this HTTPRoute source to ensure clean slate
+	removeItemsFromHTTPRouteSource(homerConfig, httproute.ObjectMeta.Name, httproute.ObjectMeta.Namespace)
+
 	// Determine protocol based on parent Gateway listener configuration
 	protocol := determineProtocolFromHTTPRoute(httproute)
 
 	// Handle multiple hostnames by creating separate items (similar to Ingress approach)
 	var items []Item
 	if len(httproute.Spec.Hostnames) == 0 {
-		// No hostnames specified, create item with empty hostname
-		item := createHTTPRouteItem(httproute, "", protocol)
-		// Set metadata for conflict detection
-		item.Source = httproute.ObjectMeta.Name
-		item.Namespace = httproute.ObjectMeta.Namespace
-		item.LastUpdate = httproute.ObjectMeta.CreationTimestamp.Time.Format("2006-01-02T15:04:05Z")
-
-		processItemAnnotations(&item, httproute.ObjectMeta.Annotations)
-		items = append(items, item)
+		// No hostnames specified - don't create any items
+		// This allows for cleanup when all hostnames are removed
+		return
 	} else {
 		// Create separate item for each hostname that matches domain filters
 		var filteredHostnames []gatewayv1.Hostname
@@ -949,6 +962,9 @@ func UpdateHomerConfigHTTPRouteWithGrouping(homerConfig *HomerConfig, httproute 
 			// If multiple hostnames, append hostname to make names unique
 			if len(filteredHostnames) > 1 {
 				item.Name = httproute.ObjectMeta.Name + "-" + hostStr
+			} else {
+				// Single hostname, use base name
+				item.Name = httproute.ObjectMeta.Name
 			}
 
 			// Set metadata for conflict detection
@@ -961,8 +977,12 @@ func UpdateHomerConfigHTTPRouteWithGrouping(homerConfig *HomerConfig, httproute 
 		}
 	}
 
-	// Update or add the service and items
-	updateOrAddServiceItems(homerConfig, service, items)
+	// Update or add the service and items (this will add the new current items)
+	if len(items) > 0 {
+		updateOrAddServiceItems(homerConfig, service, items)
+	}
+	// Note: if len(items) == 0, we've already removed the old items above,
+	// so the service will be cleaned up by removeEmptyServices()
 }
 
 // matchesHTTPRouteDomainFilters checks if a hostname matches the domain filters
@@ -1932,6 +1952,69 @@ func optimizeServiceLayout(services []Service, dependencies []ServiceDependency)
 	}
 
 	return optimizedServices
+}
+
+// removeItemsFromHTTPRouteSource removes all items that originated from a specific HTTPRoute
+func removeItemsFromHTTPRouteSource(homerConfig *HomerConfig, sourceName, sourceNamespace string) {
+	for serviceIndex := range homerConfig.Services {
+		service := &homerConfig.Services[serviceIndex]
+		var filteredItems []Item
+		
+		// Keep only items that did NOT come from the specified HTTPRoute source
+		for _, item := range service.Items {
+			// Remove items that match this HTTPRoute source
+			if item.Source == sourceName && item.Namespace == sourceNamespace {
+				// Skip this item (remove it)
+				continue
+			}
+			// Keep this item
+			filteredItems = append(filteredItems, item)
+		}
+		
+		// Update the service with filtered items
+		service.Items = filteredItems
+	}
+	
+	// Remove any services that now have no items
+	removeEmptyServices(homerConfig)
+}
+
+// removeItemsFromIngressSource removes all items that originated from a specific Ingress
+func removeItemsFromIngressSource(homerConfig *HomerConfig, sourceName, sourceNamespace string) {
+	for serviceIndex := range homerConfig.Services {
+		service := &homerConfig.Services[serviceIndex]
+		var filteredItems []Item
+		
+		// Keep only items that did NOT come from the specified Ingress source
+		for _, item := range service.Items {
+			// Remove items that match this Ingress source
+			if item.Source == sourceName && item.Namespace == sourceNamespace {
+				// Skip this item (remove it)
+				continue
+			}
+			// Keep this item
+			filteredItems = append(filteredItems, item)
+		}
+		
+		// Update the service with filtered items
+		service.Items = filteredItems
+	}
+	
+	// Remove any services that now have no items
+	removeEmptyServices(homerConfig)
+}
+
+// removeEmptyServices removes services that have no items
+func removeEmptyServices(homerConfig *HomerConfig) {
+	var filteredServices []Service
+	
+	for _, service := range homerConfig.Services {
+		if len(service.Items) > 0 {
+			filteredServices = append(filteredServices, service)
+		}
+	}
+	
+	homerConfig.Services = filteredServices
 }
 
 // enhanceHomerConfigWithAggregation enhances Homer config with advanced aggregation features
