@@ -90,7 +90,7 @@ jobs:
 
       # Image signing
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3.7.0
+        uses: sigstore/cosign-installer@v3.9.1
 
       - name: Sign container image
         env:
