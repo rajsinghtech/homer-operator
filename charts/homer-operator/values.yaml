@@ -1,6 +1,4 @@
-# Default values for homer-operator.
-# This is a YAML-formatted file.
-# Declare variables to be passed into your templates.
+# Default values for homer-operator
 
 replicaCount: 1
 
@@ -21,11 +19,8 @@ operator:
   # Leader election configuration
   leaderElection:
     enabled: true
-    # Lease duration for leader election
     leaseDuration: "15s"
-    # Renew deadline for leader election
     renewDeadline: "10s"
-    # Retry period for leader election
     retryPeriod: "2s"
   # Metrics configuration
   metrics:
@@ -34,6 +29,19 @@ operator:
     bindAddress: ":8080"
     # Secure metrics serving
     secureMetrics: true
+    # Kube RBAC Proxy configuration for secure metrics
+    rbacProxy:
+      image:
+        repository: gcr.io/kubebuilder/kube-rbac-proxy
+        tag: v0.15.0
+        pullPolicy: Always
+      resources:
+        limits:
+          cpu: 500m
+          memory: 128Mi
+        requests:
+          cpu: 5m
+          memory: 64Mi
   # Health probe configuration
   healthProbe:
     # Bind address for health probe
@@ -42,26 +50,18 @@ operator:
 serviceAccount:
   # Specifies whether a service account should be created
   create: true
-  # Automatically mount a ServiceAccount's API credentials?
   automount: true
-  # Annotations to add to the service account
   annotations: {}
-  # The name of the service account to use.
-  # If not set and create is true, a name is generated using the fullname template
   name: ""
 
 # RBAC configuration
 rbac:
-  # Specifies whether RBAC resources should be created
   create: true
-  # Annotations to add to the RBAC resources
   annotations: {}
 
 # Custom Resource Definition configuration
 crd:
-  # Specifies whether CRDs should be created
   create: true
-  # Annotations to add to the CRDs
   annotations: {}
 
 # Namespace configuration

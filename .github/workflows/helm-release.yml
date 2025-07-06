@@ -98,23 +98,23 @@ jobs:
           
           # Package the chart
           if ! helm package charts/homer-operator --destination ./packaged-charts; then
-            echo "❌ Failed to package Helm chart"
+            echo "Failed to package Helm chart"
             exit 1
           fi
           
           # Verify package was created
           if [[ ! -f "./packaged-charts/homer-operator-${CHART_VERSION}.tgz" ]]; then
-            echo "❌ Package file not found: homer-operator-${CHART_VERSION}.tgz"
+            echo "Package file not found: homer-operator-${CHART_VERSION}.tgz"
             exit 1
           fi
           
           # Push to GHCR
           if ! helm push "./packaged-charts/homer-operator-${CHART_VERSION}.tgz" "oci://${{ env.REGISTRY }}/${REPO_NAME}/charts"; then
-            echo "❌ Failed to push Helm chart to registry"
+            echo "Failed to push Helm chart to registry"
             exit 1
           fi
           
-          echo "✅ Chart successfully pushed to: oci://${{ env.REGISTRY }}/${REPO_NAME}/charts/homer-operator:${CHART_VERSION}"
+          echo "Chart successfully pushed to: oci://${{ env.REGISTRY }}/${REPO_NAME}/charts/homer-operator:${CHART_VERSION}"
 
       - name: Generate summary
         run: |
@@ -123,7 +123,7 @@ jobs:
           IS_RELEASE="${{ steps.meta.outputs.is_release }}"
           
           if [[ $IS_RELEASE == "true" ]]; then
-            echo "## Helm Chart Released 🚀" >> $GITHUB_STEP_SUMMARY
+            echo "## Helm Chart Released" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Chart Version:** \`$CHART_VERSION\`" >> $GITHUB_STEP_SUMMARY
             echo "**Registry:** \`${{ env.REGISTRY }}/${REPO_NAME}/charts\`" >> $GITHUB_STEP_SUMMARY
@@ -134,9 +134,9 @@ jobs:
             echo "helm install homer-operator oci://${{ env.REGISTRY }}/${REPO_NAME}/charts/homer-operator --version $CHART_VERSION" >> $GITHUB_STEP_SUMMARY
             echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "✅ **Stable release suitable for production use.**" >> $GITHUB_STEP_SUMMARY
+            echo "**Stable release suitable for production use.**" >> $GITHUB_STEP_SUMMARY
           else
-            echo "## Helm Chart Development Build 🔧" >> $GITHUB_STEP_SUMMARY
+            echo "## Helm Chart Development Build" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Chart Version:** \`$CHART_VERSION\`" >> $GITHUB_STEP_SUMMARY
             echo "**Registry:** \`${{ env.REGISTRY }}/${REPO_NAME}/charts\`" >> $GITHUB_STEP_SUMMARY
@@ -147,5 +147,5 @@ jobs:
             echo "helm install homer-operator oci://${{ env.REGISTRY }}/${REPO_NAME}/charts/homer-operator --version $CHART_VERSION" >> $GITHUB_STEP_SUMMARY
             echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "⚠️ **Development build from main branch - not for production use.**" >> $GITHUB_STEP_SUMMARY
+            echo "**Development build from main branch - not for production use.**" >> $GITHUB_STEP_SUMMARY
           fi

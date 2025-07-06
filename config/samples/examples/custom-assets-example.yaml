@@ -1,0 +1,76 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: custom-homer-assets
+  namespace: homer-test
+data:
+  # Custom logo file
+  custom-logo.png: |
+    iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==
+  
+  # Custom CSS file
+  custom.css: |
+    /* Custom Homer styles */
+    .title {
+      color: #ff6b6b !important;
+    }
+    .subtitle {
+      color: #4ecdc4 !important;
+    }
+    .card {
+      border: 2px solid #45b7d1;
+      border-radius: 10px;
+    }
+  
+  # Custom favicon
+  favicon.ico: |
+    AAABAAEAEBAAAAAAAABoBQAAFgAAACgAAAAQAAAAIAAAAAEACAAAAAAAAAEAAAAAAAAAAAAAAAEAAAAA
+    
+  # Custom Apple touch icon  
+  apple-touch-icon.png: |
+    iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==
+
+---
+apiVersion: homer.rajsingh.info/v1alpha1
+kind: Dashboard
+metadata:
+  name: dashboard-with-assets
+  namespace: homer-test
+spec:
+  replicas: 1
+  assets:
+    configMapRef:
+      name: custom-homer-assets
+    icons:
+      favicon: "favicon.ico"
+      appleTouchIcon: "apple-touch-icon.png"
+  homerConfig:
+    title: "Custom Assets Dashboard"
+    subtitle: "Testing Custom Logos, Icons, and CSS"
+    documentTitle: "Custom Homer Dashboard"
+    header: true
+    footer: '<p>Custom assets loaded from ConfigMap!</p>'
+    logo: "custom-logo.png"  # Reference to custom logo in ConfigMap
+    stylesheet: 
+      - "custom.css"  # Reference to custom CSS in ConfigMap
+    colors:
+      light:
+        highlight-primary: "#ff6b6b"
+        background: "#f8f9fa"
+        card-background: "#ffffff"
+        text: "#343a40"
+    defaults:
+      layout: "columns"
+      colorTheme: "light"
+    columns: "2"
+    services:
+      - name: "Custom Styled Services"
+        icon: "fas fa-palette"
+        items:
+          - name: "Style Test Service"
+            subtitle: "Testing custom CSS styling"
+            url: "https://example.com"
+            logo: "custom-logo.png"  # Can reuse custom assets
+            tag: "custom"
+            tagstyle: "is-danger"

@@ -91,7 +91,7 @@ message:
   style: "is-warning"
   title: "Optional message!"
   icon: "fa fa-exclamation-triangle"
-  content: "Lorem ipsum dolor sit amet, consectetur adipiscing elit."
+  content: "Welcome to your Homer dashboard! This message can be customized."
 
 # Optional navbar
 # links: [] # Allows for navbar (dark mode, layout, and search) without any links
@@ -107,18 +107,18 @@ links:
   # see url field and assets/page.yml used in this example:
   - name: "Second Page"
     icon: "fas fa-file-alt"
-    url: "#page2"
+    url: "https://github.com/rajsinghtech/homer-operator/wiki"
 
 # Services
 # First level array represents a group.
 # Leave only a "items" key if not using group (group name, icon & tagstyle are optional, section separation will not be displayed).
 services:
-  - name: "Application"
+  - name: "Development Tools"
     icon: "fas fa-code-branch"
     # A path to an image can also be provided. Note that icon take precedence if both icon and logo are set.
     # logo: "path/to/logo"
     items:
-      - name: "Awesome app"
+      - name: "Self-Hosted Reddit"
         logo: "assets/tools/sample.png"
         # Alternatively a fa icon can be provided:
         # icon: "fab fa-jenkins"
@@ -133,7 +133,7 @@ services:
         tag: "app"
         # Optional tagstyle
         tagstyle: "is-success"
-        url: "#"
+        url: "https://github.com/rajsinghtech/homer-operator"
   - name: "Other group"
     icon: "fas fa-heartbeat"
     items:
@@ -141,7 +141,7 @@ services:
         logo: "assets/tools/sample.png"
         # subtitle: "Network-wide Ad Blocking" # optional, if no subtitle is defined, PiHole statistics will be shown
         tag: "other"
-        url: "http://192.168.0.151/admin"
+        url: "https://pihole.rajsingh.info/admin"
         type: "PiHole" # optional, loads a specific component that provides extra features. MUST MATCH a file name (without file extension) available in `src/components/services`
         target: "_blank" # optional html a tag target attribute
         # class: "green" # optional custom CSS class for card, useful with custom stylesheet

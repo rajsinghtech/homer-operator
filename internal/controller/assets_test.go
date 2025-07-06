@@ -28,8 +28,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	homerv1alpha1 "github.com/rajsinghtech/homer-operator.git/api/v1alpha1"
-	"github.com/rajsinghtech/homer-operator.git/pkg/homer"
+	homerv1alpha1 "github.com/rajsinghtech/homer-operator/api/v1alpha1"
+	"github.com/rajsinghtech/homer-operator/pkg/homer"
 )
 
 var _ = Describe("Asset Management Tests", func() {

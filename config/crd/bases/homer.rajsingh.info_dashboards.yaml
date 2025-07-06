@@ -156,6 +156,22 @@ spec:
                 - merge
                 - error
                 type: string
+              dnsConfig:
+                description: |-
+                  DNSConfig defines the DNS parameters for the Homer dashboard deployment pods.
+                  Only applicable when DNSPolicy is set to "None".
+                  This field accepts a JSON string representation of PodDNSConfig
+                type: string
+              dnsPolicy:
+                default: ClusterFirst
+                description: DNSPolicy defines the DNS policy for the Homer dashboard
+                  deployment pods.
+                enum:
+                - ClusterFirst
+                - ClusterFirstWithHostNet
+                - Default
+                - None
+                type: string
               domainFilters:
                 description: DomainFilters optionally filters HTTPRoutes and Ingresses
                   by domain names. If not specified, all domains are included.
@@ -246,7 +262,7 @@ spec:
                 description: HomerConfig is base/default Homer configuration.
                 properties:
                   colors:
-                    description: Colors extensive color scheme support
+                    description: ColorConfig contains color scheme configuration
                     properties:
                       dark:
                         description: ThemeColors contains color definitions for a
@@ -312,13 +328,12 @@ spec:
                         type: object
                     type: object
                   columns:
-                    description: Columns layout configuration
                     type: string
                   connectivityCheck:
-                    description: ConnectivityCheck enables VPN/connectivity monitoring
                     type: boolean
                   defaults:
-                    description: Defaults are your default settings for the dashboard.
+                    description: DefaultConfig contains default settings for the Homer
+                      dashboard.
                     properties:
                       colorTheme:
                         description: ColorTheme is the name of the color theme to
@@ -329,29 +344,22 @@ spec:
                         type: string
                     type: object
                   documentTitle:
-                    description: DocumentTitle sets the browser tab title
                     type: string
                   externalConfig:
-                    description: ExternalConfig URL to load config from external source
                     type: string
                   footer:
-                    description: Footer to be displayed on the dashboard.
                     type: string
                   header:
-                    description: Header show/hide header
                     type: boolean
                   hotkey:
-                    description: Hotkey configuration
+                    description: HotkeyConfig contains hotkey configuration
                     properties:
                       search:
                         type: string
                     type: object
                   icon:
-                    description: Icon alternative to logo using FontAwesome classes
                     type: string
                   links:
-                    description: Links contains any additional links (static) to be
-                      displayed on the dashboard.
                     items:
                       properties:
                         icon:
@@ -365,10 +373,9 @@ spec:
                       type: object
                     type: array
                   logo:
-                    description: Logo used within dashboard.
                     type: string
                   message:
-                    description: Message dynamic message support
+                    description: MessageConfig contains dynamic message configuration
                     properties:
                       content:
                         type: string
@@ -388,7 +395,7 @@ spec:
                         type: string
                     type: object
                   proxy:
-                    description: Proxy configuration
+                    description: ProxyConfig contains configuration for proxy settings.
                     properties:
                       headers:
                         additionalProperties:
@@ -398,7 +405,6 @@ spec:
                         type: boolean
                     type: object
                   services:
-                    description: List of Services to be displayed on the dashboard.
                     items:
                       properties:
                         class:
@@ -463,18 +469,14 @@ spec:
                       type: object
                     type: array
                   stylesheet:
-                    description: Stylesheet additional CSS files
                     items:
                       type: string
                     type: array
                   subtitle:
-                    description: Subtitle
                     type: string
                   theme:
-                    description: Theme name from themes directory
                     type: string
                   title:
-                    description: Title to which is displayed on the dashboard.
                     type: string
                 required:
                 - header

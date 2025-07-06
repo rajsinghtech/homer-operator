@@ -37,7 +37,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
-	homerv1alpha1 "github.com/rajsinghtech/homer-operator.git/api/v1alpha1"
+	homerv1alpha1 "github.com/rajsinghtech/homer-operator/api/v1alpha1"
 	//+kubebuilder:scaffold:imports
 )
 

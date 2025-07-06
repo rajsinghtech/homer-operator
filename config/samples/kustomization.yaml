@@ -1,5 +1,0 @@
-## Append samples of your project ##
-resources:
-- homer_v1alpha1_dashboard.yaml
-- homer_v1alpha1_dashboard_multi.yaml
-#+kubebuilder:scaffold:manifestskustomizesamples
