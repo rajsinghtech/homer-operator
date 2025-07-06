@@ -32,6 +32,8 @@ import (
 	"github.com/rajsinghtech/homer-operator.git/pkg/homer"
 )
 
+const nullIngressValue = "null"
+
 var _ = Describe("Ingress Controller", func() {
 	Context("When reconciling an Ingress with matching Dashboard annotations", func() {
 		const dashboardName = "test-dashboard-ingress"
@@ -174,7 +176,7 @@ var _ = Describe("Ingress Controller", func() {
 				}
 				configYaml := configMap.Data["config.yml"]
 				return configYaml != "" &&
-					configYaml != "null" // Make sure it's not just an empty YAML
+					configYaml != nullIngressValue // Make sure it's not just an empty YAML
 			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
 
 			// Check for Ingress-specific content
@@ -497,7 +499,7 @@ var _ = Describe("Ingress Controller", func() {
 					return false
 				}
 				configYaml := configMap.Data["config.yml"]
-				return configYaml != "" && configYaml != "null"
+				return configYaml != "" && configYaml != nullIngressValue
 			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
 
 			configYaml := configMap.Data["config.yml"]
@@ -636,7 +638,7 @@ var _ = Describe("Ingress Controller", func() {
 					return false
 				}
 				configYaml := configMap.Data["config.yml"]
-				return configYaml != "" && configYaml != "null"
+				return configYaml != "" && configYaml != nullIngressValue
 			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
 
 			configYaml := configMap.Data["config.yml"]

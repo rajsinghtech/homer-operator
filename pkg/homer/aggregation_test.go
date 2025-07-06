@@ -25,8 +25,8 @@ func TestServiceHealthEnhancement(t *testing.T) {
 
 	enhanceItemWithHealthCheck(&item, healthConfig)
 
-	if item.Type != "Generic" {
-		t.Errorf("Expected type to be set to 'Generic', got '%s'", item.Type)
+	if item.Type != GenericType {
+		t.Errorf("Expected type to be set to '%s', got '%s'", GenericType, item.Type)
 	}
 
 	if item.Endpoint != "https://example.com/health" {
@@ -309,8 +309,8 @@ func TestEnhanceHomerConfigWithAggregation(t *testing.T) {
 	// Verify that items were enhanced with health check capabilities
 	for _, service := range config.Services {
 		for _, item := range service.Items {
-			if item.Type != "Generic" {
-				t.Errorf("Expected item type to be 'Generic', got '%s'", item.Type)
+			if item.Type != GenericType {
+				t.Errorf("Expected item type to be '%s', got '%s'", GenericType, item.Type)
 			}
 			if item.Endpoint == "" {
 				t.Error("Expected item endpoint to be set")
@@ -404,8 +404,8 @@ func TestPerformanceWithLargeConfig(t *testing.T) {
 	// Verify all items were enhanced
 	for _, service := range config.Services {
 		for _, item := range service.Items {
-			if item.Type != "Generic" {
-				t.Errorf("Expected all items to be enhanced with type 'Generic'")
+			if item.Type != GenericType {
+				t.Errorf("Expected all items to be enhanced with type '%s'", GenericType)
 			}
 		}
 	}

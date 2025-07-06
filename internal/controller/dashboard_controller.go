@@ -105,68 +105,9 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// Resource Created - Create all resources
 	var deployment appsv1.Deployment
 	var assetsConfigMapName string
-	var pwaManifest string
 
 	// Generate PWA manifest if enabled
-	if dashboard.Spec.Assets != nil && dashboard.Spec.Assets.PWA != nil && dashboard.Spec.Assets.PWA.Enabled {
-		pwa := dashboard.Spec.Assets.PWA
-
-		// Set defaults if not provided
-		name := pwa.Name
-		if name == "" {
-			name = dashboard.Spec.HomerConfig.Title
-		}
-		if name == "" {
-			name = dashboard.Name
-		}
-
-		shortName := pwa.ShortName
-		if shortName == "" {
-			shortName = name
-		}
-
-		description := pwa.Description
-		if description == "" {
-			description = dashboard.Spec.HomerConfig.Subtitle
-		}
-		if description == "" {
-			description = "Personal Dashboard"
-		}
-
-		themeColor := pwa.ThemeColor
-		if themeColor == "" {
-			themeColor = "#3367d6"
-		}
-
-		backgroundColor := pwa.BackgroundColor
-		if backgroundColor == "" {
-			backgroundColor = "#ffffff"
-		}
-
-		display := pwa.Display
-		if display == "" {
-			display = "standalone"
-		}
-
-		startURL := pwa.StartURL
-		if startURL == "" {
-			startURL = "/"
-		}
-
-		// Build icons map
-		icons := make(map[string]string)
-		if dashboard.Spec.Assets.Icons != nil {
-			if dashboard.Spec.Assets.Icons.PWAIcon192 != "" {
-				icons["192"] = dashboard.Spec.Assets.Icons.PWAIcon192
-			}
-			if dashboard.Spec.Assets.Icons.PWAIcon512 != "" {
-				icons["512"] = dashboard.Spec.Assets.Icons.PWAIcon512
-			}
-		}
-
-		// Generate PWA manifest
-		pwaManifest = homer.GeneratePWAManifest(name, description, themeColor, backgroundColor, display, startURL, icons)
-	}
+	pwaManifest := r.generatePWAManifest(&dashboard)
 
 	// Check if custom assets are configured
 	if dashboard.Spec.Assets != nil && dashboard.Spec.Assets.ConfigMapRef != nil {
@@ -204,62 +145,17 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		}
 	}
 
-	var configMap corev1.ConfigMap
-	if r.EnableGatewayAPI {
-		httproutes := &gatewayv1.HTTPRouteList{}
-		if err := r.List(ctx, httproutes, client.HasLabels([]string{})); err != nil {
-			log.Error(err, "unable to list HTTPRoutes", "dashboard", req.NamespacedName)
-			return ctrl.Result{}, err
-		}
-
-		// Filter HTTPRoutes based on dashboard selectors
-		filteredHTTPRoutes := []gatewayv1.HTTPRoute{}
-		for _, httproute := range httproutes.Items {
-			shouldInclude, err := r.shouldIncludeHTTPRouteForDashboard(ctx, &httproute, &dashboard)
-			if err != nil {
-				log.Error(err, "unable to determine if HTTPRoute should be included", "dashboard", dashboard.Name, "httproute", httproute.Name)
-				return ctrl.Result{}, err
-			}
-			if shouldInclude {
-				filteredHTTPRoutes = append(filteredHTTPRoutes, httproute)
-			}
-		}
-
-		configMap = homer.CreateConfigMapWithHTTPRoutes(homerConfig, dashboard.Name, dashboard.Namespace, filteredIngressList, filteredHTTPRoutes, &dashboard, dashboard.Spec.DomainFilters)
-	} else {
-		configMap = homer.CreateConfigMap(homerConfig, dashboard.Name, dashboard.Namespace, filteredIngressList, &dashboard)
+	configMap, err := r.createConfigMapForDashboard(ctx, req, homerConfig, &dashboard, filteredIngressList)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
 
-	// List of resources
+	// Create or update all resources
 	resources := []client.Object{&deployment, &service, &configMap}
-
-	for _, resource := range resources {
-		newResource := reflect.New(reflect.TypeOf(resource).Elem()).Interface().(client.Object)
-		err := r.Get(ctx, client.ObjectKey{Namespace: resource.GetNamespace(), Name: resource.GetName()}, newResource)
-		switch {
-		case err != nil:
-			err = r.Create(ctx, resource)
-			if err != nil {
-				log.Error(err, "unable to create resource", "resource", resource)
-				return ctrl.Result{}, err
-			}
-			log.Info("Resource created", "resource", resource)
-		case client.IgnoreNotFound(err) != nil:
-			log.Error(err, "unable to fetch resource", "resource", resource)
-			return ctrl.Result{}, err
-		default:
-			if configMap, ok := resource.(*corev1.ConfigMap); ok {
-				err = r.updateConfigMapWithRetry(ctx, configMap, dashboard.Name)
-			} else {
-				err = r.Update(ctx, resource)
-			}
-			if err != nil {
-				log.Error(err, "unable to update resource", "resource", resource)
-				return ctrl.Result{}, err
-			}
-			log.Info("Resource updated", "resource", resource)
-		}
+	if err := r.createOrUpdateResources(ctx, resources, dashboard.Name); err != nil {
+		return ctrl.Result{}, err
 	}
+
 	return ctrl.Result{}, nil
 }
 
@@ -351,13 +247,14 @@ func (r *DashboardReconciler) shouldIncludeHTTPRouteForDashboard(ctx context.Con
 		// Check each parent Gateway reference in the HTTPRoute
 		for _, parentRef := range httproute.Spec.ParentRefs {
 			// Default to Gateway kind if not specified
-			kind := "Gateway"
+			const gatewayKind = "Gateway"
+			kind := gatewayKind
 			if parentRef.Kind != nil {
 				kind = string(*parentRef.Kind)
 			}
 
 			// Only check Gateway resources
-			if kind != "Gateway" {
+			if kind != gatewayKind {
 				continue
 			}
 
@@ -465,4 +362,133 @@ func (r *DashboardReconciler) matchesIngressDomainFilters(ingress *networkingv1.
 	}
 
 	return false
+}
+
+// createOrUpdateResources creates or updates all Kubernetes resources for the dashboard
+func (r *DashboardReconciler) createOrUpdateResources(ctx context.Context, resources []client.Object, dashboardName string) error {
+	log := log.FromContext(ctx)
+
+	for _, resource := range resources {
+		newResource := reflect.New(reflect.TypeOf(resource).Elem()).Interface().(client.Object)
+		err := r.Get(ctx, client.ObjectKey{Namespace: resource.GetNamespace(), Name: resource.GetName()}, newResource)
+		switch {
+		case err != nil:
+			err = r.Create(ctx, resource)
+			if err != nil {
+				log.Error(err, "unable to create resource", "resource", resource)
+				return err
+			}
+			log.Info("Resource created", "resource", resource)
+		case client.IgnoreNotFound(err) != nil:
+			log.Error(err, "unable to fetch resource", "resource", resource)
+			return err
+		default:
+			if configMap, ok := resource.(*corev1.ConfigMap); ok {
+				err = r.updateConfigMapWithRetry(ctx, configMap, dashboardName)
+			} else {
+				err = r.Update(ctx, resource)
+			}
+			if err != nil {
+				log.Error(err, "unable to update resource", "resource", resource)
+				return err
+			}
+			log.Info("Resource updated", "resource", resource)
+		}
+	}
+	return nil
+}
+
+// createConfigMapForDashboard creates the appropriate ConfigMap based on Gateway API enablement
+func (r *DashboardReconciler) createConfigMapForDashboard(ctx context.Context, req ctrl.Request, homerConfig *homer.HomerConfig, dashboard *homerv1alpha1.Dashboard, filteredIngressList networkingv1.IngressList) (corev1.ConfigMap, error) {
+	log := log.FromContext(ctx)
+
+	if r.EnableGatewayAPI {
+		httproutes := &gatewayv1.HTTPRouteList{}
+		if err := r.List(ctx, httproutes, client.HasLabels([]string{})); err != nil {
+			log.Error(err, "unable to list HTTPRoutes", "dashboard", req.NamespacedName)
+			return corev1.ConfigMap{}, err
+		}
+
+		// Filter HTTPRoutes based on dashboard selectors
+		filteredHTTPRoutes := []gatewayv1.HTTPRoute{}
+		for _, httproute := range httproutes.Items {
+			shouldInclude, err := r.shouldIncludeHTTPRouteForDashboard(ctx, &httproute, dashboard)
+			if err != nil {
+				log.Error(err, "unable to determine if HTTPRoute should be included", "dashboard", dashboard.Name, "httproute", httproute.Name)
+				return corev1.ConfigMap{}, err
+			}
+			if shouldInclude {
+				filteredHTTPRoutes = append(filteredHTTPRoutes, httproute)
+			}
+		}
+
+		return homer.CreateConfigMapWithHTTPRoutes(homerConfig, dashboard.Name, dashboard.Namespace, filteredIngressList, filteredHTTPRoutes, dashboard, dashboard.Spec.DomainFilters), nil
+	}
+
+	return homer.CreateConfigMap(homerConfig, dashboard.Name, dashboard.Namespace, filteredIngressList, dashboard), nil
+}
+
+// generatePWAManifest generates PWA manifest if enabled, returns empty string if disabled
+func (r *DashboardReconciler) generatePWAManifest(dashboard *homerv1alpha1.Dashboard) string {
+	if dashboard.Spec.Assets == nil || dashboard.Spec.Assets.PWA == nil || !dashboard.Spec.Assets.PWA.Enabled {
+		return ""
+	}
+
+	pwa := dashboard.Spec.Assets.PWA
+
+	// Set defaults if not provided
+	name := pwa.Name
+	if name == "" {
+		name = dashboard.Spec.HomerConfig.Title
+	}
+	if name == "" {
+		name = dashboard.Name
+	}
+
+	shortName := pwa.ShortName
+	if shortName == "" {
+		shortName = name
+	}
+
+	description := pwa.Description
+	if description == "" {
+		description = dashboard.Spec.HomerConfig.Subtitle
+	}
+	if description == "" {
+		description = "Personal Dashboard"
+	}
+
+	themeColor := pwa.ThemeColor
+	if themeColor == "" {
+		themeColor = "#3367d6"
+	}
+
+	backgroundColor := pwa.BackgroundColor
+	if backgroundColor == "" {
+		backgroundColor = "#ffffff"
+	}
+
+	display := pwa.Display
+	if display == "" {
+		display = "standalone"
+	}
+
+	startURL := pwa.StartURL
+	if startURL == "" {
+		startURL = "/"
+	}
+
+	// Build icons map
+	icons := make(map[string]string)
+	if dashboard.Spec.Assets.Icons != nil {
+		if dashboard.Spec.Assets.Icons.PWAIcon192 != "" {
+			icons["192"] = dashboard.Spec.Assets.Icons.PWAIcon192
+		}
+		if dashboard.Spec.Assets.Icons.PWAIcon512 != "" {
+			icons["512"] = dashboard.Spec.Assets.Icons.PWAIcon512
+		}
+	}
+
+	// Generate PWA manifest
+	return homer.GeneratePWAManifest(name, shortName, description, themeColor, backgroundColor, display, startURL, icons)
 }

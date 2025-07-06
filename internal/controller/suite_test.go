@@ -107,7 +107,7 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 
 	// Add Gateway API scheme if available - HTTPRoute tests will be skipped if not available
-	err = gatewayv1.AddToScheme(scheme.Scheme)
+	err = gatewayv1.Install(scheme.Scheme)
 	if err != nil {
 		logf.Log.Info("Gateway API scheme not available, HTTPRoute tests will be skipped", "error", err)
 	}

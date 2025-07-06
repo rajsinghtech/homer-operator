@@ -53,9 +53,9 @@ func TestBasicServiceUpdate(t *testing.T) {
 
 	// Find the updated item
 	var updatedItem *Item
-	for _, item := range config.Services[0].Items {
+	for i, item := range config.Services[0].Items {
 		if item.Name == "existing-service" {
-			updatedItem = &item
+			updatedItem = &config.Services[0].Items[i]
 			break
 		}
 	}

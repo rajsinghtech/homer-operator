@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -46,6 +47,14 @@ const (
 	ValidationLevelStrict ValidationLevel = "strict"
 	ValidationLevelWarn   ValidationLevel = "warn"
 	ValidationLevelNone   ValidationLevel = "none"
+)
+
+// Common repeated strings
+const (
+	NamespaceIconURL = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/resources/labeled/" +
+		"ns-128.png"
+	GenericType = "Generic"
+	NameField   = "name"
 )
 
 // HomerConfig contains base configuration for Homer dashboard.
@@ -203,8 +212,14 @@ func LoadConfigFromFile(filename string) (*HomerConfig, error) {
 	return &config, nil
 }
 
-func CreateConfigMap(config *HomerConfig, name string, namespace string, ingresses networkingv1.IngressList, owner client.Object) corev1.ConfigMap {
-	UpdateHomerConfig(config, ingresses, nil)
+func CreateConfigMap(
+	config *HomerConfig,
+	name string,
+	namespace string,
+	ingresses networkingv1.IngressList,
+	owner client.Object,
+) corev1.ConfigMap {
+	_ = UpdateHomerConfig(config, ingresses, nil)
 
 	// Validate configuration before creating ConfigMap
 	if err := ValidateHomerConfig(config); err != nil {
@@ -238,13 +253,31 @@ func CreateConfigMap(config *HomerConfig, name string, namespace string, ingress
 }
 
 // CreateConfigMapWithHTTPRoutes creates a ConfigMap with both Ingress and HTTPRoute resources
-func CreateConfigMapWithHTTPRoutes(config *HomerConfig, name string, namespace string, ingresses networkingv1.IngressList, httproutes []gatewayv1.HTTPRoute, owner client.Object, domainFilters []string) corev1.ConfigMap {
-	return CreateConfigMapWithHTTPRoutesAndAggregation(config, name, namespace, ingresses, httproutes, owner, domainFilters, nil)
+func CreateConfigMapWithHTTPRoutes(
+	config *HomerConfig,
+	name string,
+	namespace string,
+	ingresses networkingv1.IngressList,
+	httproutes []gatewayv1.HTTPRoute,
+	owner client.Object,
+	domainFilters []string,
+) corev1.ConfigMap {
+	return CreateConfigMapWithHTTPRoutesAndAggregation(
+		config, name, namespace, ingresses, httproutes, owner, domainFilters, nil)
 }
 
 // CreateConfigMapWithHTTPRoutesAndAggregation creates a ConfigMap with advanced aggregation features
-func CreateConfigMapWithHTTPRoutesAndAggregation(config *HomerConfig, name string, namespace string, ingresses networkingv1.IngressList, httproutes []gatewayv1.HTTPRoute, owner client.Object, domainFilters []string, healthConfig *ServiceHealthConfig) corev1.ConfigMap {
-	UpdateHomerConfig(config, ingresses, domainFilters)
+func CreateConfigMapWithHTTPRoutesAndAggregation(
+	config *HomerConfig,
+	name string,
+	namespace string,
+	ingresses networkingv1.IngressList,
+	httproutes []gatewayv1.HTTPRoute,
+	owner client.Object,
+	domainFilters []string,
+	healthConfig *ServiceHealthConfig,
+) corev1.ConfigMap {
+	_ = UpdateHomerConfig(config, ingresses, domainFilters)
 	// Update config with HTTPRoutes
 	for _, httproute := range httproutes {
 		UpdateHomerConfigHTTPRoute(config, &httproute, domainFilters)
@@ -432,10 +465,8 @@ func ValidateTheme(theme string) error {
 	}
 
 	validThemes := []string{"default", "neon", "walkxcode"}
-	for _, valid := range validThemes {
-		if theme == valid {
-			return nil
-		}
+	if slices.Contains(validThemes, theme) {
+		return nil
 	}
 	return fmt.Errorf("unsupported theme '%s'. Valid themes are: %v", theme, validThemes)
 }
@@ -448,7 +479,13 @@ type SecretKeyRef struct {
 }
 
 // ResolveAPIKeyFromSecret resolves an API key from a Kubernetes Secret and updates the item
-func ResolveAPIKeyFromSecret(ctx context.Context, k8sClient client.Client, item *Item, secretRef *SecretKeyRef, defaultNamespace string) error {
+func ResolveAPIKeyFromSecret(
+	ctx context.Context,
+	k8sClient client.Client,
+	item *Item,
+	secretRef *SecretKeyRef,
+	defaultNamespace string,
+) error {
 	if secretRef == nil || item.Type == "" {
 		return nil // No secret to resolve or not a smart card
 	}
@@ -477,7 +514,10 @@ func ResolveAPIKeyFromSecret(ctx context.Context, k8sClient client.Client, item 
 }
 
 // GeneratePWAManifest generates a PWA manifest.json from configuration
-func GeneratePWAManifest(title, description, themeColor, backgroundColor, display, startURL string, icons map[string]string) string {
+func GeneratePWAManifest(
+	title, shortName, description, themeColor, backgroundColor, display, startURL string,
+	icons map[string]string,
+) string {
 	// Default values
 	if display == "" {
 		display = "standalone"
@@ -502,7 +542,12 @@ func GeneratePWAManifest(title, description, themeColor, backgroundColor, displa
   "background_color": "%s",
   "icons": [`,
 		title,
-		truncateString(title, 12), // Short name max 12 chars
+		func() string {
+			if shortName != "" {
+				return truncateString(shortName, 12)
+			}
+			return truncateString(title, 12)
+		}(), // Short name max 12 chars
 		description,
 		startURL,
 		display,
@@ -563,7 +608,14 @@ func truncateString(s string, maxLen int) string {
 }
 
 // CreateDeploymentWithAssets creates a Deployment with custom asset support and PWA manifest
-func CreateDeploymentWithAssets(name string, namespace string, replicas *int32, owner client.Object, assetsConfigMapName string, pwaManifest string) appsv1.Deployment {
+func CreateDeploymentWithAssets(
+	name string,
+	namespace string,
+	replicas *int32,
+	owner client.Object,
+	assetsConfigMapName string,
+	pwaManifest string,
+) appsv1.Deployment {
 	var defaultReplicas int32 = 1
 	if replicas == nil {
 		replicas = &defaultReplicas
@@ -788,7 +840,7 @@ func UpdateHomerConfig(config *HomerConfig, ingresses networkingv1.IngressList, 
 			service := Service{}
 			service.Name = ingress.ObjectMeta.Namespace
 			item.Name = ingress.ObjectMeta.Name
-			service.Logo = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/resources/labeled/ns-128.png"
+			service.Logo = NamespaceIconURL
 			if len(ingress.Spec.TLS) > 0 {
 				item.Url = "https://" + host
 			} else {
@@ -823,14 +875,24 @@ func UpdateHomerConfigIngress(homerConfig *HomerConfig, ingress networkingv1.Ing
 }
 
 // UpdateHomerConfigIngressWithGrouping updates Homer config with custom grouping strategy
-func UpdateHomerConfigIngressWithGrouping(homerConfig *HomerConfig, ingress networkingv1.Ingress, domainFilters []string, groupingConfig *ServiceGroupingConfig) {
+func UpdateHomerConfigIngressWithGrouping(
+	homerConfig *HomerConfig,
+	ingress networkingv1.Ingress,
+	domainFilters []string,
+	groupingConfig *ServiceGroupingConfig,
+) {
 	service := Service{}
 	item := Item{}
 
 	// Determine service group using flexible grouping
-	service.Name = determineServiceGroup(ingress.ObjectMeta.Namespace, ingress.ObjectMeta.Labels, ingress.ObjectMeta.Annotations, groupingConfig)
+	service.Name = determineServiceGroup(
+		ingress.ObjectMeta.Namespace,
+		ingress.ObjectMeta.Labels,
+		ingress.ObjectMeta.Annotations,
+		groupingConfig,
+	)
 	item.Name = ingress.ObjectMeta.Name
-	service.Logo = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/resources/labeled/ns-128.png"
+	service.Logo = NamespaceIconURL
 
 	// Check if there are any rules before accessing them
 	if len(ingress.Spec.Rules) == 0 {
@@ -845,7 +907,7 @@ func UpdateHomerConfigIngressWithGrouping(homerConfig *HomerConfig, ingress netw
 	processServiceAnnotations(&service, ingress.ObjectMeta.Annotations)
 
 	// Process each rule's host with domain filtering
-	var items []Item
+	items := make([]Item, 0, len(ingress.Spec.Rules))
 	validRuleCount := 0
 	// First pass: count valid rules
 	for _, rule := range ingress.Spec.Rules {
@@ -922,12 +984,22 @@ func UpdateHomerConfigHTTPRoute(homerConfig *HomerConfig, httproute *gatewayv1.H
 }
 
 // UpdateHomerConfigHTTPRouteWithGrouping updates Homer config with custom grouping strategy
-func UpdateHomerConfigHTTPRouteWithGrouping(homerConfig *HomerConfig, httproute *gatewayv1.HTTPRoute, domainFilters []string, groupingConfig *ServiceGroupingConfig) {
+func UpdateHomerConfigHTTPRouteWithGrouping(
+	homerConfig *HomerConfig,
+	httproute *gatewayv1.HTTPRoute,
+	domainFilters []string,
+	groupingConfig *ServiceGroupingConfig,
+) {
 	service := Service{}
 
 	// Determine service group using flexible grouping
-	service.Name = determineServiceGroup(httproute.ObjectMeta.Namespace, httproute.ObjectMeta.Labels, httproute.ObjectMeta.Annotations, groupingConfig)
-	service.Logo = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/resources/labeled/ns-128.png"
+	service.Name = determineServiceGroup(
+		httproute.ObjectMeta.Namespace,
+		httproute.ObjectMeta.Labels,
+		httproute.ObjectMeta.Annotations,
+		groupingConfig,
+	)
+	service.Logo = NamespaceIconURL
 
 	// Process service-level annotations
 	processServiceAnnotations(&service, httproute.ObjectMeta.Annotations)
@@ -1106,93 +1178,103 @@ func processItemAnnotations(item *Item, annotations map[string]string) {
 // processItemAnnotationsWithValidation processes item annotations with validation
 func processItemAnnotationsWithValidation(item *Item, annotations map[string]string, validationLevel ValidationLevel) {
 	for key, value := range annotations {
-		if strings.HasPrefix(key, "item.homer.rajsingh.info/") {
-			fieldName := strings.TrimPrefix(key, "item.homer.rajsingh.info/")
-			switch strings.ToLower(fieldName) {
-			case "name":
-				item.Name = value
-			case "logo":
-				item.Logo = value
-			case "icon":
-				item.Icon = value
-			case "subtitle":
-				item.Subtitle = value
-			case "tag":
-				item.Tag = value
-			case "tagstyle":
-				item.Tagstyle = value
-			case "keywords":
-				// Allow both comma-separated and single values
-				if strings.Contains(value, ",") {
-					// Validate and clean up keywords
-					keywords := strings.Split(value, ",")
-					var cleanKeywords []string
-					for _, keyword := range keywords {
-						keyword = strings.TrimSpace(keyword)
-						if keyword != "" {
-							cleanKeywords = append(cleanKeywords, keyword)
-						}
-					}
-					item.Keywords = strings.Join(cleanKeywords, ",")
-				} else {
-					item.Keywords = strings.TrimSpace(value)
-				}
-			case "url":
-				if err := validateAnnotationValue(fieldName, value, validationLevel); err != nil && validationLevel == ValidationLevelStrict {
-					// Skip invalid URL in strict mode
-					continue
-				}
-				item.Url = value
-			case "target":
-				if err := validateAnnotationValue(fieldName, value, validationLevel); err != nil && validationLevel == ValidationLevelStrict {
-					// Skip invalid target in strict mode
-					continue
-				}
-				item.Target = value
-			case "class":
-				item.Class = value
-			case "background":
-				item.Background = value
-			case "type":
-				item.Type = value
-			case "apikey":
-				item.Apikey = value
-			case "endpoint":
-				item.Endpoint = value
-			case "node":
-				item.Node = value
-			case "legacyapi":
-				item.Legacyapi = value
-			case "librarytype":
-				item.Librarytype = value
-			case "warning_value":
-				if err := validateAnnotationValue(fieldName, value, validationLevel); err != nil && validationLevel == ValidationLevelStrict {
-					continue
-				}
-				item.Warningvalue = value
-			case "danger_value":
-				if err := validateAnnotationValue(fieldName, value, validationLevel); err != nil && validationLevel == ValidationLevelStrict {
-					continue
-				}
-				item.Dangervalue = value
-			case "usecredentials":
-				item.UseCredentials = parseBooleanValue(value)
-			// Support for headers as comma-separated key:value pairs
-			case "headers":
-				if item.Headers == nil {
-					item.Headers = make(map[string]string)
-				}
-				parseHeadersAnnotation(item.Headers, value)
-			}
-			// Support for headers with prefix notation (e.g., headers.authorization)
-			if strings.HasPrefix(strings.ToLower(fieldName), "headers.") {
-				headerName := strings.TrimPrefix(strings.ToLower(fieldName), "headers.")
-				if item.Headers == nil {
-					item.Headers = make(map[string]string)
-				}
-				item.Headers[headerName] = value
+		if fieldName, ok := strings.CutPrefix(key, "item.homer.rajsingh.info/"); ok {
+			processItemField(item, strings.ToLower(fieldName), value, validationLevel)
+		}
+	}
+}
+
+// processItemField processes a single item field based on its name
+func processItemField(item *Item, fieldName, value string, validationLevel ValidationLevel) {
+	switch fieldName {
+	case NameField:
+		item.Name = value
+	case "logo":
+		item.Logo = value
+	case "icon":
+		item.Icon = value
+	case "subtitle":
+		item.Subtitle = value
+	case "tag":
+		item.Tag = value
+	case "tagstyle":
+		item.Tagstyle = value
+	case "keywords":
+		processKeywordsField(item, value)
+	case "url":
+		processValidatedField(fieldName, value, validationLevel, func() { item.Url = value })
+	case "target":
+		processValidatedField(fieldName, value, validationLevel, func() { item.Target = value })
+	case "class":
+		item.Class = value
+	case "background":
+		item.Background = value
+	case "type":
+		item.Type = value
+	case "apikey":
+		item.Apikey = value
+	case "endpoint":
+		item.Endpoint = value
+	case "node":
+		item.Node = value
+	case "legacyapi":
+		item.Legacyapi = value
+	case "librarytype":
+		item.Librarytype = value
+	case "warning_value":
+		processValidatedField(fieldName, value, validationLevel, func() { item.Warningvalue = value })
+	case "danger_value":
+		processValidatedField(fieldName, value, validationLevel, func() { item.Dangervalue = value })
+	case "usecredentials":
+		item.UseCredentials = parseBooleanValue(value)
+	case "headers":
+		processHeadersField(item, value)
+	default:
+		processHeaderPrefixField(item, fieldName, value)
+	}
+}
+
+// processKeywordsField processes the keywords field with validation and cleanup
+func processKeywordsField(item *Item, value string) {
+	if strings.Contains(value, ",") {
+		keywords := strings.Split(value, ",")
+		var cleanKeywords []string
+		for _, keyword := range keywords {
+			keyword = strings.TrimSpace(keyword)
+			if keyword != "" {
+				cleanKeywords = append(cleanKeywords, keyword)
 			}
 		}
+		item.Keywords = strings.Join(cleanKeywords, ",")
+	} else {
+		item.Keywords = strings.TrimSpace(value)
+	}
+}
+
+// processValidatedField processes a field that requires validation
+func processValidatedField(fieldName, value string, validationLevel ValidationLevel, setFunc func()) {
+	if err := validateAnnotationValue(fieldName, value, validationLevel); err != nil &&
+		validationLevel == ValidationLevelStrict {
+		return
+	}
+	setFunc()
+}
+
+// processHeadersField processes the headers field
+func processHeadersField(item *Item, value string) {
+	if item.Headers == nil {
+		item.Headers = make(map[string]string)
+	}
+	parseHeadersAnnotation(item.Headers, value)
+}
+
+// processHeaderPrefixField processes header fields with prefix notation
+func processHeaderPrefixField(item *Item, fieldName, value string) {
+	if headerName, ok := strings.CutPrefix(fieldName, "headers."); ok {
+		if item.Headers == nil {
+			item.Headers = make(map[string]string)
+		}
+		item.Headers[headerName] = value
 	}
 }
 
@@ -1264,7 +1346,12 @@ type GroupingRule struct {
 }
 
 // determineServiceGroup determines the service group name based on strategy
-func determineServiceGroup(namespace string, labels map[string]string, annotations map[string]string, config *ServiceGroupingConfig) string {
+func determineServiceGroup(
+	namespace string,
+	labels map[string]string,
+	annotations map[string]string,
+	config *ServiceGroupingConfig,
+) string {
 	if config == nil {
 		config = &ServiceGroupingConfig{Strategy: ServiceGroupingNamespace}
 	}
@@ -1301,8 +1388,7 @@ func determineServiceGroup(namespace string, labels map[string]string, annotatio
 // getServiceNameFromAnnotations extracts service name from annotations
 func getServiceNameFromAnnotations(annotations map[string]string) string {
 	for key, value := range annotations {
-		if strings.HasPrefix(key, "service.homer.rajsingh.info/") {
-			fieldName := strings.TrimPrefix(key, "service.homer.rajsingh.info/")
+		if fieldName, ok := strings.CutPrefix(key, "service.homer.rajsingh.info/"); ok {
 			if strings.ToLower(fieldName) == "name" {
 				return value
 			}
@@ -1351,10 +1437,9 @@ func matchesPattern(value, pattern string) bool {
 // processServiceAnnotations safely processes service annotations without reflection
 func processServiceAnnotations(service *Service, annotations map[string]string) {
 	for key, value := range annotations {
-		if strings.HasPrefix(key, "service.homer.rajsingh.info/") {
-			fieldName := strings.TrimPrefix(key, "service.homer.rajsingh.info/")
+		if fieldName, ok := strings.CutPrefix(key, "service.homer.rajsingh.info/"); ok {
 			switch strings.ToLower(fieldName) {
-			case "name":
+			case NameField:
 				service.Name = value
 			case "icon":
 				service.Icon = value
@@ -1412,7 +1497,8 @@ func ValidateHomerConfig(config *HomerConfig) error {
 
 	// Validate color theme options
 	if config.Defaults.ColorTheme != "" {
-		if config.Defaults.ColorTheme != "auto" && config.Defaults.ColorTheme != "light" && config.Defaults.ColorTheme != "dark" {
+		if config.Defaults.ColorTheme != "auto" && config.Defaults.ColorTheme != "light" &&
+			config.Defaults.ColorTheme != "dark" {
 			return fmt.Errorf("invalid colorTheme '%s', must be 'auto', 'light', or 'dark'", config.Defaults.ColorTheme)
 		}
 	}
@@ -1452,11 +1538,12 @@ func isValidColor(color string) bool {
 	}
 
 	// Check for common CSS color names
-	commonColors := []string{"red", "blue", "green", "yellow", "orange", "purple", "pink", "brown", "black", "white", "gray", "grey"}
-	for _, commonColor := range commonColors {
-		if strings.ToLower(color) == commonColor {
-			return true
-		}
+	commonColors := []string{
+		"red", "blue", "green", "yellow", "orange", "purple",
+		"pink", "brown", "black", "white", "gray", "grey",
+	}
+	if slices.Contains(commonColors, strings.ToLower(color)) {
+		return true
 	}
 
 	// Check for rgb/rgba format (basic check)
@@ -1522,7 +1609,12 @@ type AssetConfig struct {
 }
 
 // CreateAssetConfigMap creates a ConfigMap for custom assets
-func CreateAssetConfigMap(name string, namespace string, assets map[string][]byte, owner client.Object) corev1.ConfigMap {
+func CreateAssetConfigMap(
+	name string,
+	namespace string,
+	assets map[string][]byte,
+	owner client.Object,
+) corev1.ConfigMap {
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name + "-homer-assets",
@@ -1567,10 +1659,55 @@ func normalizeHomerConfig(config *HomerConfig) {
 	}
 }
 
+// buildThemeColorsMap converts ThemeColors struct to map for YAML output
+func buildThemeColorsMap(colors ThemeColors) map[string]any {
+	colorMap := map[string]any{}
+	if colors.HighlightPrimary != "" {
+		colorMap["highlight-primary"] = colors.HighlightPrimary
+	}
+	if colors.HighlightSecondary != "" {
+		colorMap["highlight-secondary"] = colors.HighlightSecondary
+	}
+	if colors.HighlightHover != "" {
+		colorMap["highlight-hover"] = colors.HighlightHover
+	}
+	if colors.Background != "" {
+		colorMap["background"] = colors.Background
+	}
+	if colors.CardBackground != "" {
+		colorMap["card-background"] = colors.CardBackground
+	}
+	if colors.Text != "" {
+		colorMap["text"] = colors.Text
+	}
+	if colors.TextHeader != "" {
+		colorMap["text-header"] = colors.TextHeader
+	}
+	if colors.TextTitle != "" {
+		colorMap["text-title"] = colors.TextTitle
+	}
+	if colors.TextSubtitle != "" {
+		colorMap["text-subtitle"] = colors.TextSubtitle
+	}
+	if colors.CardShadow != "" {
+		colorMap["card-shadow"] = colors.CardShadow
+	}
+	if colors.Link != "" {
+		colorMap["link"] = colors.Link
+	}
+	if colors.LinkHover != "" {
+		colorMap["link-hover"] = colors.LinkHover
+	}
+	if colors.BackgroundImage != "" {
+		colorMap["background-image"] = colors.BackgroundImage
+	}
+	return colorMap
+}
+
 // marshalHomerConfigToYAML creates properly formatted YAML for Homer
 func marshalHomerConfigToYAML(config *HomerConfig) ([]byte, error) {
 	// Create a map with proper field names for Homer
-	configMap := map[string]interface{}{
+	configMap := map[string]any{
 		"title":             config.Title,
 		"subtitle":          config.Subtitle,
 		"documentTitle":     config.DocumentTitle,
@@ -1587,105 +1724,21 @@ func marshalHomerConfigToYAML(config *HomerConfig) ([]byte, error) {
 
 	// Add hotkey if configured
 	if config.Hotkey.Search != "" {
-		configMap["hotkey"] = map[string]interface{}{
+		configMap["hotkey"] = map[string]any{
 			"search": config.Hotkey.Search,
 		}
 	}
 
 	// Add colors with proper field names
 	if config.Colors.Light.HighlightPrimary != "" || config.Colors.Dark.HighlightPrimary != "" {
-		colors := map[string]interface{}{}
+		colors := map[string]any{}
 
-		if config.Colors.Light.HighlightPrimary != "" {
-			light := map[string]interface{}{}
-			if config.Colors.Light.HighlightPrimary != "" {
-				light["highlight-primary"] = config.Colors.Light.HighlightPrimary
-			}
-			if config.Colors.Light.HighlightSecondary != "" {
-				light["highlight-secondary"] = config.Colors.Light.HighlightSecondary
-			}
-			if config.Colors.Light.HighlightHover != "" {
-				light["highlight-hover"] = config.Colors.Light.HighlightHover
-			}
-			if config.Colors.Light.Background != "" {
-				light["background"] = config.Colors.Light.Background
-			}
-			if config.Colors.Light.CardBackground != "" {
-				light["card-background"] = config.Colors.Light.CardBackground
-			}
-			if config.Colors.Light.Text != "" {
-				light["text"] = config.Colors.Light.Text
-			}
-			if config.Colors.Light.TextHeader != "" {
-				light["text-header"] = config.Colors.Light.TextHeader
-			}
-			if config.Colors.Light.TextTitle != "" {
-				light["text-title"] = config.Colors.Light.TextTitle
-			}
-			if config.Colors.Light.TextSubtitle != "" {
-				light["text-subtitle"] = config.Colors.Light.TextSubtitle
-			}
-			if config.Colors.Light.CardShadow != "" {
-				light["card-shadow"] = config.Colors.Light.CardShadow
-			}
-			if config.Colors.Light.Link != "" {
-				light["link"] = config.Colors.Light.Link
-			}
-			if config.Colors.Light.LinkHover != "" {
-				light["link-hover"] = config.Colors.Light.LinkHover
-			}
-			if config.Colors.Light.BackgroundImage != "" {
-				light["background-image"] = config.Colors.Light.BackgroundImage
-			}
-			if len(light) > 0 {
-				colors["light"] = light
-			}
+		if light := buildThemeColorsMap(config.Colors.Light); len(light) > 0 {
+			colors["light"] = light
 		}
 
-		if config.Colors.Dark.HighlightPrimary != "" {
-			dark := map[string]interface{}{}
-			if config.Colors.Dark.HighlightPrimary != "" {
-				dark["highlight-primary"] = config.Colors.Dark.HighlightPrimary
-			}
-			if config.Colors.Dark.HighlightSecondary != "" {
-				dark["highlight-secondary"] = config.Colors.Dark.HighlightSecondary
-			}
-			if config.Colors.Dark.HighlightHover != "" {
-				dark["highlight-hover"] = config.Colors.Dark.HighlightHover
-			}
-			if config.Colors.Dark.Background != "" {
-				dark["background"] = config.Colors.Dark.Background
-			}
-			if config.Colors.Dark.CardBackground != "" {
-				dark["card-background"] = config.Colors.Dark.CardBackground
-			}
-			if config.Colors.Dark.Text != "" {
-				dark["text"] = config.Colors.Dark.Text
-			}
-			if config.Colors.Dark.TextHeader != "" {
-				dark["text-header"] = config.Colors.Dark.TextHeader
-			}
-			if config.Colors.Dark.TextTitle != "" {
-				dark["text-title"] = config.Colors.Dark.TextTitle
-			}
-			if config.Colors.Dark.TextSubtitle != "" {
-				dark["text-subtitle"] = config.Colors.Dark.TextSubtitle
-			}
-			if config.Colors.Dark.CardShadow != "" {
-				dark["card-shadow"] = config.Colors.Dark.CardShadow
-			}
-			if config.Colors.Dark.Link != "" {
-				dark["link"] = config.Colors.Dark.Link
-			}
-			if config.Colors.Dark.LinkHover != "" {
-				dark["link-hover"] = config.Colors.Dark.LinkHover
-			}
-			if config.Colors.Dark.BackgroundImage != "" {
-				dark["background-image"] = config.Colors.Dark.BackgroundImage
-			}
-			if len(dark) > 0 {
-				colors["dark"] = dark
-			}
+		if dark := buildThemeColorsMap(config.Colors.Dark); len(dark) > 0 {
+			colors["dark"] = dark
 		}
 
 		if len(colors) > 0 {
@@ -1695,7 +1748,7 @@ func marshalHomerConfigToYAML(config *HomerConfig) ([]byte, error) {
 
 	// Add defaults
 	if config.Defaults.Layout != "" || config.Defaults.ColorTheme != "" {
-		defaults := map[string]interface{}{}
+		defaults := map[string]any{}
 		if config.Defaults.Layout != "" {
 			defaults["layout"] = config.Defaults.Layout
 		}
@@ -1707,7 +1760,7 @@ func marshalHomerConfigToYAML(config *HomerConfig) ([]byte, error) {
 
 	// Add proxy if configured
 	if config.Proxy.UseCredentials || len(config.Proxy.Headers) > 0 {
-		proxy := map[string]interface{}{}
+		proxy := map[string]any{}
 		proxy["useCredentials"] = config.Proxy.UseCredentials
 		if len(config.Proxy.Headers) > 0 {
 			proxy["headers"] = config.Proxy.Headers
@@ -1717,7 +1770,7 @@ func marshalHomerConfigToYAML(config *HomerConfig) ([]byte, error) {
 
 	// Add message if configured
 	if config.Message.Title != "" || config.Message.Content != "" {
-		message := map[string]interface{}{}
+		message := map[string]any{}
 		if config.Message.Url != "" {
 			message["url"] = config.Message.Url
 		}
@@ -1789,7 +1842,7 @@ func enhanceItemWithHealthCheck(item *Item, healthConfig *ServiceHealthConfig) {
 
 	// Add health check URL if not already a smart card
 	if item.Type == "" {
-		item.Type = "Generic"
+		item.Type = GenericType
 	}
 
 	// Set health endpoint
@@ -1900,7 +1953,8 @@ func findServiceDependencies(services []Service) []ServiceDependency {
 				for _, keyword := range keywords {
 					keyword = strings.TrimSpace(keyword)
 					for _, otherService := range services {
-						if otherService.Name != service.Name && strings.Contains(strings.ToLower(keyword), strings.ToLower(otherService.Name)) {
+						if otherService.Name != service.Name &&
+							strings.Contains(strings.ToLower(keyword), strings.ToLower(otherService.Name)) {
 							dependencies = append(dependencies, ServiceDependency{
 								ServiceName: otherService.Name,
 								ItemName:    item.Name,
@@ -1914,7 +1968,8 @@ func findServiceDependencies(services []Service) []ServiceDependency {
 			// Check if item subtitle references other services
 			if item.Subtitle != "" {
 				for _, otherService := range services {
-					if otherService.Name != service.Name && strings.Contains(strings.ToLower(item.Subtitle), strings.ToLower(otherService.Name)) {
+					if otherService.Name != service.Name &&
+						strings.Contains(strings.ToLower(item.Subtitle), strings.ToLower(otherService.Name)) {
 						dependencies = append(dependencies, ServiceDependency{
 							ServiceName: otherService.Name,
 							ItemName:    item.Name,
@@ -1930,7 +1985,7 @@ func findServiceDependencies(services []Service) []ServiceDependency {
 }
 
 // optimizeServiceLayout optimizes service ordering based on dependencies and usage patterns
-func optimizeServiceLayout(services []Service, dependencies []ServiceDependency) []Service {
+func optimizeServiceLayout(services []Service, _ []ServiceDependency) []Service {
 	// Create a copy to avoid modifying the original
 	optimizedServices := make([]Service, len(services))
 	copy(optimizedServices, services)
@@ -1959,7 +2014,7 @@ func removeItemsFromHTTPRouteSource(homerConfig *HomerConfig, sourceName, source
 	for serviceIndex := range homerConfig.Services {
 		service := &homerConfig.Services[serviceIndex]
 		var filteredItems []Item
-		
+
 		// Keep only items that did NOT come from the specified HTTPRoute source
 		for _, item := range service.Items {
 			// Remove items that match this HTTPRoute source
@@ -1970,11 +2025,11 @@ func removeItemsFromHTTPRouteSource(homerConfig *HomerConfig, sourceName, source
 			// Keep this item
 			filteredItems = append(filteredItems, item)
 		}
-		
+
 		// Update the service with filtered items
 		service.Items = filteredItems
 	}
-	
+
 	// Remove any services that now have no items
 	removeEmptyServices(homerConfig)
 }
@@ -1984,7 +2039,7 @@ func removeItemsFromIngressSource(homerConfig *HomerConfig, sourceName, sourceNa
 	for serviceIndex := range homerConfig.Services {
 		service := &homerConfig.Services[serviceIndex]
 		var filteredItems []Item
-		
+
 		// Keep only items that did NOT come from the specified Ingress source
 		for _, item := range service.Items {
 			// Remove items that match this Ingress source
@@ -1995,11 +2050,11 @@ func removeItemsFromIngressSource(homerConfig *HomerConfig, sourceName, sourceNa
 			// Keep this item
 			filteredItems = append(filteredItems, item)
 		}
-		
+
 		// Update the service with filtered items
 		service.Items = filteredItems
 	}
-	
+
 	// Remove any services that now have no items
 	removeEmptyServices(homerConfig)
 }
@@ -2007,13 +2062,13 @@ func removeItemsFromIngressSource(homerConfig *HomerConfig, sourceName, sourceNa
 // removeEmptyServices removes services that have no items
 func removeEmptyServices(homerConfig *HomerConfig) {
 	var filteredServices []Service
-	
+
 	for _, service := range homerConfig.Services {
 		if len(service.Items) > 0 {
 			filteredServices = append(filteredServices, service)
 		}
 	}
-	
+
 	homerConfig.Services = filteredServices
 }
 

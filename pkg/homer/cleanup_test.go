@@ -15,8 +15,8 @@ func TestHTTPRouteHostnameRemovalCleanup(t *testing.T) {
 	// Create HTTPRoute with multiple hostnames
 	httproute := &gatewayv1.HTTPRoute{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "immich-server",
-			Namespace: "immich",
+			Name:              "immich-server",
+			Namespace:         "immich",
 			CreationTimestamp: metav1.NewTime(time.Now()),
 		},
 		Spec: gatewayv1.HTTPRouteSpec{
@@ -49,7 +49,7 @@ func TestHTTPRouteHostnameRemovalCleanup(t *testing.T) {
 
 	expectedInitialItems := []string{
 		"immich-server-immich.rajsingh.info",
-		"immich-server-immich.lukehouge.com", 
+		"immich-server-immich.lukehouge.com",
 		"immich-server-immich.k8s.rajsingh.info",
 	}
 
@@ -108,8 +108,8 @@ func TestIngressHostnameRemovalCleanup(t *testing.T) {
 	// Create Ingress with multiple rules
 	ingress := networkingv1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-ingress",
-			Namespace: "test-namespace",
+			Name:              "test-ingress",
+			Namespace:         "test-namespace",
 			CreationTimestamp: metav1.NewTime(time.Now()),
 		},
 		Spec: networkingv1.IngressSpec{
@@ -183,8 +183,8 @@ func TestCompleteResourceRemoval(t *testing.T) {
 	// Create HTTPRoute
 	httproute := &gatewayv1.HTTPRoute{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-route",
-			Namespace: "test-ns",
+			Name:              "test-route",
+			Namespace:         "test-ns",
 			CreationTimestamp: metav1.NewTime(time.Now()),
 		},
 		Spec: gatewayv1.HTTPRouteSpec{
@@ -220,8 +220,8 @@ func TestMultipleResourcesCleanup(t *testing.T) {
 	// Create multiple HTTPRoutes in the same namespace
 	httproute1 := &gatewayv1.HTTPRoute{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "route1",
-			Namespace: "shared-ns",
+			Name:              "route1",
+			Namespace:         "shared-ns",
 			CreationTimestamp: metav1.NewTime(time.Now()),
 		},
 		Spec: gatewayv1.HTTPRouteSpec{
@@ -231,8 +231,8 @@ func TestMultipleResourcesCleanup(t *testing.T) {
 
 	httproute2 := &gatewayv1.HTTPRoute{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "route2", 
-			Namespace: "shared-ns",
+			Name:              "route2",
+			Namespace:         "shared-ns",
 			CreationTimestamp: metav1.NewTime(time.Now()),
 		},
 		Spec: gatewayv1.HTTPRouteSpec{
@@ -287,7 +287,7 @@ func TestRemoveItemsFromHTTPRouteSource(t *testing.T) {
 						Namespace: "test-ns",
 					},
 					{
-						Name:      "item2", 
+						Name:      "item2",
 						Source:    "route2",
 						Namespace: "test-ns",
 					},
@@ -325,8 +325,8 @@ func TestSingleHostnameToMultipleHostnameTransition(t *testing.T) {
 	// Start with single hostname (no suffix)
 	httproute := &gatewayv1.HTTPRoute{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "app-route",
-			Namespace: "apps",
+			Name:              "app-route",
+			Namespace:         "apps",
 			CreationTimestamp: metav1.NewTime(time.Now()),
 		},
 		Spec: gatewayv1.HTTPRouteSpec{

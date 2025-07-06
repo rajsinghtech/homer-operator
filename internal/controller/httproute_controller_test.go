@@ -32,6 +32,8 @@ import (
 	"github.com/rajsinghtech/homer-operator.git/pkg/homer"
 )
 
+const nullHTTPRouteValue = "null"
+
 var _ = Describe("HTTPRoute Controller", func() {
 	BeforeEach(func() {
 		if !isGatewayAPIAvailable() {
@@ -188,7 +190,7 @@ var _ = Describe("HTTPRoute Controller", func() {
 					return false
 				}
 				configYaml := configMap.Data["config.yml"]
-				return configYaml != "" && configYaml != "null"
+				return configYaml != "" && configYaml != nullHTTPRouteValue
 			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
 
 			// Check for HTTPRoute-specific content
@@ -423,7 +425,7 @@ var _ = Describe("HTTPRoute Controller", func() {
 					return false
 				}
 				configYaml := configMap.Data["config.yml"]
-				return configYaml != "" && configYaml != "null"
+				return configYaml != "" && configYaml != nullHTTPRouteValue
 			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
 
 			configYaml := configMap.Data["config.yml"]
@@ -540,7 +542,7 @@ var _ = Describe("HTTPRoute Controller", func() {
 					return false
 				}
 				configYaml := configMap.Data["config.yml"]
-				return configYaml != "" && configYaml != "null"
+				return configYaml != "" && configYaml != nullHTTPRouteValue
 			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
 
 			configYaml := configMap.Data["config.yml"]
@@ -670,7 +672,7 @@ var _ = Describe("HTTPRoute Controller", func() {
 					return false
 				}
 				configYaml := configMap.Data["config.yml"]
-				return configYaml != "" && configYaml != "null"
+				return configYaml != "" && configYaml != nullHTTPRouteValue
 			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
 
 			configYaml := configMap.Data["config.yml"]

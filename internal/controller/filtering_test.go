@@ -33,6 +33,8 @@ import (
 	"github.com/rajsinghtech/homer-operator.git/pkg/homer"
 )
 
+const nullValue = "null"
+
 var _ = Describe("Filtering Controller Tests", func() {
 	BeforeEach(func() {
 		if !isGatewayAPIAvailable() {
@@ -164,16 +166,16 @@ var _ = Describe("Filtering Controller Tests", func() {
 		AfterEach(func() {
 			// Cleanup resources
 			if httprouteMatching != nil {
-				k8sClient.Delete(ctx, httprouteMatching)
+				_ = k8sClient.Delete(ctx, httprouteMatching)
 			}
 			if httprouteNonMatching != nil {
-				k8sClient.Delete(ctx, httprouteNonMatching)
+				_ = k8sClient.Delete(ctx, httprouteNonMatching)
 			}
 			if dashboard != nil {
-				k8sClient.Delete(ctx, dashboard)
+				_ = k8sClient.Delete(ctx, dashboard)
 			}
 			if gateway != nil {
-				k8sClient.Delete(ctx, gateway)
+				_ = k8sClient.Delete(ctx, gateway)
 			}
 		})
 
@@ -204,7 +206,7 @@ var _ = Describe("Filtering Controller Tests", func() {
 					return false
 				}
 				configYaml := configMap.Data["config.yml"]
-				return configYaml != "" && configYaml != "null"
+				return configYaml != "" && configYaml != nullValue
 			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
 
 			configYaml := configMap.Data["config.yml"]
@@ -326,13 +328,13 @@ var _ = Describe("Filtering Controller Tests", func() {
 		AfterEach(func() {
 			// Cleanup resources
 			if httprouteMatching != nil {
-				k8sClient.Delete(ctx, httprouteMatching)
+				_ = k8sClient.Delete(ctx, httprouteMatching)
 			}
 			if httprouteNonMatching != nil {
-				k8sClient.Delete(ctx, httprouteNonMatching)
+				_ = k8sClient.Delete(ctx, httprouteNonMatching)
 			}
 			if dashboard != nil {
-				k8sClient.Delete(ctx, dashboard)
+				_ = k8sClient.Delete(ctx, dashboard)
 			}
 		})
 
@@ -363,7 +365,7 @@ var _ = Describe("Filtering Controller Tests", func() {
 					return false
 				}
 				configYaml := configMap.Data["config.yml"]
-				return configYaml != "" && configYaml != "null"
+				return configYaml != "" && configYaml != nullValue
 			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
 
 			configYaml := configMap.Data["config.yml"]
@@ -487,13 +489,13 @@ var _ = Describe("Filtering Controller Tests", func() {
 		AfterEach(func() {
 			// Cleanup resources
 			if ingressMatching != nil {
-				k8sClient.Delete(ctx, ingressMatching)
+				_ = k8sClient.Delete(ctx, ingressMatching)
 			}
 			if ingressNonMatching != nil {
-				k8sClient.Delete(ctx, ingressNonMatching)
+				_ = k8sClient.Delete(ctx, ingressNonMatching)
 			}
 			if dashboard != nil {
-				k8sClient.Delete(ctx, dashboard)
+				_ = k8sClient.Delete(ctx, dashboard)
 			}
 		})
 
@@ -523,7 +525,7 @@ var _ = Describe("Filtering Controller Tests", func() {
 					return false
 				}
 				configYaml := configMap.Data["config.yml"]
-				return configYaml != "" && configYaml != "null"
+				return configYaml != "" && configYaml != nullValue
 			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
 
 			configYaml := configMap.Data["config.yml"]
@@ -737,22 +739,22 @@ var _ = Describe("Filtering Controller Tests", func() {
 		AfterEach(func() {
 			// Cleanup resources
 			if httprouteMatching != nil {
-				k8sClient.Delete(ctx, httprouteMatching)
+				_ = k8sClient.Delete(ctx, httprouteMatching)
 			}
 			if httprouteSubdomainMatching != nil {
-				k8sClient.Delete(ctx, httprouteSubdomainMatching)
+				_ = k8sClient.Delete(ctx, httprouteSubdomainMatching)
 			}
 			if httprouteNonMatching != nil {
-				k8sClient.Delete(ctx, httprouteNonMatching)
+				_ = k8sClient.Delete(ctx, httprouteNonMatching)
 			}
 			if ingressMatching != nil {
-				k8sClient.Delete(ctx, ingressMatching)
+				_ = k8sClient.Delete(ctx, ingressMatching)
 			}
 			if ingressNonMatching != nil {
-				k8sClient.Delete(ctx, ingressNonMatching)
+				_ = k8sClient.Delete(ctx, ingressNonMatching)
 			}
 			if dashboard != nil {
-				k8sClient.Delete(ctx, dashboard)
+				_ = k8sClient.Delete(ctx, dashboard)
 			}
 		})
 
@@ -783,7 +785,7 @@ var _ = Describe("Filtering Controller Tests", func() {
 					return false
 				}
 				configYaml := configMap.Data["config.yml"]
-				return configYaml != "" && configYaml != "null"
+				return configYaml != "" && configYaml != nullValue
 			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
 
 			configYaml := configMap.Data["config.yml"]
@@ -977,19 +979,19 @@ var _ = Describe("Filtering Controller Tests", func() {
 		AfterEach(func() {
 			// Cleanup resources
 			if httprouteFullMatch != nil {
-				k8sClient.Delete(ctx, httprouteFullMatch)
+				_ = k8sClient.Delete(ctx, httprouteFullMatch)
 			}
 			if httproutePartialMatch != nil {
-				k8sClient.Delete(ctx, httproutePartialMatch)
+				_ = k8sClient.Delete(ctx, httproutePartialMatch)
 			}
 			if httprouteNoMatch != nil {
-				k8sClient.Delete(ctx, httprouteNoMatch)
+				_ = k8sClient.Delete(ctx, httprouteNoMatch)
 			}
 			if dashboard != nil {
-				k8sClient.Delete(ctx, dashboard)
+				_ = k8sClient.Delete(ctx, dashboard)
 			}
 			if gateway != nil {
-				k8sClient.Delete(ctx, gateway)
+				_ = k8sClient.Delete(ctx, gateway)
 			}
 		})
 
@@ -1020,7 +1022,7 @@ var _ = Describe("Filtering Controller Tests", func() {
 					return false
 				}
 				configYaml := configMap.Data["config.yml"]
-				return configYaml != "" && configYaml != "null"
+				return configYaml != "" && configYaml != nullValue
 			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
 
 			configYaml := configMap.Data["config.yml"]

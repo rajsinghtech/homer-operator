@@ -65,7 +65,7 @@ var _ = Describe("Homer Operator E2E Tests", func() {
 		err = networkingv1.AddToScheme(k8sClient.Scheme())
 		Expect(err).NotTo(HaveOccurred())
 
-		err = gatewayv1.AddToScheme(k8sClient.Scheme())
+		err = gatewayv1.Install(k8sClient.Scheme())
 		Expect(err).NotTo(HaveOccurred())
 
 		// Create test namespace

@@ -132,7 +132,7 @@ var _ = Describe("Asset Management Tests", func() {
 			// Check that the deployment has the custom assets volume
 			hasCustomAssetsVolume := false
 			for _, volume := range deployment.Spec.Template.Spec.Volumes {
-				if volume.Name == "custom-assets" && volume.ConfigMap != nil && volume.ConfigMap.Name == assetsConfigMapName {
+				if volume.Name == assetsConfigMapName && volume.ConfigMap != nil && volume.ConfigMap.Name == assetsConfigMapName {
 					hasCustomAssetsVolume = true
 					break
 				}
@@ -143,7 +143,7 @@ var _ = Describe("Asset Management Tests", func() {
 			initContainer := deployment.Spec.Template.Spec.InitContainers[0]
 			hasCustomAssetsMount := false
 			for _, mount := range initContainer.VolumeMounts {
-				if mount.Name == "custom-assets" && mount.MountPath == "/custom-assets" {
+				if mount.Name == assetsConfigMapName && mount.MountPath == "/custom-assets" {
 					hasCustomAssetsMount = true
 					break
 				}
@@ -532,7 +532,7 @@ var _ = Describe("Asset Management Tests", func() {
 			// Note: In real scenarios, cross-namespace references may require additional RBAC
 			hasCustomAssetsVolume := false
 			for _, volume := range deployment.Spec.Template.Spec.Volumes {
-				if volume.Name == "custom-assets" && volume.ConfigMap != nil && volume.ConfigMap.Name == assetsConfigMapName {
+				if volume.Name == assetsConfigMapName && volume.ConfigMap != nil && volume.ConfigMap.Name == assetsConfigMapName {
 					hasCustomAssetsVolume = true
 					break
 				}

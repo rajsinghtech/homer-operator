@@ -35,6 +35,8 @@ import (
 	"github.com/rajsinghtech/homer-operator.git/pkg/homer"
 )
 
+const nullString = "null"
+
 var _ = Describe("Edge Cases and Error Handling Tests", func() {
 	Context("When creating Dashboard with empty configuration", func() {
 		const dashboardName = "test-dashboard-empty"
@@ -288,7 +290,7 @@ var _ = Describe("Edge Cases and Error Handling Tests", func() {
 					return false
 				}
 				configYaml := configMap.Data["config.yml"]
-				return configYaml != "" && configYaml != "null"
+				return configYaml != "" && configYaml != nullString
 			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
 
 			configYaml := configMap.Data["config.yml"]
@@ -414,7 +416,7 @@ var _ = Describe("Edge Cases and Error Handling Tests", func() {
 					return false
 				}
 				configYaml := configMap.Data["config.yml"]
-				return configYaml != "" && configYaml != "null"
+				return configYaml != "" && configYaml != nullString
 			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
 
 			configYaml := configMap.Data["config.yml"]

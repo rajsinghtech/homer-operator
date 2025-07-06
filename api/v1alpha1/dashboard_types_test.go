@@ -328,7 +328,8 @@ func TestAdvancedConfigDefaults(t *testing.T) {
 
 	// Test that zero values (unlimited) are valid
 	if config.MaxServicesPerGroup == 0 && config.MaxItemsPerService == 0 {
-		// This should be valid (unlimited)
+		// This should be valid (unlimited) - test passes by not erroring
+		t.Log("Zero values are correctly treated as unlimited")
 	}
 }
 
