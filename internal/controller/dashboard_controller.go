@@ -22,8 +22,8 @@ import (
 	"strings"
 	"time"
 
-	homerv1alpha1 "github.com/rajsinghtech/homer-operator.git/api/v1alpha1"
-	homer "github.com/rajsinghtech/homer-operator.git/pkg/homer"
+	homerv1alpha1 "github.com/rajsinghtech/homer-operator/api/v1alpha1"
+	homer "github.com/rajsinghtech/homer-operator/pkg/homer"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -49,16 +49,7 @@ type DashboardReconciler struct {
 //+kubebuilder:rbac:groups=homer.rajsingh.info,resources=dashboards/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=homer.rajsingh.info,resources=dashboards/finalizers,verbs=update
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// Reconcile manages Dashboard resources by:
-// 1. Creating/updating ConfigMaps for Homer configuration
-// 2. Managing Deployment resources for Homer instances
-// 3. Creating Services for Homer deployments
-// 4. Watching for changes and updating resources accordingly
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.17.0/pkg/reconcile
+// Reconcile manages Dashboard resources and their associated Homer deployments.
 func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 	var dashboard homerv1alpha1.Dashboard
@@ -68,22 +59,22 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			log.V(1).Info("Dashboard not found - likely deleted", "dashboard", req.NamespacedName)
 			return ctrl.Result{}, nil
 		}
-		log.Error(err, "unable to fetch Dashboard", "dashboard", req.NamespacedName)
+		log.Error(err, "failed to fetch Dashboard", "dashboard", req.NamespacedName)
 		return ctrl.Result{}, err
 	}
 	// List ingresses with performance optimization - only get ones with rules
-	ingresses := &networkingv1.IngressList{}
-	if err := r.List(ctx, ingresses, client.HasLabels([]string{})); err != nil {
-		log.Error(err, "unable to list Ingresses", "dashboard", req.NamespacedName)
+	clusterIngresses := &networkingv1.IngressList{}
+	if err := r.List(ctx, clusterIngresses, client.HasLabels([]string{})); err != nil {
+		log.Error(err, "failed to list Ingresses", "dashboard", req.NamespacedName)
 		return ctrl.Result{}, err
 	}
 
 	// Filter Ingresses based on dashboard selectors
 	filteredIngresses := []networkingv1.Ingress{}
-	for _, ingress := range ingresses.Items {
+	for _, ingress := range clusterIngresses.Items {
 		shouldInclude, err := r.shouldIncludeIngressForDashboard(ctx, &ingress, &dashboard)
 		if err != nil {
-			log.Error(err, "unable to determine if Ingress should be included", "dashboard", dashboard.Name, "ingress", ingress.Name)
+			log.Error(err, "failed to filter Ingress", "dashboard", dashboard.Name, "ingress", ingress.Name)
 			return ctrl.Result{}, err
 		}
 		if shouldInclude {
@@ -104,21 +95,26 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// Resource Created - Create all resources
 	var deployment appsv1.Deployment
-	var assetsConfigMapName string
 
 	// Generate PWA manifest if enabled
 	pwaManifest := r.generatePWAManifest(&dashboard)
 
+	// Create deployment config
+	deploymentConfig := &homer.DeploymentConfig{
+		PWAManifest: pwaManifest,
+	}
+
 	// Check if custom assets are configured
 	if dashboard.Spec.Assets != nil && dashboard.Spec.Assets.ConfigMapRef != nil {
-		assetsConfigMapName = dashboard.Spec.Assets.ConfigMapRef.Name
-		deployment = homer.CreateDeploymentWithAssets(dashboard.Name, dashboard.Namespace, dashboard.Spec.Replicas, &dashboard, assetsConfigMapName, pwaManifest)
-	} else if pwaManifest != "" {
-		// PWA enabled but no custom assets ConfigMap - still need to use CreateDeploymentWithAssets for PWA
-		deployment = homer.CreateDeploymentWithAssets(dashboard.Name, dashboard.Namespace, dashboard.Spec.Replicas, &dashboard, "", pwaManifest)
-	} else {
-		deployment = homer.CreateDeployment(dashboard.Name, dashboard.Namespace, dashboard.Spec.Replicas, &dashboard)
+		deploymentConfig.AssetsConfigMapName = dashboard.Spec.Assets.ConfigMapRef.Name
 	}
+
+	// Add DNS configuration if provided
+	if dashboard.Spec.DNSPolicy != "" {
+		deploymentConfig.DNSPolicy = dashboard.Spec.DNSPolicy
+	}
+
+	deployment = homer.CreateDeployment(dashboard.Name, dashboard.Namespace, dashboard.Spec.Replicas, &dashboard, deploymentConfig)
 
 	service := homer.CreateService(dashboard.Name, dashboard.Namespace, &dashboard)
 
@@ -166,7 +162,7 @@ func (r *DashboardReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// updateConfigMapWithRetry updates a ConfigMap with exponential backoff retry on conflicts
+// updateConfigMapWithRetry updates a ConfigMap with retry on conflicts
 func (r *DashboardReconciler) updateConfigMapWithRetry(ctx context.Context, configMap *corev1.ConfigMap, dashboardName string) error {
 	log := log.FromContext(ctx)
 
@@ -174,38 +170,30 @@ func (r *DashboardReconciler) updateConfigMapWithRetry(ctx context.Context, conf
 		Steps:    5,
 		Duration: 100 * time.Millisecond,
 		Factor:   2.0,
-		Jitter:   0.1,
 		Cap:      5 * time.Second,
 	}
 
 	return wait.ExponentialBackoffWithContext(ctx, backoff, func(ctx context.Context) (bool, error) {
-		// Get the latest version of the ConfigMap before updating
-		latestConfigMap := &corev1.ConfigMap{}
+		latest := &corev1.ConfigMap{}
 		key := client.ObjectKeyFromObject(configMap)
-		if err := r.Get(ctx, key, latestConfigMap); err != nil {
+		if err := r.Get(ctx, key, latest); err != nil {
 			if apierrors.IsNotFound(err) {
-				// ConfigMap was deleted, no need to retry
 				return false, err
 			}
-			log.V(1).Info("Failed to get latest ConfigMap, retrying", "error", err)
-			return false, nil // Retry
+			return false, nil
 		}
 
-		// Copy our changes to the latest version
-		latestConfigMap.Data = configMap.Data
-		latestConfigMap.BinaryData = configMap.BinaryData
+		latest.Data = configMap.Data
+		latest.BinaryData = configMap.BinaryData
 
-		// Attempt to update
-		if err := r.Update(ctx, latestConfigMap); err != nil {
+		if err := r.Update(ctx, latest); err != nil {
 			if apierrors.IsConflict(err) {
 				log.V(1).Info("ConfigMap update conflict, retrying", "configmap", dashboardName)
-				return false, nil // Retry
+				return false, nil
 			}
-			// Non-conflict error, don't retry
 			return false, err
 		}
 
-		// Success
 		return true, nil
 	})
 }
@@ -403,18 +391,18 @@ func (r *DashboardReconciler) createConfigMapForDashboard(ctx context.Context, r
 	log := log.FromContext(ctx)
 
 	if r.EnableGatewayAPI {
-		httproutes := &gatewayv1.HTTPRouteList{}
-		if err := r.List(ctx, httproutes, client.HasLabels([]string{})); err != nil {
+		clusterHTTPRoutes := &gatewayv1.HTTPRouteList{}
+		if err := r.List(ctx, clusterHTTPRoutes, client.HasLabels([]string{})); err != nil {
 			log.Error(err, "unable to list HTTPRoutes", "dashboard", req.NamespacedName)
 			return corev1.ConfigMap{}, err
 		}
 
 		// Filter HTTPRoutes based on dashboard selectors
 		filteredHTTPRoutes := []gatewayv1.HTTPRoute{}
-		for _, httproute := range httproutes.Items {
+		for _, httproute := range clusterHTTPRoutes.Items {
 			shouldInclude, err := r.shouldIncludeHTTPRouteForDashboard(ctx, &httproute, dashboard)
 			if err != nil {
-				log.Error(err, "unable to determine if HTTPRoute should be included", "dashboard", dashboard.Name, "httproute", httproute.Name)
+				log.Error(err, "failed to filter HTTPRoute", "dashboard", dashboard.Name, "httproute", httproute.Name)
 				return corev1.ConfigMap{}, err
 			}
 			if shouldInclude {

@@ -27,16 +27,7 @@ all: build
 
 ##@ General
 
-# The help target prints out all targets with their descriptions organized
-# beneath their categories. The categories are represented by '##@' and the
-# target descriptions by '##'. The awk command is responsible for reading the
-# entire set of makefiles included in this invocation, looking for lines of the
-# file as xyz: ## something, and then pretty-format the target and help. Then,
-# if there's a line with ##@ something, that gets pretty-printed as a category.
-# More info on the usage of ANSI control characters for terminal formatting:
-# https://en.wikipedia.org/wiki/ANSI_escape_code#SGR_parameters
-# More info on the awk command:
-# http://linuxcommand.org/lc3_adv_awk.php
+# Display help for targets with ## comments
 
 .PHONY: help
 help: ## Display this help.
@@ -49,30 +40,7 @@ manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and Cust
 	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
 	@echo "Syncing CRDs to Helm chart..."
 	@mkdir -p charts/homer-operator/templates
-	@cp scripts/sync-crd-to-helm.sh /tmp/sync-crd-to-helm.sh 2>/dev/null || true
-	@if [ ! -f /tmp/sync-crd-to-helm.sh ]; then \
-		echo '#!/bin/bash' > /tmp/sync-crd-to-helm.sh; \
-		echo 'cat <<EOF' >> /tmp/sync-crd-to-helm.sh; \
-		echo '{{- if .Values.crd.create }}' >> /tmp/sync-crd-to-helm.sh; \
-		echo '---' >> /tmp/sync-crd-to-helm.sh; \
-		echo 'apiVersion: apiextensions.k8s.io/v1' >> /tmp/sync-crd-to-helm.sh; \
-		echo 'kind: CustomResourceDefinition' >> /tmp/sync-crd-to-helm.sh; \
-		echo 'metadata:' >> /tmp/sync-crd-to-helm.sh; \
-		echo '  name: dashboards.homer.rajsingh.info' >> /tmp/sync-crd-to-helm.sh; \
-		echo '  labels:' >> /tmp/sync-crd-to-helm.sh; \
-		echo '    {{- include "homer-operator.labels" . | nindent 4 }}' >> /tmp/sync-crd-to-helm.sh; \
-		echo '  annotations:' >> /tmp/sync-crd-to-helm.sh; \
-		echo '    controller-gen.kubebuilder.io/version: v0.14.0' >> /tmp/sync-crd-to-helm.sh; \
-		echo '    {{- with .Values.crd.annotations }}' >> /tmp/sync-crd-to-helm.sh; \
-		echo '    {{- toYaml . | nindent 4 }}' >> /tmp/sync-crd-to-helm.sh; \
-		echo '    {{- end }}' >> /tmp/sync-crd-to-helm.sh; \
-		echo 'spec:' >> /tmp/sync-crd-to-helm.sh; \
-		echo 'EOF' >> /tmp/sync-crd-to-helm.sh; \
-		echo 'tail -n +9 $$1 | sed "$$d"' >> /tmp/sync-crd-to-helm.sh; \
-		echo 'echo "{{- end }}"' >> /tmp/sync-crd-to-helm.sh; \
-		chmod +x /tmp/sync-crd-to-helm.sh; \
-	fi
-	@/tmp/sync-crd-to-helm.sh config/crd/bases/homer.rajsingh.info_dashboards.yaml > charts/homer-operator/templates/crd.yaml
+	@./scripts/sync-crd-to-helm.sh config/crd/bases/homer.rajsingh.info_dashboards.yaml > charts/homer-operator/templates/crd.yaml
 	@if [ -d charts/homer-operator/crds ]; then \
 		echo "Removing crds directory to use templates approach"; \
 		rm -rf charts/homer-operator/crds; \
@@ -220,13 +188,9 @@ golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
 $(GOLANGCI_LINT): $(LOCALBIN)
 	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/cmd/golangci-lint,${GOLANGCI_LINT_VERSION})
 
-# go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
-# $1 - target path with name of binary (ideally with version)
-# $2 - package url which can be installed
-# $3 - specific version of package
+# Download and install Go tools with version pinning
 define go-install-tool
 @[ -f $(1) ] || { \
-set -e; \
 package=$(2)@$(3) ;\
 echo "Downloading $${package}" ;\
 GOBIN=$(LOCALBIN) go install $${package} ;\

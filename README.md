@@ -7,42 +7,14 @@
   [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
   [![Kubernetes](https://img.shields.io/badge/Kubernetes-v1.20+-blue.svg)](https://kubernetes.io/)
 
-  **🚀 Kubernetes operator for automated Homer dashboard deployment and management**
+  **Kubernetes operator for automated Homer dashboard deployment and management**
   
   Automatically generate beautiful, dynamic dashboards from your Kubernetes Ingress and Gateway API resources.
 </div>
 
 ---
 
-## ✨ Features
-
-### 🎯 **Core Capabilities**
-- **Automatic Dashboard Generation** - Discover and display services from Ingress & HTTPRoute resources
-- **Ingress & Gateway API Compatible** - Full support for both traditional Ingress and modern Gateway API HTTPRoute
-- **Multi-tenancy Support** - Deploy multiple dashboards in the same namespace
-- **High Availability** - Configurable replicas, HPA, and Pod Disruption Budgets
-- **Production Ready** - Comprehensive Helm chart with RBAC and security contexts
-
-### 🎨 **Customization & Theming**
-- **Custom Themes** - Built-in support for `default`, `neon`, and `walkxcode` themes
-- **Custom Assets** - Upload logos, icons, and CSS via ConfigMaps
-- **Color Schemes** - Extensive light/dark theme customization
-- **PWA Support** - Progressive Web App manifests for mobile installation
-
-### 🔒 **Security & Integration**
-- **Secret Management** - Kubernetes Secret integration for API keys
-- **RBAC Ready** - Minimal required permissions with owner references
-- **Dual Networking Support** - Works with both Ingress (v1) and Gateway API HTTPRoute (v1)
-- **Annotation-driven** - Fine-grained control via Kubernetes annotations
-
-### 📊 **Operations & Monitoring**
-- **Prometheus Metrics** - Built-in monitoring and observability
-- **Health Checks** - Liveness and readiness probes
-- **OCI Registry** - Helm charts published to GitHub Container Registry
-
----
-
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 - Kubernetes cluster (v1.20+)
@@ -71,7 +43,7 @@ metadata:
 spec:
   replicas: 2
   homerConfig:
-    title: "🏠 My Dashboard"
+    title: "My Dashboard"
     subtitle: "Welcome to my services"
     theme: "default"
     header: true
@@ -94,9 +66,9 @@ kubectl port-forward svc/my-dashboard-homer 8080:80
 
 ---
 
-## 📖 Configuration Examples
+## Configuration Examples
 
-### 🎨 Themed Dashboard with PWA
+### Themed Dashboard with PWA
 
 ```yaml
 apiVersion: homer.rajsingh.info/v1alpha1
@@ -115,7 +87,7 @@ spec:
       backgroundColor: "#1b1b1b"
       display: "standalone"
   homerConfig:
-    title: "🌟 Neon Dashboard"
+    title: "Neon Dashboard"
     subtitle: "Cyberpunk vibes"
     theme: "neon"
     header: true
@@ -124,7 +96,7 @@ spec:
       colorTheme: "dark"
 ```
 
-### 🔐 Dashboard with Secret Integration
+### Dashboard with Secret Integration
 
 ```yaml
 apiVersion: v1
@@ -145,7 +117,7 @@ spec:
       name: api-keys
       key: plex-token
   homerConfig:
-    title: "📺 Media Center"
+    title: "Media Center"
     services:
       - name: "Media Services"
         items:
@@ -155,7 +127,7 @@ spec:
             # Note: Configure API key reference in smart card configuration
 ```
 
-### 🎨 Custom Assets & Styling
+### Custom Assets & Styling
 
 ```yaml
 apiVersion: v1
@@ -178,14 +150,14 @@ spec:
       favicon: "logo.png"
       appleTouchIcon: "logo.png"
   homerConfig:
-    title: "🎨 Custom Dashboard"
+    title: "Custom Dashboard"
     stylesheet:
       - "custom.css"
 ```
 
 ---
 
-## 🛠️ Advanced Configuration
+## Advanced Configuration
 
 ### Gateway API Support
 
@@ -247,7 +219,7 @@ spec:
     - "rajsingh.info"      # Both exact and subdomain matching
   
   homerConfig:
-    title: "🏭 Production Services"
+    title: "Production Services"
     subtitle: "Filtered production endpoints"
     # ... rest of config
 ```
@@ -357,7 +329,7 @@ helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/hom
 
 ---
 
-## 📊 Monitoring & Observability
+## Monitoring & Observability
 
 ### Prometheus Metrics
 
@@ -383,7 +355,7 @@ helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/hom
 
 ---
 
-## 🔄 Migration & Compatibility
+## Migration & Compatibility
 
 ### From Static Homer Configurations
 
@@ -405,11 +377,31 @@ spec:
 
 ### Ingress to Gateway API Migration
 
-The operator supports both simultaneously - migrate gradually:
+The operator supports both simultaneously for zero-downtime migration:
 
-1. **Phase 1**: Enable Gateway API alongside existing Ingress
-2. **Phase 2**: Migrate services to HTTPRoute resources  
-3. **Phase 3**: Deprecate Ingress resources
+1. **Phase 1**: Enable Gateway API
+   ```bash
+   helm upgrade homer-operator charts/homer-operator --set operator.enableGatewayAPI=true
+   ```
+
+2. **Phase 2**: Install Gateway API CRDs and create Gateway resources
+   ```bash
+   kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.0.0/standard-install.yaml
+   ```
+
+3. **Phase 3**: Migrate services to HTTPRoute resources
+   - Convert Ingress rules to HTTPRoute specs
+   - Use same label selectors and domain filters
+   - Test HTTPRoute discovery with existing dashboards
+
+4. **Phase 4**: Update Dashboard selectors and deprecate Ingress
+   ```yaml
+   spec:
+     ingressSelector: null      # Disable Ingress discovery
+     httpRouteSelector:         # Enable HTTPRoute discovery
+       matchLabels:
+         homer.rajsingh.info/enabled: "true"
+   ```
 
 ---
 
@@ -446,16 +438,14 @@ make manifests
 
 ---
 
-## 📄 License
+## License
 
 This project is licensed under the [Apache License 2.0](LICENSE).
 
 ---
 
 <div align="center">
-  
-**⭐ Star this project if you find it useful!**
 
-*Built with ❤️ using [Kubebuilder](https://kubebuilder.io/) and [Homer](https://github.com/bastienwirtz/homer)*
+*Built with love using [Kubebuilder](https://kubebuilder.io/) and [Homer](https://github.com/bastienwirtz/homer)*
 
 </div>

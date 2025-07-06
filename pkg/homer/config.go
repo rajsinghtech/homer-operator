@@ -59,44 +59,25 @@ const (
 
 // HomerConfig contains base configuration for Homer dashboard.
 type HomerConfig struct {
-	// Title to which is displayed on the dashboard.
-	Title string `json:"title,omitempty" yaml:"title,omitempty"`
-	// Subtitle
-	Subtitle string `json:"subtitle,omitempty" yaml:"subtitle,omitempty"`
-	// DocumentTitle sets the browser tab title
-	DocumentTitle string `json:"documentTitle,omitempty" yaml:"documentTitle,omitempty"`
-	// Logo used within dashboard.
-	Logo string `json:"logo,omitempty" yaml:"logo,omitempty"`
-	// Icon alternative to logo using FontAwesome classes
-	Icon string `json:"icon,omitempty" yaml:"icon,omitempty"`
-	// Header show/hide header
-	Header bool `json:"header" yaml:"header"`
-	// Footer to be displayed on the dashboard.
-	Footer string `json:"footer,omitempty" yaml:"footer,omitempty"`
-	// Columns layout configuration
-	Columns string `json:"columns,omitempty" yaml:"columns,omitempty"`
-	// ConnectivityCheck enables VPN/connectivity monitoring
-	ConnectivityCheck bool `json:"connectivityCheck,omitempty" yaml:"connectivityCheck,omitempty"`
-	// Hotkey configuration
-	Hotkey HotkeyConfig `json:"hotkey,omitempty" yaml:"hotkey,omitempty"`
-	// Theme name from themes directory
-	Theme string `json:"theme,omitempty" yaml:"theme,omitempty"`
-	// Stylesheet additional CSS files
-	Stylesheet []string `json:"stylesheet,omitempty" yaml:"stylesheet,omitempty"`
-	// Colors extensive color scheme support
-	Colors ColorConfig `json:"colors,omitempty" yaml:"colors,omitempty"`
-	// Defaults are your default settings for the dashboard.
-	Defaults DefaultConfig `json:"defaults,omitempty" yaml:"defaults,omitempty"`
-	// Proxy configuration
-	Proxy ProxyConfig `json:"proxy,omitempty" yaml:"proxy,omitempty"`
-	// Message dynamic message support
-	Message MessageConfig `json:"message,omitempty" yaml:"message,omitempty"`
-	// Links contains any additional links (static) to be displayed on the dashboard.
-	Links []Link `json:"links,omitempty" yaml:"links,omitempty"`
-	// List of Services to be displayed on the dashboard.
-	Services []Service `json:"services,omitempty" yaml:"services,omitempty"`
-	// ExternalConfig URL to load config from external source
-	ExternalConfig string `json:"externalConfig,omitempty" yaml:"externalConfig,omitempty"`
+	Title             string        `json:"title,omitempty" yaml:"title,omitempty"`
+	Subtitle          string        `json:"subtitle,omitempty" yaml:"subtitle,omitempty"`
+	DocumentTitle     string        `json:"documentTitle,omitempty" yaml:"documentTitle,omitempty"`
+	Logo              string        `json:"logo,omitempty" yaml:"logo,omitempty"`
+	Icon              string        `json:"icon,omitempty" yaml:"icon,omitempty"`
+	Header            bool          `json:"header" yaml:"header"`
+	Footer            string        `json:"footer,omitempty" yaml:"footer,omitempty"`
+	Columns           string        `json:"columns,omitempty" yaml:"columns,omitempty"`
+	ConnectivityCheck bool          `json:"connectivityCheck,omitempty" yaml:"connectivityCheck,omitempty"`
+	Hotkey            HotkeyConfig  `json:"hotkey,omitempty" yaml:"hotkey,omitempty"`
+	Theme             string        `json:"theme,omitempty" yaml:"theme,omitempty"`
+	Stylesheet        []string      `json:"stylesheet,omitempty" yaml:"stylesheet,omitempty"`
+	Colors            ColorConfig   `json:"colors,omitempty" yaml:"colors,omitempty"`
+	Defaults          DefaultConfig `json:"defaults,omitempty" yaml:"defaults,omitempty"`
+	Proxy             ProxyConfig   `json:"proxy,omitempty" yaml:"proxy,omitempty"`
+	Message           MessageConfig `json:"message,omitempty" yaml:"message,omitempty"`
+	Links             []Link        `json:"links,omitempty" yaml:"links,omitempty"`
+	Services          []Service     `json:"services,omitempty" yaml:"services,omitempty"`
+	ExternalConfig    string        `json:"externalConfig,omitempty" yaml:"externalConfig,omitempty"`
 }
 
 // ProxyConfig contains configuration for proxy settings.
@@ -197,8 +178,8 @@ type MessageConfig struct {
 	Content         string            `json:"content,omitempty"`
 }
 
-// LoadConfigFromFile loads HomerConfig from a YAML file.
-func LoadConfigFromFile(filename string) (*HomerConfig, error) {
+// LoadHomerConfigFromFile loads HomerConfig from a YAML file.
+func LoadHomerConfigFromFile(filename string) (*HomerConfig, error) {
 	config := HomerConfig{}
 	data, err := os.ReadFile(filename)
 	if err != nil {
@@ -262,12 +243,12 @@ func CreateConfigMapWithHTTPRoutes(
 	owner client.Object,
 	domainFilters []string,
 ) corev1.ConfigMap {
-	return CreateConfigMapWithHTTPRoutesAndAggregation(
+	return createConfigMapWithHTTPRoutesAndHealth(
 		config, name, namespace, ingresses, httproutes, owner, domainFilters, nil)
 }
 
-// CreateConfigMapWithHTTPRoutesAndAggregation creates a ConfigMap with advanced aggregation features
-func CreateConfigMapWithHTTPRoutesAndAggregation(
+// createConfigMapWithHTTPRoutesAndHealth creates a ConfigMap with advanced aggregation features
+func createConfigMapWithHTTPRoutesAndHealth(
 	config *HomerConfig,
 	name string,
 	namespace string,
@@ -318,12 +299,96 @@ func CreateConfigMapWithHTTPRoutesAndAggregation(
 	return *cm
 }
 
-func CreateDeployment(name string, namespace string, replicas *int32, owner client.Object) appsv1.Deployment {
+// DeploymentConfig contains all configuration options for creating a Homer deployment
+type DeploymentConfig struct {
+	AssetsConfigMapName string
+	PWAManifest         string
+	DNSPolicy           string
+	DNSConfig           string
+}
+
+// CreateDeployment creates a Homer deployment with all optional configuration
+func CreateDeployment(
+	name string, namespace string, replicas *int32, owner client.Object, config *DeploymentConfig,
+) appsv1.Deployment {
+	if config == nil {
+		config = &DeploymentConfig{}
+	}
+	return createDeploymentInternal(name, namespace, replicas, owner, config)
+}
+
+func createDeploymentInternal(
+	name string, namespace string, replicas *int32, owner client.Object, config *DeploymentConfig,
+) appsv1.Deployment {
 	var defaultReplicas int32 = 1
 	if replicas == nil {
 		replicas = &defaultReplicas
 	}
 	image := "b4bz/homer"
+
+	// Base volumes
+	volumes := []corev1.Volume{
+		{
+			Name: "config-volume",
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: name + "-homer",
+					},
+				},
+			},
+		},
+		{
+			Name: "assets-volume",
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		},
+	}
+
+	// Base volume mounts for init container
+	initVolumeMounts := []corev1.VolumeMount{
+		{
+			Name:      "config-volume",
+			MountPath: "/config",
+		},
+		{
+			Name:      "assets-volume",
+			MountPath: "/www/assets",
+		},
+	}
+
+	// Base init command
+	initCommand := "cp /config/config.yml /www/assets/config.yml"
+
+	// If custom assets ConfigMap is provided, add it as a volume and copy assets
+	if config.AssetsConfigMapName != "" {
+		volumes = append(volumes, corev1.Volume{
+			Name: config.AssetsConfigMapName,
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: config.AssetsConfigMapName,
+					},
+				},
+			},
+		})
+
+		initVolumeMounts = append(initVolumeMounts, corev1.VolumeMount{
+			Name:      config.AssetsConfigMapName,
+			MountPath: "/custom-assets",
+		})
+
+		// Update init command to also copy custom assets
+		initCommand = "cp /config/config.yml /www/assets/config.yml && " +
+			"cp -r /custom-assets/* /www/assets/ 2>/dev/null || true"
+	}
+
+	// Add PWA manifest creation if provided
+	if config.PWAManifest != "" {
+		initCommand += " && cat > /www/assets/manifest.json << 'EOF'\n" + config.PWAManifest + "\nEOF"
+	}
+
 	d := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name + "-homer",
@@ -364,7 +429,7 @@ func CreateDeployment(name string, namespace string, replicas *int32, owner clie
 							Command: []string{
 								"sh",
 								"-c",
-								"cp /config/config.yml /www/assets/config.yml",
+								initCommand,
 							},
 							SecurityContext: &corev1.SecurityContext{
 								AllowPrivilegeEscalation: &[]bool{false}[0],
@@ -378,16 +443,7 @@ func CreateDeployment(name string, namespace string, replicas *int32, owner clie
 									Type: corev1.SeccompProfileTypeRuntimeDefault,
 								},
 							},
-							VolumeMounts: []corev1.VolumeMount{
-								{
-									Name:      "config-volume",
-									MountPath: "/config",
-								},
-								{
-									Name:      "assets-volume",
-									MountPath: "/www/assets",
-								},
-							},
+							VolumeMounts: initVolumeMounts,
 						},
 					},
 					Containers: []corev1.Container{
@@ -433,29 +489,52 @@ func CreateDeployment(name string, namespace string, replicas *int32, owner clie
 							},
 						},
 					},
-					Volumes: []corev1.Volume{
-						{
-							Name: "config-volume",
-							VolumeSource: corev1.VolumeSource{
-								ConfigMap: &corev1.ConfigMapVolumeSource{
-									LocalObjectReference: corev1.LocalObjectReference{
-										Name: name + "-homer",
-									},
-								},
-							},
-						},
-						{
-							Name: "assets-volume",
-							VolumeSource: corev1.VolumeSource{
-								EmptyDir: &corev1.EmptyDirVolumeSource{},
-							},
-						},
-					},
+					Volumes: volumes,
 				},
 			},
 		},
 	}
+
+	// Add DNS configuration if provided
+	if config.DNSPolicy != "" {
+		d.Spec.Template.Spec.DNSPolicy = corev1.DNSPolicy(config.DNSPolicy)
+	}
+	// DNSConfig would require JSON parsing if needed
+	// For now, skipping complex DNS config parsing
+
 	return *d
+}
+
+// CreateDeploymentWithAssets creates a Deployment with custom asset support and PWA manifest
+func CreateDeploymentWithAssets(
+	name string,
+	namespace string,
+	replicas *int32,
+	owner client.Object,
+	assetsConfigMapName string,
+	pwaManifest string,
+) appsv1.Deployment {
+	return CreateDeployment(name, namespace, replicas, owner, &DeploymentConfig{
+		AssetsConfigMapName: assetsConfigMapName,
+		PWAManifest:         pwaManifest,
+	})
+}
+
+// CreateDeploymentWithDNS creates a Deployment with DNS configuration
+func CreateDeploymentWithDNS(
+	name string,
+	namespace string,
+	replicas *int32,
+	owner client.Object,
+	dnsPolicy *corev1.DNSPolicy,
+	dnsConfig *corev1.PodDNSConfig,
+) appsv1.Deployment {
+	config := &DeploymentConfig{}
+	if dnsPolicy != nil {
+		config.DNSPolicy = string(*dnsPolicy)
+	}
+	// Note: DNSConfig is complex and would require JSON serialization for full support
+	return CreateDeployment(name, namespace, replicas, owner, config)
 }
 
 // ValidateTheme validates that the theme name is supported by Homer
@@ -605,195 +684,6 @@ func truncateString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
-}
-
-// CreateDeploymentWithAssets creates a Deployment with custom asset support and PWA manifest
-func CreateDeploymentWithAssets(
-	name string,
-	namespace string,
-	replicas *int32,
-	owner client.Object,
-	assetsConfigMapName string,
-	pwaManifest string,
-) appsv1.Deployment {
-	var defaultReplicas int32 = 1
-	if replicas == nil {
-		replicas = &defaultReplicas
-	}
-	image := "b4bz/homer"
-
-	// Base volumes
-	volumes := []corev1.Volume{
-		{
-			Name: "config-volume",
-			VolumeSource: corev1.VolumeSource{
-				ConfigMap: &corev1.ConfigMapVolumeSource{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: name + "-homer",
-					},
-				},
-			},
-		},
-		{
-			Name: "assets-volume",
-			VolumeSource: corev1.VolumeSource{
-				EmptyDir: &corev1.EmptyDirVolumeSource{},
-			},
-		},
-	}
-
-	// Base volume mounts for init container
-	initVolumeMounts := []corev1.VolumeMount{
-		{
-			Name:      "config-volume",
-			MountPath: "/config",
-		},
-		{
-			Name:      "assets-volume",
-			MountPath: "/www/assets",
-		},
-	}
-
-	// Base init command
-	initCommand := "cp /config/config.yml /www/assets/config.yml"
-
-	// If custom assets ConfigMap is provided, add it as a volume and copy assets
-	if assetsConfigMapName != "" {
-		volumes = append(volumes, corev1.Volume{
-			Name: assetsConfigMapName,
-			VolumeSource: corev1.VolumeSource{
-				ConfigMap: &corev1.ConfigMapVolumeSource{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: assetsConfigMapName,
-					},
-				},
-			},
-		})
-
-		initVolumeMounts = append(initVolumeMounts, corev1.VolumeMount{
-			Name:      assetsConfigMapName,
-			MountPath: "/custom-assets",
-		})
-
-		// Update init command to also copy custom assets
-		initCommand = "cp /config/config.yml /www/assets/config.yml && " +
-			"cp -r /custom-assets/* /www/assets/ 2>/dev/null || true"
-	}
-
-	// Add PWA manifest creation if provided
-	if pwaManifest != "" {
-		initCommand += " && cat > /www/assets/manifest.json << 'EOF'\n" + pwaManifest + "\nEOF"
-	}
-
-	// Complete init command (FSGroup handles permissions)
-	// No chmod needed - FSGroup=1000 ensures proper volume permissions
-
-	d := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name + "-homer",
-			Namespace: namespace,
-			Labels: map[string]string{
-				"managed-by":                         "homer-operator",
-				"dashboard.homer.rajsingh.info/name": name,
-			},
-			OwnerReferences: getOwnerReferences(owner),
-		},
-		Spec: appsv1.DeploymentSpec{
-			Replicas: replicas,
-			Selector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{
-					"dashboard.homer.rajsingh.info/name": name,
-				},
-			},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						"dashboard.homer.rajsingh.info/name": name,
-					},
-				},
-				Spec: corev1.PodSpec{
-					SecurityContext: &corev1.PodSecurityContext{
-						RunAsNonRoot: &[]bool{true}[0],
-						RunAsUser:    &[]int64{1000}[0],
-						RunAsGroup:   &[]int64{1000}[0],
-						FSGroup:      &[]int64{1000}[0],
-						SeccompProfile: &corev1.SeccompProfile{
-							Type: corev1.SeccompProfileTypeRuntimeDefault,
-						},
-					},
-					InitContainers: []corev1.Container{
-						{
-							Name:  "init-assets",
-							Image: "busybox:1.35",
-							Command: []string{
-								"sh",
-								"-c",
-								initCommand,
-							},
-							SecurityContext: &corev1.SecurityContext{
-								AllowPrivilegeEscalation: &[]bool{false}[0],
-								RunAsNonRoot:             &[]bool{true}[0],
-								RunAsUser:                &[]int64{1000}[0],
-								RunAsGroup:               &[]int64{1000}[0],
-								Capabilities: &corev1.Capabilities{
-									Drop: []corev1.Capability{"ALL"},
-								},
-								SeccompProfile: &corev1.SeccompProfile{
-									Type: corev1.SeccompProfileTypeRuntimeDefault,
-								},
-							},
-							VolumeMounts: initVolumeMounts,
-						},
-					},
-					Containers: []corev1.Container{
-						{
-							Name:  name,
-							Image: image,
-							SecurityContext: &corev1.SecurityContext{
-								AllowPrivilegeEscalation: &[]bool{false}[0],
-								RunAsNonRoot:             &[]bool{true}[0],
-								RunAsUser:                &[]int64{1000}[0],
-								RunAsGroup:               &[]int64{1000}[0],
-								Capabilities: &corev1.Capabilities{
-									Drop: []corev1.Capability{"ALL"},
-								},
-								SeccompProfile: &corev1.SeccompProfile{
-									Type: corev1.SeccompProfileTypeRuntimeDefault,
-								},
-							},
-							VolumeMounts: []corev1.VolumeMount{
-								{
-									Name:      "assets-volume",
-									MountPath: "/www/assets",
-								},
-							},
-							Ports: []corev1.ContainerPort{
-								{
-									ContainerPort: 8080,
-								},
-							},
-							Env: []corev1.EnvVar{
-								{
-									Name:  "INIT_ASSETS",
-									Value: "1",
-								},
-								{
-									Name:  "PORT",
-									Value: "8080",
-								},
-								{
-									Name:  "IPV6_DISABLE",
-									Value: "0",
-								},
-							},
-						},
-					},
-					Volumes: volumes,
-				},
-			},
-		},
-	}
-	return *d
 }
 
 func CreateService(name string, namespace string, owner client.Object) corev1.Service {
@@ -980,11 +870,11 @@ func UpdateConfigMapIngress(cm *corev1.ConfigMap, ingress networkingv1.Ingress, 
 
 // UpdateHomerConfigHTTPRoute updates the HomerConfig with HTTPRoute information
 func UpdateHomerConfigHTTPRoute(homerConfig *HomerConfig, httproute *gatewayv1.HTTPRoute, domainFilters []string) {
-	UpdateHomerConfigHTTPRouteWithGrouping(homerConfig, httproute, domainFilters, nil)
+	updateHomerConfigWithHTTPRoutes(homerConfig, httproute, domainFilters, nil)
 }
 
 // UpdateHomerConfigHTTPRouteWithGrouping updates Homer config with custom grouping strategy
-func UpdateHomerConfigHTTPRouteWithGrouping(
+func updateHomerConfigWithHTTPRoutes(
 	homerConfig *HomerConfig,
 	httproute *gatewayv1.HTTPRoute,
 	domainFilters []string,
@@ -1546,12 +1436,8 @@ func isValidColor(color string) bool {
 		return true
 	}
 
-	// Check for rgb/rgba format (basic check)
-	if strings.HasPrefix(strings.ToLower(color), "rgb") {
-		return true
-	}
-
-	return false
+	// Check for rgb/rgba format
+	return strings.HasPrefix(strings.ToLower(color), "rgb")
 }
 
 // isValidURL checks if a URL string has basic valid format

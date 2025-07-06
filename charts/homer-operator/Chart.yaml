@@ -1,9 +1,9 @@
 apiVersion: v2
 name: homer-operator
-description: A Helm chart for Homer Operator - Kubernetes operator for managing Homer dashboard instances
+description: Kubernetes operator for automated Homer dashboard deployment with service discovery
 type: application
 version: 0.1.0
-appVersion: "latest"
+appVersion: "0.1.0"
 home: https://github.com/rajsinghtech/homer-operator
 sources:
   - https://github.com/rajsinghtech/homer-operator
@@ -14,8 +14,10 @@ keywords:
   - homer
   - operator
   - dashboard
-  - kubernetes
   - service-discovery
+  - ingress
+  - gateway-api
+  - monitoring
 annotations:
   category: Monitoring
   licenses: Apache-2.0

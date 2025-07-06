@@ -24,30 +24,8 @@
   },
   "packageRules": [
     {
-      "matchManagers": ["gomod"],
-      "groupName": "Go dependencies",
-      "schedule": ["before 6am on Monday"]
-    },
-    {
-      "matchManagers": ["dockerfile"],
-      "groupName": "Docker base images",
-      "schedule": ["before 6am on Monday"]
-    },
-    {
-      "matchManagers": ["helmv3"],
-      "groupName": "Helm chart dependencies",
-      "schedule": ["before 6am on Monday"]
-    },
-    {
       "matchDepTypes": ["major"],
       "dependencyDashboardApproval": true
     }
-  ],
-  "vulnerabilityAlerts": {
-    "enabled": true,
-    "schedule": ["at any time"]
-  },
-  "stabilityDays": 3,
-  "prHourlyLimit": 2,
-  "prConcurrentLimit": 5
+  ]
 }

@@ -1,0 +1,94 @@
+---
+# Secret containing API keys for smart card services
+apiVersion: v1
+kind: Secret
+metadata:
+  name: homer-smart-card-secrets
+  namespace: homer-test
+type: Opaque
+stringData:
+  # API keys for various smart card services
+  emby-api-key: "emby-secret-api-key-12345"
+  pihole-api-key: "pihole-secret-api-key-67890"
+  portainer-api-key: "portainer-secret-api-key-abcde"
+  tautulli-api-key: "tautulli-secret-api-key-fghij"
+  homeassistant-token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.example.token"
+
+---
+# Dashboard with smart card services using Secret references
+apiVersion: homer.rajsingh.info/v1alpha1
+kind: Dashboard
+metadata:
+  name: dashboard-smart-cards
+  namespace: homer-test
+spec:
+  replicas: 1
+  secrets:
+    apiKey:
+      name: homer-smart-card-secrets
+      key: emby-api-key  # Default API key for items that don't specify their own
+  homerConfig:
+    title: "Smart Card Dashboard"
+    subtitle: "Testing Smart Cards with Secret Management"
+    documentTitle: "Smart Card Security Test"
+    header: true
+    footer: '<p>Smart cards with secure API key management!</p>'
+    theme: "default"
+    defaults:
+      layout: "columns"
+      colorTheme: "auto"
+    columns: "2"
+    services:
+      - name: "Secure Smart Cards"
+        icon: "fas fa-shield-alt"
+        items:
+          # Emby smart card - will use the default API key from secrets.apiKey
+          - name: "Emby Server"
+            type: "Emby"
+            subtitle: "Media server with API key from Secret"
+            url: "http://emby.example.com:8096"
+            icon: "fas fa-play-circle"
+            tag: "media"
+            tagstyle: "is-primary"
+            
+          # PiHole smart card - demonstrates service-specific configuration
+          # Note: In a real implementation, we'd need service-specific secret resolution
+          - name: "Pi-hole"
+            type: "PiHole"
+            subtitle: "DNS sinkhole (API key in description for demo)"
+            url: "http://pihole.example.com"
+            icon: "fas fa-shield-alt"
+            tag: "network"
+            tagstyle: "is-info"
+            # apikey would be resolved from homer-smart-card-secrets:pihole-api-key
+            
+          # Home Assistant smart card
+          - name: "Home Assistant"
+            type: "HomeAssistant"
+            subtitle: "Home automation platform"
+            url: "http://homeassistant.example.com:8123"
+            icon: "fas fa-home"
+            tag: "automation"
+            tagstyle: "is-success"
+            # Long-lived access token would be resolved from Secret
+            
+      - name: "Monitoring Services"
+        icon: "fas fa-chart-line"
+        items:
+          # Tautulli smart card
+          - name: "Tautulli"
+            type: "Tautulli"
+            subtitle: "Plex monitoring with secure API"
+            url: "http://tautulli.example.com:8181"
+            icon: "fas fa-chart-bar"
+            tag: "monitoring"
+            tagstyle: "is-warning"
+            
+          # Portainer smart card
+          - name: "Portainer"
+            type: "Portainer"
+            subtitle: "Container management"
+            url: "http://portainer.example.com:9000"
+            icon: "fab fa-docker"
+            tag: "containers"
+            tagstyle: "is-link"

@@ -3,7 +3,7 @@ package v1alpha1
 import (
 	"testing"
 
-	homer "github.com/rajsinghtech/homer-operator.git/pkg/homer"
+	homer "github.com/rajsinghtech/homer-operator/pkg/homer"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 

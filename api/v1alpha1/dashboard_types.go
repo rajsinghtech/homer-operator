@@ -17,17 +17,12 @@ limitations under the License.
 package v1alpha1
 
 import (
-	homer "github.com/rajsinghtech/homer-operator.git/pkg/homer"
+	homer "github.com/rajsinghtech/homer-operator/pkg/homer"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
 // DashboardSpec defines the desired state of Dashboard
 type DashboardSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of dashboard
-	// Important: Run "make" to regenerate code after modifying this file
 
 	// ConfigMap is where you want said homer configuration stored.
 	ConfigMap ConfigMap `json:"configMap,omitempty"`
@@ -39,6 +34,16 @@ type DashboardSpec struct {
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:default=1
 	Replicas *int32 `json:"replicas,omitempty"`
+
+	// DNSPolicy defines the DNS policy for the Homer dashboard deployment pods.
+	// +kubebuilder:validation:Enum=ClusterFirst;ClusterFirstWithHostNet;Default;None
+	// +kubebuilder:default="ClusterFirst"
+	DNSPolicy string `json:"dnsPolicy,omitempty"`
+
+	// DNSConfig defines the DNS parameters for the Homer dashboard deployment pods.
+	// Only applicable when DNSPolicy is set to "None".
+	// This field accepts a JSON string representation of PodDNSConfig
+	DNSConfig string `json:"dnsConfig,omitempty"`
 
 	// Assets configures custom assets (logos, icons, CSS) for the dashboard.
 	Assets *AssetsConfig `json:"assets,omitempty"`
@@ -80,8 +85,6 @@ type DashboardSpec struct {
 
 // DashboardStatus defines the observed state of Dashboard
 type DashboardStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
 }
 
 //+kubebuilder:object:root=true

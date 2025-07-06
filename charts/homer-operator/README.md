@@ -129,30 +129,11 @@ spec:
 
 ### Namespace Creation Issues
 
-If you encounter the error `namespaces 'homer-operator' not found` when running:
+If you encounter `namespaces 'homer-operator' not found`, add the `--create-namespace` flag:
 
-```bash
-helm upgrade --install homer-operator charts/homer-operator -n homer-operator
-```
-
-This is because Helm tries to install into the `homer-operator` namespace before the chart can create it. Use one of these solutions:
-
-**Solution 1: Use --create-namespace flag (Recommended)**
 ```bash
 helm upgrade --install homer-operator charts/homer-operator -n homer-operator --create-namespace
 ```
-
-**Solution 2: Create namespace manually first**
-```bash
-kubectl create namespace homer-operator
-helm upgrade --install homer-operator charts/homer-operator -n homer-operator
-```
-
-**Solution 3: Install to default namespace**
-```bash
-helm upgrade --install homer-operator charts/homer-operator
-```
-Note: This installs the operator to the default namespace but still creates the `homer-operator` namespace for the operator's resources.
 
 ## Gateway API Support
 

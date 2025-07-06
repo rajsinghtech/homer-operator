@@ -32,8 +32,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
-	homerv1alpha1 "github.com/rajsinghtech/homer-operator.git/api/v1alpha1"
-	"github.com/rajsinghtech/homer-operator.git/pkg/homer"
+	homerv1alpha1 "github.com/rajsinghtech/homer-operator/api/v1alpha1"
+	"github.com/rajsinghtech/homer-operator/pkg/homer"
 )
 
 // HTTPRouteReconciler reconciles a HTTPRoute object

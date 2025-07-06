@@ -80,8 +80,8 @@ spec:
         {{- end }}
       {{- if .Values.operator.metrics.enabled }}
       - name: kube-rbac-proxy
-        image: gcr.io/kubebuilder/kube-rbac-proxy:v0.15.0
-        imagePullPolicy: Always
+        image: {{ .Values.operator.metrics.rbacProxy.image.repository }}:{{ .Values.operator.metrics.rbacProxy.image.tag }}
+        imagePullPolicy: {{ .Values.operator.metrics.rbacProxy.image.pullPolicy }}
         args:
         - --secure-listen-address=0.0.0.0:8443
         - --upstream=http://127.0.0.1:8080/
@@ -91,12 +91,7 @@ spec:
           name: https
           protocol: TCP
         resources:
-          limits:
-            cpu: 500m
-            memory: 128Mi
-          requests:
-            cpu: 5m
-            memory: 64Mi
+          {{- toYaml .Values.operator.metrics.rbacProxy.resources | nindent 10 }}
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true

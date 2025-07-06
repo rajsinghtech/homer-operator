@@ -21,8 +21,8 @@ import (
 	"strings"
 	"time"
 
-	homerv1alpha1 "github.com/rajsinghtech/homer-operator.git/api/v1alpha1"
-	homer "github.com/rajsinghtech/homer-operator.git/pkg/homer"
+	homerv1alpha1 "github.com/rajsinghtech/homer-operator/api/v1alpha1"
+	homer "github.com/rajsinghtech/homer-operator/pkg/homer"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -65,10 +65,10 @@ func (r *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			return ctrl.Result{}, client.IgnoreNotFound(err)
 		}
 	}
-	dashboardList, error := getAllDashboard(ctx, r)
-	if error != nil {
-		log.Error(error, "unable to fetch DashboardList")
-		return ctrl.Result{}, error
+	dashboardList, err := getAllDashboard(ctx, r)
+	if err != nil {
+		log.Error(err, "unable to fetch DashboardList")
+		return ctrl.Result{}, err
 	}
 	for _, dashboard := range dashboardList.Items {
 		// Check if dashboard annotations are a subset of the ingress annotations
@@ -173,11 +173,11 @@ func (r *IngressReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 func getAllDashboard(ctx context.Context, r *IngressReconciler) (*homerv1alpha1.DashboardList, error) {
-	var dashboardList homerv1alpha1.DashboardList
-	if err := r.List(ctx, &dashboardList); err != nil {
+	var clusterDashboards homerv1alpha1.DashboardList
+	if err := r.List(ctx, &clusterDashboards); err != nil {
 		return nil, err
 	}
-	return &dashboardList, nil
+	return &clusterDashboards, nil
 }
 
 // updateConfigMapWithRetry updates a ConfigMap with exponential backoff retry on conflicts

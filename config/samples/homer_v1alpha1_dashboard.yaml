@@ -7,8 +7,6 @@ metadata:
     tier: frontend
 spec:
   replicas: 2
-  
-  # Enhanced Homer Configuration with supported features
   homerConfig:
     title: "Raj Singh's"
     subtitle: "Infrastructure Dashboard"
@@ -46,7 +44,7 @@ spec:
         subtitle: "Cluster Management"
         tag: "k8s"
         tagstyle: "is-info"
-        url: "https://kubernetes.example.com"
+        url: "https://kubernetes.rajsingh.info/dashboard"
         target: "_blank"
         keywords: "kubernetes cluster management"
       - name: "Grafana"
@@ -54,7 +52,7 @@ spec:
         subtitle: "Monitoring & Dashboards"
         tag: "monitoring"
         tagstyle: "is-warning"
-        url: "https://grafana.example.com"
+        url: "https://grafana.rajsingh.info"
         target: "_blank"
         type: "Grafana"
       - name: "Prometheus"
@@ -62,7 +60,7 @@ spec:
         subtitle: "Metrics Collection"
         tag: "metrics"
         tagstyle: "is-danger"
-        url: "https://prometheus.example.com"
+        url: "https://prometheus.rajsingh.info"
         target: "_blank"
         type: "Prometheus"
     
@@ -70,54 +68,26 @@ spec:
       icon: "fas fa-code"
       items:
       - name: "Kubernetes Manifests"
-        logo: "https://containerone.net/cdn/shop/articles/iStock-1284852950_2000x.jpg?v=1618859184"
+        logo: "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/resources/labeled/deploy-128.png"
         subtitle: "GitOps Repository"
         tag: "git"
         tagstyle: "is-primary"
         url: "https://github.com/rajsinghtech/kubernetes-manifests"
         target: "_blank"
   
-  # Custom assets configuration (requires external ConfigMap)
+  # Optional: Custom assets and PWA configuration
   # assets:
   #   configMapRef:
   #     name: "dashboard-assets"
-  #     namespace: "default"
-  #   icons:
-  #     favicon: "custom-favicon.ico"
-  #     appleTouchIcon: "custom-apple-touch-icon.png"
-  #     pwaIcon192: "custom-pwa-192.png"
-  #     pwaIcon512: "custom-pwa-512.png"
   #   pwa:
   #     enabled: true
-  #     name: "Homer Enterprise Dashboard"
-  #     shortName: "Homer"
-  #     description: "Enterprise service discovery and monitoring dashboard"
-  #     themeColor: "#3367d6"
-  #     backgroundColor: "#ffffff"
-  #     display: "standalone"
-  #     startUrl: "/"
+  #     name: "Homer Dashboard"
   
-  # Smart card secrets for sensitive data (requires external Secret)
+  # Optional: Secret references for smart cards
   # secrets:
   #   apiKey:
   #     name: "dashboard-secrets"
   #     key: "api-key"
-  #   token:
-  #     name: "dashboard-secrets"
-  #     key: "auth-token"
-  #   password:
-  #     name: "dashboard-secrets"
-  #     key: "password"
-  #   username:
-  #     name: "dashboard-secrets"
-  #     key: "username"
-  #   headers:
-  #     "X-API-Key":
-  #       name: "dashboard-secrets"
-  #       key: "custom-api-key"
-  #     "Authorization":
-  #       name: "dashboard-secrets"
-  #       key: "bearer-token"
   
   # Optional selectors and filters for controlling which resources are included
   

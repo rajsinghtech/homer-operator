@@ -1,0 +1,19 @@
+---
+# Test dashboard with invalid theme (should fail validation)
+apiVersion: homer.rajsingh.info/v1alpha1
+kind: Dashboard
+metadata:
+  name: dashboard-invalid-theme
+  namespace: homer-test
+spec:
+  replicas: 1
+  homerConfig:
+    title: "Invalid Theme Dashboard"
+    subtitle: "This should fail validation"
+    header: true  # Required field
+    theme: "nonexistent-theme"  # This should cause validation error
+    services:
+      - name: "Test Services"
+        items:
+          - name: "Test Service"
+            url: "https://example.com"
