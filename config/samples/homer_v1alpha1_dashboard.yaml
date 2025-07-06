@@ -150,7 +150,7 @@ spec:
   #   - "mycompany.com"
   #   - "internal.local"
 
-  # ConfigMap for Homer configuration
-  # configMap:
-  #   name: "dashboard-sample-homer-config"
-  #   key: "config.yml" 
+  ConfigMap for Homer configuration
+  configMap:
+    name: "dashboard-sample-homer-config"
+    key: "config.yml" 

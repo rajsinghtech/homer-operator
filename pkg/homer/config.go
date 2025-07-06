@@ -379,7 +379,7 @@ func createDeploymentInternal(
 			MountPath: "/custom-assets",
 		})
 
-		// Update init command to also copy custom assets (dereference symlinks to copy actual files)
+		// Update init command to also copy custom assets
 		initCommand = "cp /config/config.yml /www/assets/config.yml && " +
 			"cp -rL /custom-assets/* /www/assets/ 2>/dev/null || true"
 	}

@@ -152,7 +152,7 @@ var _ = Describe("Asset Management Tests", func() {
 
 			// Check that init command includes custom assets copying
 			initCommand := initContainer.Command[2] // sh -c "command"
-			Expect(initCommand).To(ContainSubstring("cp -r /custom-assets/* /www/assets/"))
+			Expect(initCommand).To(ContainSubstring("cp -rL /custom-assets/* /www/assets/"))
 		})
 	})
 
