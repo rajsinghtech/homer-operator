@@ -51,6 +51,14 @@ type DashboardReconciler struct {
 //+kubebuilder:rbac:groups=homer.rajsingh.info,resources=dashboards,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=homer.rajsingh.info,resources=dashboards/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=homer.rajsingh.info,resources=dashboards/finalizers,verbs=update
+//+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=apps,resources=deployments/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups="",resources=services/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups="",resources=configmaps/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
+//+kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
 
 // Reconcile manages Dashboard resources and their associated Homer deployments.
 func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -107,9 +115,30 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		PWAManifest: pwaManifest,
 	}
 
-	// Check if custom assets are configured
+	// Check if custom assets are configured and actually needed
+	// Only mount assets ConfigMap if PWA is enabled or custom icons are specified
 	if dashboard.Spec.Assets != nil && dashboard.Spec.Assets.ConfigMapRef != nil {
-		deploymentConfig.AssetsConfigMapName = dashboard.Spec.Assets.ConfigMapRef.Name
+		assetsNeeded := false
+		
+		// Check if PWA is enabled
+		if dashboard.Spec.Assets.PWA != nil && dashboard.Spec.Assets.PWA.Enabled {
+			assetsNeeded = true
+		}
+		
+		// Check if custom icons are specified
+		if dashboard.Spec.Assets.Icons != nil {
+			if dashboard.Spec.Assets.Icons.Favicon != "" ||
+				dashboard.Spec.Assets.Icons.AppleTouchIcon != "" ||
+				dashboard.Spec.Assets.Icons.PWAIcon192 != "" ||
+				dashboard.Spec.Assets.Icons.PWAIcon512 != "" {
+				assetsNeeded = true
+			}
+		}
+		
+		// Only set assets ConfigMap name if assets are actually needed
+		if assetsNeeded {
+			deploymentConfig.AssetsConfigMapName = dashboard.Spec.Assets.ConfigMapRef.Name
+		}
 	}
 
 	// Add DNS configuration if provided
@@ -509,15 +538,18 @@ func (r *DashboardReconciler) getExternalHomerConfig(ctx context.Context, dashbo
 		key = "config.yml"
 	}
 
+	// External ConfigMap is always in the same namespace as the Dashboard
+	namespace := dashboard.Namespace
+
 	// Retrieve the external ConfigMap
 	externalConfigMap := &corev1.ConfigMap{}
 	err := r.Get(ctx, client.ObjectKey{
 		Name:      dashboard.Spec.ConfigMap.Name,
-		Namespace: dashboard.Namespace,
+		Namespace: namespace,
 	}, externalConfigMap)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, fmt.Errorf("external ConfigMap %s not found in namespace %s", dashboard.Spec.ConfigMap.Name, dashboard.Namespace)
+			return nil, fmt.Errorf("external ConfigMap %s not found in namespace %s", dashboard.Spec.ConfigMap.Name, namespace)
 		}
 		return nil, fmt.Errorf("failed to retrieve external ConfigMap %s: %w", dashboard.Spec.ConfigMap.Name, err)
 	}

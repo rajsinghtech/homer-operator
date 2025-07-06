@@ -362,6 +362,7 @@ func createDeploymentInternal(
 	initCommand := "cp /config/config.yml /www/assets/config.yml"
 
 	// If custom assets ConfigMap is provided, add it as a volume and copy assets
+	// Only mount and copy assets when they are actually needed for PWA or custom assets
 	if config.AssetsConfigMapName != "" {
 		volumes = append(volumes, corev1.Volume{
 			Name: config.AssetsConfigMapName,
@@ -379,9 +380,11 @@ func createDeploymentInternal(
 			MountPath: "/custom-assets",
 		})
 
-		// Update init command to also copy custom assets
+		// Update init command to copy config first, then copy specific assets
+		// Copy only known asset files to prevent overwriting existing Homer assets
 		initCommand = "cp /config/config.yml /www/assets/config.yml && " +
-			"cp -rL /custom-assets/* /www/assets/ 2>/dev/null || true"
+			"for file in favicon.ico apple-touch-icon.png pwa-192x192.png pwa-512x512.png; do " +
+			"[ -f /custom-assets/$file ] && cp /custom-assets/$file /www/assets/ || true; done"
 	}
 
 	// Add PWA manifest creation if provided

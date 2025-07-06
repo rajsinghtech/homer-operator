@@ -91,23 +91,23 @@ spec:
         target: "_blank"
   
   # Custom assets and PWA configuration
-  assets:
-    configMapRef:
-      name: "dashboard-assets"
-    icons:
-      favicon: "favicon.ico"
-      appleTouchIcon: "apple-touch-icon.png"
-      pwaIcon192: "pwa-192x192.png"
-      pwaIcon512: "pwa-512x512.png"
-    pwa:
-      enabled: true
-      name: "Homer Dashboard"
-      shortName: "Homer"
-      description: "Homer Dashboard powered by Homer-Operator"
-      themeColor: "#3367d6"
-      backgroundColor: "#ffffff"
-      display: "standalone"
-      startUrl: "/"
+  # assets:
+  #   configMapRef:
+  #     name: "dashboard-assets"
+  #   icons:
+  #     favicon: "favicon.ico"
+  #     appleTouchIcon: "apple-touch-icon.png"
+  #     pwaIcon192: "pwa-192x192.png"
+  #     pwaIcon512: "pwa-512x512.png"
+  #   pwa:
+  #     enabled: true
+  #     name: "Homer Dashboard"
+  #     shortName: "Homer"
+  #     description: "Homer Dashboard powered by Homer-Operator"
+  #     themeColor: "#3367d6"
+  #     backgroundColor: "#ffffff"
+  #     display: "standalone"
+  #     startUrl: "/"
   
   # Optional: Secret references for smart cards
   # secrets:
@@ -150,7 +150,7 @@ spec:
   #   - "mycompany.com"
   #   - "internal.local"
 
-  ConfigMap for Homer configuration
-  configMap:
-    name: "dashboard-sample-homer-config"
-    key: "config.yml" 
+  # ConfigMap for Homer configuration
+  # configMap:
+  #   name: "dashboard-sample-homer-config"
+  #   key: "config.yml" 
