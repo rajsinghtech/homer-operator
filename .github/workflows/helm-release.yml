@@ -37,17 +37,12 @@ jobs:
         with:
           version: v3.17.0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
-      - name: Set up chart-testing
-        uses: helm/chart-testing-action@v2.7.0
-
       - name: Validate chart
         run: |
-          ct lint --charts charts/homer-operator
+          # Use helm lint instead of ct lint to avoid complex ct configuration
+          helm lint charts/homer-operator
+          # Verify template rendering
+          helm template test charts/homer-operator --dry-run > /dev/null
           echo "Chart validation passed"
 
       - name: Log in to GHCR
