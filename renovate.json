@@ -1,0 +1,53 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "docker:enableMajor",
+    ":dependencyDashboard"
+  ],
+  "labels": ["dependencies"],
+  "assignees": ["@rajsingh"],
+  "reviewers": ["@rajsingh"],
+  "schedule": ["before 6am on Monday"],
+  "timezone": "America/Los_Angeles",
+  "separateMinorPatch": true,
+  "separateMajorMinor": true,
+  "rangeStrategy": "bump",
+  "golang": {
+    "enabled": true
+  },
+  "docker": {
+    "enabled": true
+  },
+  "helm": {
+    "enabled": true
+  },
+  "packageRules": [
+    {
+      "matchManagers": ["gomod"],
+      "groupName": "Go dependencies",
+      "schedule": ["before 6am on Monday"]
+    },
+    {
+      "matchManagers": ["dockerfile"],
+      "groupName": "Docker base images",
+      "schedule": ["before 6am on Monday"]
+    },
+    {
+      "matchManagers": ["helm"],
+      "groupName": "Helm chart dependencies",
+      "schedule": ["before 6am on Monday"]
+    },
+    {
+      "matchDepTypes": ["major"],
+      "dependencyDashboardApproval": true
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "schedule": ["at any time"]
+  },
+  "stabilityDays": 3,
+  "prHourlyLimit": 2,
+  "prConcurrentLimit": 5
+}
