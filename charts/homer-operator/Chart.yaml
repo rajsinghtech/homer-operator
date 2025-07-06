@@ -3,7 +3,7 @@ name: homer-operator
 description: Kubernetes operator for automated Homer dashboard deployment with service discovery
 type: application
 version: 0.1.0
-appVersion: "0.1.0"
+appVersion: "latest"
 home: https://github.com/rajsinghtech/homer-operator
 sources:
   - https://github.com/rajsinghtech/homer-operator
