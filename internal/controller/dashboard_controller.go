@@ -18,12 +18,15 @@ package controller
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"time"
 
 	homerv1alpha1 "github.com/rajsinghtech/homer-operator/api/v1alpha1"
 	homer "github.com/rajsinghtech/homer-operator/pkg/homer"
+	yaml "gopkg.in/yaml.v2"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -139,6 +142,17 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 				}
 			}
 		}
+	}
+
+	// Check if external ConfigMap is specified
+	if dashboard.Spec.ConfigMap.Name != "" {
+		// Use external ConfigMap instead of generating one
+		externalHomerConfig, err := r.getExternalHomerConfig(ctx, &dashboard)
+		if err != nil {
+			log.Error(err, "failed to retrieve external ConfigMap", "configMap", dashboard.Spec.ConfigMap.Name)
+			return ctrl.Result{}, err
+		}
+		homerConfig = externalHomerConfig
 	}
 
 	configMap, err := r.createConfigMapForDashboard(ctx, req, homerConfig, &dashboard, filteredIngressList)
@@ -479,4 +493,47 @@ func (r *DashboardReconciler) generatePWAManifest(dashboard *homerv1alpha1.Dashb
 
 	// Generate PWA manifest
 	return homer.GeneratePWAManifest(name, shortName, description, themeColor, backgroundColor, display, startURL, icons)
+}
+
+// getExternalHomerConfig retrieves Homer configuration from an external ConfigMap
+func (r *DashboardReconciler) getExternalHomerConfig(ctx context.Context, dashboard *homerv1alpha1.Dashboard) (*homer.HomerConfig, error) {
+	log := log.FromContext(ctx)
+
+	if dashboard.Spec.ConfigMap.Name == "" {
+		return nil, errors.New("external ConfigMap name is empty")
+	}
+
+	// Default key if not specified
+	key := dashboard.Spec.ConfigMap.Key
+	if key == "" {
+		key = "config.yml"
+	}
+
+	// Retrieve the external ConfigMap
+	externalConfigMap := &corev1.ConfigMap{}
+	err := r.Get(ctx, client.ObjectKey{
+		Name:      dashboard.Spec.ConfigMap.Name,
+		Namespace: dashboard.Namespace,
+	}, externalConfigMap)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("external ConfigMap %s not found in namespace %s", dashboard.Spec.ConfigMap.Name, dashboard.Namespace)
+		}
+		return nil, fmt.Errorf("failed to retrieve external ConfigMap %s: %w", dashboard.Spec.ConfigMap.Name, err)
+	}
+
+	// Get the configuration data from the specified key
+	configData, exists := externalConfigMap.Data[key]
+	if !exists {
+		return nil, fmt.Errorf("key %s not found in external ConfigMap %s", key, dashboard.Spec.ConfigMap.Name)
+	}
+
+	// Parse the YAML configuration
+	var homerConfig homer.HomerConfig
+	if err := yaml.Unmarshal([]byte(configData), &homerConfig); err != nil {
+		return nil, fmt.Errorf("failed to parse YAML configuration from external ConfigMap %s: %w", dashboard.Spec.ConfigMap.Name, err)
+	}
+
+	log.Info("Successfully loaded external Homer configuration", "configMap", dashboard.Spec.ConfigMap.Name, "key", key)
+	return &homerConfig, nil
 }

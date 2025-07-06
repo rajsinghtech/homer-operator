@@ -379,9 +379,9 @@ func createDeploymentInternal(
 			MountPath: "/custom-assets",
 		})
 
-		// Update init command to also copy custom assets
+		// Update init command to also copy custom assets (dereference symlinks to copy actual files)
 		initCommand = "cp /config/config.yml /www/assets/config.yml && " +
-			"cp -r /custom-assets/* /www/assets/ 2>/dev/null || true"
+			"cp -rL /custom-assets/* /www/assets/ 2>/dev/null || true"
 	}
 
 	// Add PWA manifest creation if provided

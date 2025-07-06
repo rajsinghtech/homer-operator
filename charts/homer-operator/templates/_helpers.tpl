@@ -122,6 +122,13 @@ Create proxy role name
 {{- end }}
 
 {{/*
+Create proxy role binding name
+*/}}
+{{- define "homer-operator.proxyRoleBindingName" -}}
+{{- printf "%s-proxy-rolebinding" (include "homer-operator.fullname" .) }}
+{{- end }}
+
+{{/*
 Create the image name
 */}}
 {{- define "homer-operator.image" -}}
