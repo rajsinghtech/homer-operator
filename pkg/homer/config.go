@@ -660,7 +660,7 @@ func CreateDeploymentWithAssets(
 	// If custom assets ConfigMap is provided, add it as a volume and copy assets
 	if assetsConfigMapName != "" {
 		volumes = append(volumes, corev1.Volume{
-			Name: "custom-assets",
+			Name: assetsConfigMapName,
 			VolumeSource: corev1.VolumeSource{
 				ConfigMap: &corev1.ConfigMapVolumeSource{
 					LocalObjectReference: corev1.LocalObjectReference{
@@ -671,7 +671,7 @@ func CreateDeploymentWithAssets(
 		})
 
 		initVolumeMounts = append(initVolumeMounts, corev1.VolumeMount{
-			Name:      "custom-assets",
+			Name:      assetsConfigMapName,
 			MountPath: "/custom-assets",
 		})
 
