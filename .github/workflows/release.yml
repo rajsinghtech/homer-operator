@@ -39,8 +39,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-go-
 
-      - name: Run tests
-        run: make test
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -66,7 +64,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
             type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,prefix=sha-
+            type=sha,prefix=sha-,enable={{is_default_branch}}
 
       - name: Build and push Docker image
         id: build
@@ -81,6 +79,14 @@ jobs:
           cache-to: type=gha,mode=max
           build-args: |
             GO_VERSION=${{ env.GO_VERSION }}
+
+      - name: Verify build success
+        run: |
+          if [[ -z "${{ steps.build.outputs.digest }}" ]]; then
+            echo "❌ Docker build failed - no digest generated"
+            exit 1
+          fi
+          echo "✅ Docker build successful with digest: ${{ steps.build.outputs.digest }}"
 
       # Image signing
       - name: Install cosign

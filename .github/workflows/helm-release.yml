@@ -5,7 +5,9 @@ on:
     branches:
       - main
     paths:
-      - 'charts/**'
+      - 'charts/homer-operator/Chart.yaml'
+      - 'charts/homer-operator/values.yaml'
+      - 'charts/homer-operator/templates/**'
       - '.github/workflows/helm-release.yml'
     tags:
       - 'v*.*.*'
@@ -34,6 +36,19 @@ jobs:
         uses: azure/setup-helm@v4
         with:
           version: v3.17.0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Set up chart-testing
+        uses: helm/chart-testing-action@v2.7.0
+
+      - name: Validate chart
+        run: |
+          ct lint --charts charts/homer-operator
+          echo "Chart validation passed"
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -82,12 +97,24 @@ jobs:
           REPO_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
           
           # Package the chart
-          helm package charts/homer-operator --destination ./packaged-charts
+          if ! helm package charts/homer-operator --destination ./packaged-charts; then
+            echo "❌ Failed to package Helm chart"
+            exit 1
+          fi
+          
+          # Verify package was created
+          if [[ ! -f "./packaged-charts/homer-operator-${CHART_VERSION}.tgz" ]]; then
+            echo "❌ Package file not found: homer-operator-${CHART_VERSION}.tgz"
+            exit 1
+          fi
           
           # Push to GHCR
-          helm push "./packaged-charts/homer-operator-${CHART_VERSION}.tgz" "oci://${{ env.REGISTRY }}/${REPO_NAME}/charts"
+          if ! helm push "./packaged-charts/homer-operator-${CHART_VERSION}.tgz" "oci://${{ env.REGISTRY }}/${REPO_NAME}/charts"; then
+            echo "❌ Failed to push Helm chart to registry"
+            exit 1
+          fi
           
-          echo "Chart pushed to: oci://${{ env.REGISTRY }}/${REPO_NAME}/charts/homer-operator:${CHART_VERSION}"
+          echo "✅ Chart successfully pushed to: oci://${{ env.REGISTRY }}/${REPO_NAME}/charts/homer-operator:${CHART_VERSION}"
 
       - name: Generate summary
         run: |

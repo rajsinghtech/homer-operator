@@ -99,7 +99,6 @@ jobs:
   helm-test:
     name: Helm Test
     runs-on: ubuntu-latest
-    if: contains(github.event.pull_request.changed_files, 'charts/') || github.event_name == 'push'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
