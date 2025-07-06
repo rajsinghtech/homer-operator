@@ -21,11 +21,10 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"strings"
-	"time"
 
 	homerv1alpha1 "github.com/rajsinghtech/homer-operator/api/v1alpha1"
 	homer "github.com/rajsinghtech/homer-operator/pkg/homer"
+	"github.com/rajsinghtech/homer-operator/pkg/utils"
 	yaml "gopkg.in/yaml.v2"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -34,7 +33,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/util/wait"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -73,14 +71,31 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		log.Error(err, "failed to fetch Dashboard", "dashboard", req.NamespacedName)
 		return ctrl.Result{}, err
 	}
-	// List ingresses with performance optimization - only get ones with rules
+	// List ingresses with performance optimization using dashboard selectors
 	clusterIngresses := &networkingv1.IngressList{}
-	if err := r.List(ctx, clusterIngresses, client.HasLabels([]string{})); err != nil {
+
+	// Build list options for efficient querying
+	listOpts := []client.ListOption{}
+
+	// Use label selector if specified in dashboard
+	if dashboard.Spec.IngressSelector != nil {
+		selector, err := metav1.LabelSelectorAsSelector(dashboard.Spec.IngressSelector)
+		if err != nil {
+			log.Error(err, "invalid ingress selector", "dashboard", req.NamespacedName)
+			return ctrl.Result{}, err
+		}
+		listOpts = append(listOpts, client.MatchingLabelsSelector{Selector: selector})
+	}
+
+	// Note: Namespace filtering is handled later in shouldIncludeIngressForDashboard
+	// for domain-based filtering and other criteria
+
+	if err := r.List(ctx, clusterIngresses, listOpts...); err != nil {
 		log.Error(err, "failed to list Ingresses", "dashboard", req.NamespacedName)
 		return ctrl.Result{}, err
 	}
 
-	// Filter Ingresses based on dashboard selectors
+	// Filter Ingresses based on remaining dashboard selectors (domain filters, namespace selectors)
 	filteredIngresses := []networkingv1.Ingress{}
 	for _, ingress := range clusterIngresses.Items {
 		shouldInclude, err := r.shouldIncludeIngressForDashboard(ctx, &ingress, &dashboard)
@@ -115,35 +130,38 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		PWAManifest: pwaManifest,
 	}
 
-	// Check if custom assets are configured and actually needed
-	// Only mount assets ConfigMap if PWA is enabled or custom icons are specified
+	// Check if custom assets are configured
+	// Mount assets ConfigMap if explicitly specified (user intent)
 	if dashboard.Spec.Assets != nil && dashboard.Spec.Assets.ConfigMapRef != nil {
-		assetsNeeded := false
-		
-		// Check if PWA is enabled
-		if dashboard.Spec.Assets.PWA != nil && dashboard.Spec.Assets.PWA.Enabled {
-			assetsNeeded = true
-		}
-		
-		// Check if custom icons are specified
-		if dashboard.Spec.Assets.Icons != nil {
-			if dashboard.Spec.Assets.Icons.Favicon != "" ||
-				dashboard.Spec.Assets.Icons.AppleTouchIcon != "" ||
-				dashboard.Spec.Assets.Icons.PWAIcon192 != "" ||
-				dashboard.Spec.Assets.Icons.PWAIcon512 != "" {
-				assetsNeeded = true
-			}
-		}
-		
-		// Only set assets ConfigMap name if assets are actually needed
-		if assetsNeeded {
-			deploymentConfig.AssetsConfigMapName = dashboard.Spec.Assets.ConfigMapRef.Name
-		}
+		deploymentConfig.AssetsConfigMapName = dashboard.Spec.Assets.ConfigMapRef.Name
 	}
 
 	// Add DNS configuration if provided
 	if dashboard.Spec.DNSPolicy != "" {
 		deploymentConfig.DNSPolicy = dashboard.Spec.DNSPolicy
+	}
+
+	// Add resource configuration if provided
+	if dashboard.Spec.Resources != nil {
+		// Convert from API ResourceRequirements to Kubernetes ResourceRequirements
+		k8sResources := &corev1.ResourceRequirements{
+			Limits:   corev1.ResourceList{},
+			Requests: corev1.ResourceList{},
+		}
+
+		if dashboard.Spec.Resources.Limits != nil {
+			for name, quantity := range dashboard.Spec.Resources.Limits {
+				k8sResources.Limits[corev1.ResourceName(name)] = quantity
+			}
+		}
+
+		if dashboard.Spec.Resources.Requests != nil {
+			for name, quantity := range dashboard.Spec.Resources.Requests {
+				k8sResources.Requests[corev1.ResourceName(name)] = quantity
+			}
+		}
+
+		deploymentConfig.Resources = k8sResources
 	}
 
 	deployment = homer.CreateDeployment(dashboard.Name, dashboard.Namespace, dashboard.Spec.Replicas, &dashboard, deploymentConfig)
@@ -205,42 +223,6 @@ func (r *DashboardReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// updateConfigMapWithRetry updates a ConfigMap with retry on conflicts
-func (r *DashboardReconciler) updateConfigMapWithRetry(ctx context.Context, configMap *corev1.ConfigMap, dashboardName string) error {
-	log := log.FromContext(ctx)
-
-	backoff := wait.Backoff{
-		Steps:    5,
-		Duration: 100 * time.Millisecond,
-		Factor:   2.0,
-		Cap:      5 * time.Second,
-	}
-
-	return wait.ExponentialBackoffWithContext(ctx, backoff, func(ctx context.Context) (bool, error) {
-		latest := &corev1.ConfigMap{}
-		key := client.ObjectKeyFromObject(configMap)
-		if err := r.Get(ctx, key, latest); err != nil {
-			if apierrors.IsNotFound(err) {
-				return false, err
-			}
-			return false, nil
-		}
-
-		latest.Data = configMap.Data
-		latest.BinaryData = configMap.BinaryData
-
-		if err := r.Update(ctx, latest); err != nil {
-			if apierrors.IsConflict(err) {
-				log.V(1).Info("ConfigMap update conflict, retrying", "configmap", dashboardName)
-				return false, nil
-			}
-			return false, err
-		}
-
-		return true, nil
-	})
-}
-
 // shouldIncludeHTTPRouteForDashboard determines if an HTTPRoute should be included
 // based on the Dashboard's selectors and filters. If no selectors are specified, all HTTPRoutes are included.
 func (r *DashboardReconciler) shouldIncludeHTTPRouteForDashboard(ctx context.Context, httproute *gatewayv1.HTTPRoute, dashboard *homerv1alpha1.Dashboard) (bool, error) {
@@ -260,7 +242,7 @@ func (r *DashboardReconciler) shouldIncludeHTTPRouteForDashboard(ctx context.Con
 
 	// Check domain filters
 	if len(dashboard.Spec.DomainFilters) > 0 {
-		if !r.matchesDomainFilters(httproute.Spec.Hostnames, dashboard.Spec.DomainFilters) {
+		if !utils.MatchesHTTPRouteDomainFilters(httproute.Spec.Hostnames, dashboard.Spec.DomainFilters) {
 			log.Info("HTTPRoute excluded by domain filters", "httproute", httproute.Name, "hostnames", httproute.Spec.Hostnames, "domainFilters", dashboard.Spec.DomainFilters)
 			return false, nil
 		}
@@ -326,25 +308,6 @@ func (r *DashboardReconciler) shouldIncludeHTTPRouteForDashboard(ctx context.Con
 	return true, nil
 }
 
-// matchesDomainFilters checks if any hostname matches the domain filters
-func (r *DashboardReconciler) matchesDomainFilters(hostnames []gatewayv1.Hostname, domainFilters []string) bool {
-	if len(domainFilters) == 0 {
-		return true
-	}
-
-	for _, hostname := range hostnames {
-		hostnameStr := string(hostname)
-		for _, filter := range domainFilters {
-			// Support exact match or subdomain match
-			if hostnameStr == filter || strings.HasSuffix(hostnameStr, "."+filter) {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
 // shouldIncludeIngressForDashboard determines if an Ingress should be included
 // based on the Dashboard's selectors and filters. If no selectors are specified, all Ingresses are included.
 func (r *DashboardReconciler) shouldIncludeIngressForDashboard(ctx context.Context, ingress *networkingv1.Ingress, dashboard *homerv1alpha1.Dashboard) (bool, error) {
@@ -364,35 +327,13 @@ func (r *DashboardReconciler) shouldIncludeIngressForDashboard(ctx context.Conte
 
 	// Check domain filters
 	if len(dashboard.Spec.DomainFilters) > 0 {
-		if !r.matchesIngressDomainFilters(ingress, dashboard.Spec.DomainFilters) {
+		if !utils.MatchesIngressDomainFilters(ingress, dashboard.Spec.DomainFilters) {
 			log.V(1).Info("Ingress excluded by domain filters", "ingress", ingress.Name)
 			return false, nil
 		}
 	}
 
 	return true, nil
-}
-
-// matchesIngressDomainFilters checks if any Ingress rule host matches the domain filters
-func (r *DashboardReconciler) matchesIngressDomainFilters(ingress *networkingv1.Ingress, domainFilters []string) bool {
-	if len(domainFilters) == 0 {
-		return true
-	}
-
-	for _, rule := range ingress.Spec.Rules {
-		if rule.Host == "" {
-			continue
-		}
-
-		for _, filter := range domainFilters {
-			// Support exact match or subdomain match
-			if rule.Host == filter || strings.HasSuffix(rule.Host, "."+filter) {
-				return true
-			}
-		}
-	}
-
-	return false
 }
 
 // createOrUpdateResources creates or updates all Kubernetes resources for the dashboard
@@ -415,7 +356,7 @@ func (r *DashboardReconciler) createOrUpdateResources(ctx context.Context, resou
 			return err
 		default:
 			if configMap, ok := resource.(*corev1.ConfigMap); ok {
-				err = r.updateConfigMapWithRetry(ctx, configMap, dashboardName)
+				err = utils.UpdateConfigMapWithRetry(ctx, r.Client, configMap, dashboardName)
 			} else {
 				err = r.Update(ctx, resource)
 			}
@@ -435,12 +376,26 @@ func (r *DashboardReconciler) createConfigMapForDashboard(ctx context.Context, r
 
 	if r.EnableGatewayAPI {
 		clusterHTTPRoutes := &gatewayv1.HTTPRouteList{}
-		if err := r.List(ctx, clusterHTTPRoutes, client.HasLabels([]string{})); err != nil {
+
+		// Build list options for efficient HTTPRoute querying
+		httpRouteListOpts := []client.ListOption{}
+
+		// Use HTTPRoute label selector if specified in dashboard
+		if dashboard.Spec.HTTPRouteSelector != nil {
+			selector, err := metav1.LabelSelectorAsSelector(dashboard.Spec.HTTPRouteSelector)
+			if err != nil {
+				log.Error(err, "invalid HTTPRoute selector", "dashboard", req.NamespacedName)
+				return corev1.ConfigMap{}, err
+			}
+			httpRouteListOpts = append(httpRouteListOpts, client.MatchingLabelsSelector{Selector: selector})
+		}
+
+		if err := r.List(ctx, clusterHTTPRoutes, httpRouteListOpts...); err != nil {
 			log.Error(err, "unable to list HTTPRoutes", "dashboard", req.NamespacedName)
 			return corev1.ConfigMap{}, err
 		}
 
-		// Filter HTTPRoutes based on dashboard selectors
+		// Filter HTTPRoutes based on remaining dashboard selectors (domain filters, gateway selectors)
 		filteredHTTPRoutes := []gatewayv1.HTTPRoute{}
 		for _, httproute := range clusterHTTPRoutes.Items {
 			shouldInclude, err := r.shouldIncludeHTTPRouteForDashboard(ctx, &httproute, dashboard)
@@ -453,10 +408,10 @@ func (r *DashboardReconciler) createConfigMapForDashboard(ctx context.Context, r
 			}
 		}
 
-		return homer.CreateConfigMapWithHTTPRoutes(homerConfig, dashboard.Name, dashboard.Namespace, filteredIngressList, filteredHTTPRoutes, dashboard, dashboard.Spec.DomainFilters), nil
+		return homer.CreateConfigMapWithHTTPRoutes(homerConfig, dashboard.Name, dashboard.Namespace, filteredIngressList, filteredHTTPRoutes, dashboard, dashboard.Spec.DomainFilters)
 	}
 
-	return homer.CreateConfigMap(homerConfig, dashboard.Name, dashboard.Namespace, filteredIngressList, dashboard), nil
+	return homer.CreateConfigMap(homerConfig, dashboard.Name, dashboard.Namespace, filteredIngressList, dashboard)
 }
 
 // generatePWAManifest generates PWA manifest if enabled, returns empty string if disabled

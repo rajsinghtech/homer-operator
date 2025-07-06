@@ -18,18 +18,16 @@ package controller
 
 import (
 	"context"
-	"strings"
-	"time"
 
 	homerv1alpha1 "github.com/rajsinghtech/homer-operator/api/v1alpha1"
 	homer "github.com/rajsinghtech/homer-operator/pkg/homer"
+	"github.com/rajsinghtech/homer-operator/pkg/utils"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/util/wait"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -94,7 +92,7 @@ func (r *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				return ctrl.Result{}, error
 			}
 			homer.UpdateConfigMapIngress(&configMap, ingress, dashboard.Spec.DomainFilters)
-			if err := r.updateConfigMapWithRetry(ctx, &configMap, dashboard.Name); err != nil {
+			if err := utils.UpdateConfigMapWithRetry(ctx, r.Client, &configMap, dashboard.Name); err != nil {
 				log.Error(err, "unable to update ConfigMap", "configmap", dashboard.Name)
 				return ctrl.Result{}, err
 			}
@@ -124,35 +122,13 @@ func (r *IngressReconciler) shouldIncludeIngressForDashboard(ctx context.Context
 
 	// Check domain filters
 	if len(dashboard.Spec.DomainFilters) > 0 {
-		if !r.matchesIngressDomainFilters(ingress, dashboard.Spec.DomainFilters) {
+		if !utils.MatchesIngressDomainFilters(ingress, dashboard.Spec.DomainFilters) {
 			log.V(1).Info("Ingress excluded by domain filters", "ingress", ingress.Name)
 			return false, nil
 		}
 	}
 
 	return true, nil
-}
-
-// matchesIngressDomainFilters checks if any Ingress rule host matches the domain filters
-func (r *IngressReconciler) matchesIngressDomainFilters(ingress *networkingv1.Ingress, domainFilters []string) bool {
-	if len(domainFilters) == 0 {
-		return true
-	}
-
-	for _, rule := range ingress.Spec.Rules {
-		if rule.Host == "" {
-			continue
-		}
-
-		for _, filter := range domainFilters {
-			// Support exact match or subdomain match
-			if rule.Host == filter || strings.HasSuffix(rule.Host, "."+filter) {
-				return true
-			}
-		}
-	}
-
-	return false
 }
 
 // isSubset checks if the first map is a subset of the second map
@@ -178,48 +154,4 @@ func getAllDashboard(ctx context.Context, r *IngressReconciler) (*homerv1alpha1.
 		return nil, err
 	}
 	return &clusterDashboards, nil
-}
-
-// updateConfigMapWithRetry updates a ConfigMap with exponential backoff retry on conflicts
-func (r *IngressReconciler) updateConfigMapWithRetry(ctx context.Context, configMap *corev1.ConfigMap, dashboardName string) error {
-	log := log.FromContext(ctx)
-
-	backoff := wait.Backoff{
-		Steps:    5,
-		Duration: 100 * time.Millisecond,
-		Factor:   2.0,
-		Jitter:   0.1,
-		Cap:      5 * time.Second,
-	}
-
-	return wait.ExponentialBackoffWithContext(ctx, backoff, func(ctx context.Context) (bool, error) {
-		// Get the latest version of the ConfigMap before updating
-		latestConfigMap := &corev1.ConfigMap{}
-		key := client.ObjectKeyFromObject(configMap)
-		if err := r.Get(ctx, key, latestConfigMap); err != nil {
-			if apierrors.IsNotFound(err) {
-				// ConfigMap was deleted, no need to retry
-				return false, err
-			}
-			log.V(1).Info("Failed to get latest ConfigMap, retrying", "error", err)
-			return false, nil // Retry
-		}
-
-		// Copy our changes to the latest version
-		latestConfigMap.Data = configMap.Data
-		latestConfigMap.BinaryData = configMap.BinaryData
-
-		// Attempt to update
-		if err := r.Update(ctx, latestConfigMap); err != nil {
-			if apierrors.IsConflict(err) {
-				log.V(1).Info("ConfigMap update conflict, retrying", "configmap", dashboardName)
-				return false, nil // Retry
-			}
-			// Non-conflict error, don't retry
-			return false, err
-		}
-
-		// Success
-		return true, nil
-	})
 }

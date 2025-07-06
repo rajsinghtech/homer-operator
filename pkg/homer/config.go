@@ -6,15 +6,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/rajsinghtech/homer-operator/pkg/utils"
 	yaml "gopkg.in/yaml.v2"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -199,14 +202,12 @@ func CreateConfigMap(
 	namespace string,
 	ingresses networkingv1.IngressList,
 	owner client.Object,
-) corev1.ConfigMap {
+) (corev1.ConfigMap, error) {
 	_ = UpdateHomerConfig(config, ingresses, nil)
 
 	// Validate configuration before creating ConfigMap
 	if err := ValidateHomerConfig(config); err != nil {
-		// Log validation error but continue with potentially invalid config
-		// In production, you might want to handle this differently
-		fmt.Printf("Warning: Homer config validation failed: %v\n", err)
+		return corev1.ConfigMap{}, fmt.Errorf("homer config validation failed: %w", err)
 	}
 
 	// Set default values if not specified
@@ -214,7 +215,7 @@ func CreateConfigMap(
 
 	objYAML, err := marshalHomerConfigToYAML(config)
 	if err != nil {
-		return corev1.ConfigMap{}
+		return corev1.ConfigMap{}, fmt.Errorf("failed to marshal homer config to YAML: %w", err)
 	}
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
@@ -230,7 +231,7 @@ func CreateConfigMap(
 			"config.yml": string(objYAML),
 		},
 	}
-	return *cm
+	return *cm, nil
 }
 
 // CreateConfigMapWithHTTPRoutes creates a ConfigMap with both Ingress and HTTPRoute resources
@@ -242,7 +243,7 @@ func CreateConfigMapWithHTTPRoutes(
 	httproutes []gatewayv1.HTTPRoute,
 	owner client.Object,
 	domainFilters []string,
-) corev1.ConfigMap {
+) (corev1.ConfigMap, error) {
 	return createConfigMapWithHTTPRoutesAndHealth(
 		config, name, namespace, ingresses, httproutes, owner, domainFilters, nil)
 }
@@ -257,7 +258,7 @@ func createConfigMapWithHTTPRoutesAndHealth(
 	owner client.Object,
 	domainFilters []string,
 	healthConfig *ServiceHealthConfig,
-) corev1.ConfigMap {
+) (corev1.ConfigMap, error) {
 	_ = UpdateHomerConfig(config, ingresses, domainFilters)
 	// Update config with HTTPRoutes
 	for _, httproute := range httproutes {
@@ -271,8 +272,7 @@ func createConfigMapWithHTTPRoutesAndHealth(
 
 	// Validate configuration before creating ConfigMap
 	if err := ValidateHomerConfig(config); err != nil {
-		// Log validation error but continue with potentially invalid config
-		fmt.Printf("Warning: Homer config validation failed: %v\n", err)
+		return corev1.ConfigMap{}, fmt.Errorf("homer config validation failed: %w", err)
 	}
 
 	// Set default values if not specified
@@ -280,7 +280,7 @@ func createConfigMapWithHTTPRoutesAndHealth(
 
 	objYAML, err := marshalHomerConfigToYAML(config)
 	if err != nil {
-		return corev1.ConfigMap{}
+		return corev1.ConfigMap{}, fmt.Errorf("failed to marshal homer config to YAML: %w", err)
 	}
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
@@ -296,7 +296,7 @@ func createConfigMapWithHTTPRoutesAndHealth(
 			"config.yml": string(objYAML),
 		},
 	}
-	return *cm
+	return *cm, nil
 }
 
 // DeploymentConfig contains all configuration options for creating a Homer deployment
@@ -305,6 +305,8 @@ type DeploymentConfig struct {
 	PWAManifest         string
 	DNSPolicy           string
 	DNSConfig           string
+	// Resource configuration for Homer container
+	Resources *corev1.ResourceRequirements
 }
 
 // CreateDeployment creates a Homer deployment with all optional configuration
@@ -358,8 +360,9 @@ func createDeploymentInternal(
 		},
 	}
 
-	// Base init command
-	initCommand := "cp /config/config.yml /www/assets/config.yml"
+	// Let Homer's entrypoint handle asset initialization by not pre-creating config.yml
+	// We'll use a different approach - copy our config after Homer sets up defaults
+	initCommand := "echo 'Init container ready - Homer will handle asset setup'"
 
 	// If custom assets ConfigMap is provided, add it as a volume and copy assets
 	// Only mount and copy assets when they are actually needed for PWA or custom assets
@@ -380,9 +383,10 @@ func createDeploymentInternal(
 			MountPath: "/custom-assets",
 		})
 
-		// Update init command to copy config first, then copy specific assets
+		// Update init command to copy config, default assets, then custom assets
 		// Copy only known asset files to prevent overwriting existing Homer assets
 		initCommand = "cp /config/config.yml /www/assets/config.yml && " +
+			"cp -r /www/default-assets/* /www/assets/ 2>/dev/null || true && " +
 			"for file in favicon.ico apple-touch-icon.png pwa-192x192.png pwa-512x512.png; do " +
 			"[ -f /custom-assets/$file ] && cp /custom-assets/$file /www/assets/ || true; done"
 	}
@@ -470,6 +474,21 @@ func createDeploymentInternal(
 									Name:      "assets-volume",
 									MountPath: "/www/assets",
 								},
+								{
+									Name:      "config-volume",
+									MountPath: "/config",
+								},
+							},
+							Lifecycle: &corev1.Lifecycle{
+								PostStart: &corev1.LifecycleHandler{
+									Exec: &corev1.ExecAction{
+										Command: []string{
+											"sh",
+											"-c",
+											"sleep 2 && cp /config/config.yml /www/assets/config.yml",
+										},
+									},
+								},
 							},
 							Ports: []corev1.ContainerPort{
 								{
@@ -490,6 +509,7 @@ func createDeploymentInternal(
 									Value: "0",
 								},
 							},
+							Resources: getContainerResources(config),
 						},
 					},
 					Volumes: volumes,
@@ -506,6 +526,26 @@ func createDeploymentInternal(
 	// For now, skipping complex DNS config parsing
 
 	return *d
+}
+
+// getContainerResources returns resource requirements for the Homer container
+func getContainerResources(config *DeploymentConfig) corev1.ResourceRequirements {
+	// Use provided resources if specified
+	if config != nil && config.Resources != nil {
+		return *config.Resources
+	}
+
+	// Return sensible defaults for Homer
+	return corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("10m"),
+			corev1.ResourceMemory: resource.MustParse("32Mi"),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("100m"),
+			corev1.ResourceMemory: resource.MustParse("128Mi"),
+		},
+	}
 }
 
 // CreateDeploymentWithAssets creates a Deployment with custom asset support and PWA manifest
@@ -725,7 +765,7 @@ func UpdateHomerConfig(config *HomerConfig, ingresses networkingv1.IngressList, 
 			}
 
 			// Apply domain filtering
-			if !matchesIngressDomainFilters(host, domainFilters) {
+			if !utils.MatchesHostDomainFilters(host, domainFilters) {
 				continue // Skip hosts that don't match domain filters
 			}
 
@@ -809,7 +849,7 @@ func UpdateHomerConfigIngressWithGrouping(
 			continue // Skip rules without hostnames
 		}
 		// Apply domain filtering
-		if !matchesIngressDomainFilters(host, domainFilters) {
+		if !utils.MatchesHostDomainFilters(host, domainFilters) {
 			continue // Skip hosts that don't match domain filters
 		}
 		validRuleCount++
@@ -821,7 +861,7 @@ func UpdateHomerConfigIngressWithGrouping(
 		}
 
 		// Apply domain filtering
-		if !matchesIngressDomainFilters(host, domainFilters) {
+		if !utils.MatchesHostDomainFilters(host, domainFilters) {
 			continue // Skip hosts that don't match domain filters
 		}
 
@@ -914,7 +954,7 @@ func updateHomerConfigWithHTTPRoutes(
 		var filteredHostnames []gatewayv1.Hostname
 		for _, hostname := range httproute.Spec.Hostnames {
 			hostStr := string(hostname)
-			if matchesHTTPRouteDomainFilters(hostStr, domainFilters) {
+			if utils.MatchesHostDomainFilters(hostStr, domainFilters) {
 				filteredHostnames = append(filteredHostnames, hostname)
 			}
 		}
@@ -948,38 +988,6 @@ func updateHomerConfigWithHTTPRoutes(
 	}
 	// Note: if len(items) == 0, we've already removed the old items above,
 	// so the service will be cleaned up by removeEmptyServices()
-}
-
-// matchesHTTPRouteDomainFilters checks if a hostname matches the domain filters
-func matchesHTTPRouteDomainFilters(hostname string, domainFilters []string) bool {
-	if len(domainFilters) == 0 {
-		return true // No filters means include all
-	}
-
-	for _, filter := range domainFilters {
-		// Support exact match or subdomain match
-		if hostname == filter || strings.HasSuffix(hostname, "."+filter) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// matchesIngressDomainFilters checks if a hostname matches the domain filters for Ingress
-func matchesIngressDomainFilters(hostname string, domainFilters []string) bool {
-	if len(domainFilters) == 0 {
-		return true // No filters means include all
-	}
-
-	for _, filter := range domainFilters {
-		// Support exact match or subdomain match
-		if hostname == filter || strings.HasSuffix(hostname, "."+filter) {
-			return true
-		}
-	}
-
-	return false
 }
 
 // createHTTPRouteItem creates a dashboard item for a specific hostname
@@ -1197,7 +1205,7 @@ func validateAnnotationValue(fieldName, value string, level ValidationLevel) err
 				return fmt.Errorf("invalid URL format: %s", value)
 			}
 			if level == ValidationLevelWarn {
-				fmt.Printf("Warning: potentially invalid URL format: %s\n", value)
+				log.Printf("Warning: potentially invalid URL format: %s", value)
 			}
 		}
 	case "target":
@@ -1206,7 +1214,7 @@ func validateAnnotationValue(fieldName, value string, level ValidationLevel) err
 				return fmt.Errorf("invalid target value: %s, must be one of: _blank, _self, _parent, _top", value)
 			}
 			if level == ValidationLevelWarn {
-				fmt.Printf("Warning: potentially invalid target value: %s\n", value)
+				log.Printf("Warning: potentially invalid target value: %s", value)
 			}
 		}
 	case "warning_value", "danger_value":
@@ -1216,7 +1224,7 @@ func validateAnnotationValue(fieldName, value string, level ValidationLevel) err
 					return fmt.Errorf("invalid numeric value for %s: %s", fieldName, value)
 				}
 				if level == ValidationLevelWarn {
-					fmt.Printf("Warning: potentially invalid numeric value for %s: %s\n", fieldName, value)
+					log.Printf("Warning: potentially invalid numeric value for %s: %s", fieldName, value)
 				}
 			}
 		}
@@ -1925,23 +1933,25 @@ func removeItemsFromHTTPRouteSource(homerConfig *HomerConfig, sourceName, source
 
 // removeItemsFromIngressSource removes all items that originated from a specific Ingress
 func removeItemsFromIngressSource(homerConfig *HomerConfig, sourceName, sourceNamespace string) {
+	// Pre-allocate slices to reduce allocations
 	for serviceIndex := range homerConfig.Services {
 		service := &homerConfig.Services[serviceIndex]
-		var filteredItems []Item
 
-		// Keep only items that did NOT come from the specified Ingress source
-		for _, item := range service.Items {
-			// Remove items that match this Ingress source
-			if item.Source == sourceName && item.Namespace == sourceNamespace {
-				// Skip this item (remove it)
-				continue
+		// Use in-place filtering to avoid extra allocations
+		filteredCount := 0
+		for i, item := range service.Items {
+			// Keep items that did NOT come from the specified Ingress source
+			if !(item.Source == sourceName && item.Namespace == sourceNamespace) {
+				// Move kept item to the front of the slice
+				if filteredCount != i {
+					service.Items[filteredCount] = item
+				}
+				filteredCount++
 			}
-			// Keep this item
-			filteredItems = append(filteredItems, item)
 		}
 
-		// Update the service with filtered items
-		service.Items = filteredItems
+		// Truncate slice to remove unwanted items
+		service.Items = service.Items[:filteredCount]
 	}
 
 	// Remove any services that now have no items
@@ -1950,15 +1960,20 @@ func removeItemsFromIngressSource(homerConfig *HomerConfig, sourceName, sourceNa
 
 // removeEmptyServices removes services that have no items
 func removeEmptyServices(homerConfig *HomerConfig) {
-	var filteredServices []Service
-
-	for _, service := range homerConfig.Services {
+	// Use in-place filtering to avoid allocations
+	filteredCount := 0
+	for i, service := range homerConfig.Services {
 		if len(service.Items) > 0 {
-			filteredServices = append(filteredServices, service)
+			// Move kept service to the front of the slice
+			if filteredCount != i {
+				homerConfig.Services[filteredCount] = service
+			}
+			filteredCount++
 		}
 	}
 
-	homerConfig.Services = filteredServices
+	// Truncate slice to remove empty services
+	homerConfig.Services = homerConfig.Services[:filteredCount]
 }
 
 // enhanceHomerConfigWithAggregation enhances Homer config with advanced aggregation features
@@ -1973,7 +1988,7 @@ func enhanceHomerConfigWithAggregation(config *HomerConfig, healthConfig *Servic
 	// Find and log dependencies
 	dependencies := findServiceDependencies(config.Services)
 	if len(dependencies) > 0 {
-		fmt.Printf("Found %d service dependencies\n", len(dependencies))
+		log.Printf("Found %d service dependencies", len(dependencies))
 	}
 
 	// Optimize service layout
@@ -1984,7 +1999,7 @@ func enhanceHomerConfigWithAggregation(config *HomerConfig, healthConfig *Servic
 		metrics := aggregateServiceMetrics(&config.Services[i])
 		// Could add metrics to service description or as metadata
 		if config.Services[i].Name != "" {
-			fmt.Printf("Service '%s': %d total items, %d with health checks\n",
+			log.Printf("Service '%s': %d total items, %d with health checks",
 				config.Services[i].Name, metrics.TotalItems, metrics.HealthyItems)
 		}
 	}

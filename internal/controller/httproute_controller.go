@@ -18,15 +18,12 @@ package controller
 
 import (
 	"context"
-	"strings"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/util/wait"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -34,6 +31,7 @@ import (
 
 	homerv1alpha1 "github.com/rajsinghtech/homer-operator/api/v1alpha1"
 	"github.com/rajsinghtech/homer-operator/pkg/homer"
+	"github.com/rajsinghtech/homer-operator/pkg/utils"
 )
 
 // HTTPRouteReconciler reconciles a HTTPRoute object
@@ -89,7 +87,7 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 				return ctrl.Result{}, err
 			}
 			homer.UpdateConfigMapHTTPRoute(&configMap, httproute, dashboard.Spec.DomainFilters)
-			if err := r.updateConfigMapWithRetry(ctx, &configMap, dashboard.Name); err != nil {
+			if err := utils.UpdateConfigMapWithRetry(ctx, r.Client, &configMap, dashboard.Name); err != nil {
 				log.Error(err, "unable to update ConfigMap", "configmap", dashboard.Name)
 				return ctrl.Result{}, err
 			}
@@ -105,50 +103,6 @@ func (r *HTTPRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&gatewayv1.HTTPRoute{}).
 		Complete(r)
-}
-
-// updateConfigMapWithRetry updates a ConfigMap with exponential backoff retry on conflicts
-func (r *HTTPRouteReconciler) updateConfigMapWithRetry(ctx context.Context, configMap *corev1.ConfigMap, dashboardName string) error {
-	log := log.FromContext(ctx)
-
-	backoff := wait.Backoff{
-		Steps:    5,
-		Duration: 100 * time.Millisecond,
-		Factor:   2.0,
-		Jitter:   0.1,
-		Cap:      5 * time.Second,
-	}
-
-	return wait.ExponentialBackoffWithContext(ctx, backoff, func(ctx context.Context) (bool, error) {
-		// Get the latest version of the ConfigMap before updating
-		latestConfigMap := &corev1.ConfigMap{}
-		key := client.ObjectKeyFromObject(configMap)
-		if err := r.Get(ctx, key, latestConfigMap); err != nil {
-			if apierrors.IsNotFound(err) {
-				// ConfigMap was deleted, no need to retry
-				return false, err
-			}
-			log.V(1).Info("Failed to get latest ConfigMap, retrying", "error", err)
-			return false, nil // Retry
-		}
-
-		// Copy our changes to the latest version
-		latestConfigMap.Data = configMap.Data
-		latestConfigMap.BinaryData = configMap.BinaryData
-
-		// Attempt to update
-		if err := r.Update(ctx, latestConfigMap); err != nil {
-			if apierrors.IsConflict(err) {
-				log.V(1).Info("ConfigMap update conflict, retrying", "configmap", dashboardName)
-				return false, nil // Retry
-			}
-			// Non-conflict error, don't retry
-			return false, err
-		}
-
-		// Success
-		return true, nil
-	})
 }
 
 // shouldIncludeHTTPRouteForDashboard determines if an HTTPRoute should be included
@@ -170,7 +124,7 @@ func (r *HTTPRouteReconciler) shouldIncludeHTTPRouteForDashboard(ctx context.Con
 
 	// Check domain filters
 	if len(dashboard.Spec.DomainFilters) > 0 {
-		if !r.matchesDomainFilters(httproute.Spec.Hostnames, dashboard.Spec.DomainFilters) {
+		if !utils.MatchesHTTPRouteDomainFilters(httproute.Spec.Hostnames, dashboard.Spec.DomainFilters) {
 			log.Info("HTTPRoute excluded by domain filters", "httproute", httproute.Name, "hostnames", httproute.Spec.Hostnames, "domainFilters", dashboard.Spec.DomainFilters)
 			return false, nil
 		}
@@ -233,23 +187,4 @@ func (r *HTTPRouteReconciler) shouldIncludeHTTPRouteForDashboard(ctx context.Con
 	}
 
 	return true, nil
-}
-
-// matchesDomainFilters checks if any hostname matches the domain filters
-func (r *HTTPRouteReconciler) matchesDomainFilters(hostnames []gatewayv1.Hostname, domainFilters []string) bool {
-	if len(domainFilters) == 0 {
-		return true
-	}
-
-	for _, hostname := range hostnames {
-		hostnameStr := string(hostname)
-		for _, filter := range domainFilters {
-			// Support exact match or subdomain match
-			if hostnameStr == filter || strings.HasSuffix(hostnameStr, "."+filter) {
-				return true
-			}
-		}
-	}
-
-	return false
 }

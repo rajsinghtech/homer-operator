@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	homer "github.com/rajsinghtech/homer-operator/pkg/homer"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -44,6 +45,11 @@ type DashboardSpec struct {
 	// Only applicable when DNSPolicy is set to "None".
 	// This field accepts a JSON string representation of PodDNSConfig
 	DNSConfig string `json:"dnsConfig,omitempty"`
+
+	// Resources defines resource requirements for the Homer container.
+	// If not specified, sensible defaults will be applied.
+	// +kubebuilder:validation:Optional
+	Resources *ResourceRequirements `json:"resources,omitempty"`
 
 	// Assets configures custom assets (logos, icons, CSS) for the dashboard.
 	Assets *AssetsConfig `json:"assets,omitempty"`
@@ -219,6 +225,17 @@ type GroupingRule struct {
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:default=1
 	Priority int `json:"priority,omitempty"`
+}
+
+// ResourceRequirements describes resource requirements for the Homer container
+type ResourceRequirements struct {
+	// Limits describes the maximum amount of compute resources allowed.
+	// +kubebuilder:validation:Optional
+	Limits map[string]resource.Quantity `json:"limits,omitempty"`
+
+	// Requests describes the minimum amount of compute resources required.
+	// +kubebuilder:validation:Optional
+	Requests map[string]resource.Quantity `json:"requests,omitempty"`
 }
 
 // ServiceHealthConfig defines health checking configuration for services

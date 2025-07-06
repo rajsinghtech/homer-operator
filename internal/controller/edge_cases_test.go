@@ -85,19 +85,21 @@ var _ = Describe("Edge Cases and Error Handling Tests", func() {
 				NamespacedName: typeNamespacedName,
 			})
 
-			// The controller should create resources even with validation warnings
-			// (based on the current implementation that logs warnings but continues)
-			Expect(err).NotTo(HaveOccurred())
+			// The controller should now properly return validation errors
+			// instead of silently ignoring them
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("homer config validation failed"))
+			Expect(err.Error()).To(ContainSubstring("title is required for dashboard"))
 
-			By("Checking that resources are still created despite validation warnings")
+			By("Checking that resources are NOT created when validation fails")
 			configMap := &corev1.ConfigMap{}
-			Eventually(func() bool {
+			Consistently(func() bool {
 				err := k8sClient.Get(ctx, types.NamespacedName{
 					Name:      dashboardName + "-homer",
 					Namespace: namespaceName,
 				}, configMap)
-				return err == nil
-			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
+				return err != nil // Should consistently return error (resource not found)
+			}, time.Second*3, time.Millisecond*500).Should(BeTrue())
 		})
 	})
 
