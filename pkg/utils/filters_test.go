@@ -70,6 +70,17 @@ func TestMatchesHostDomainFilters(t *testing.T) {
 }
 
 func TestMatchesIngressDomainFilters(t *testing.T) {
+	// Create helper function for Ingress creation
+	createIngress := func(hosts ...string) *networkingv1.Ingress {
+		var rules []networkingv1.IngressRule
+		for _, host := range hosts {
+			rules = append(rules, networkingv1.IngressRule{Host: host})
+		}
+		return &networkingv1.Ingress{
+			Spec: networkingv1.IngressSpec{Rules: rules},
+		}
+	}
+
 	tests := []struct {
 		name          string
 		ingress       *networkingv1.Ingress
@@ -77,51 +88,26 @@ func TestMatchesIngressDomainFilters(t *testing.T) {
 		expected      bool
 	}{
 		{
-			name: "ingress with matching host",
-			ingress: &networkingv1.Ingress{
-				Spec: networkingv1.IngressSpec{
-					Rules: []networkingv1.IngressRule{
-						{Host: "api.example.com"},
-					},
-				},
-			},
+			name:          "ingress with matching host",
+			ingress:       createIngress("api.example.com"),
 			domainFilters: []string{"example.com"},
 			expected:      true,
 		},
 		{
-			name: "ingress with non-matching host",
-			ingress: &networkingv1.Ingress{
-				Spec: networkingv1.IngressSpec{
-					Rules: []networkingv1.IngressRule{
-						{Host: "api.other.com"},
-					},
-				},
-			},
+			name:          "ingress with non-matching host",
+			ingress:       createIngress("api.other.com"),
 			domainFilters: []string{"example.com"},
 			expected:      false,
 		},
 		{
-			name: "ingress with empty host",
-			ingress: &networkingv1.Ingress{
-				Spec: networkingv1.IngressSpec{
-					Rules: []networkingv1.IngressRule{
-						{Host: ""},
-					},
-				},
-			},
+			name:          "ingress with empty host",
+			ingress:       createIngress(""),
 			domainFilters: []string{"example.com"},
 			expected:      false,
 		},
 		{
-			name: "ingress with multiple hosts - one matches",
-			ingress: &networkingv1.Ingress{
-				Spec: networkingv1.IngressSpec{
-					Rules: []networkingv1.IngressRule{
-						{Host: "api.other.com"},
-						{Host: "api.example.com"},
-					},
-				},
-			},
+			name:          "ingress with multiple hosts - one matches",
+			ingress:       createIngress("api.other.com", "api.example.com"),
 			domainFilters: []string{"example.com"},
 			expected:      true,
 		},

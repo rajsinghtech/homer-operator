@@ -63,15 +63,15 @@ func (r *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			return ctrl.Result{}, client.IgnoreNotFound(err)
 		}
 	}
-	dashboardList, err := getAllDashboard(ctx, r)
-	if err != nil {
-		log.Error(err, "unable to fetch DashboardList")
+	dashboardList := &homerv1alpha1.DashboardList{}
+	if err := r.List(ctx, dashboardList); err != nil {
+		log.Error(err, "unable to list Dashboards", "ingress", req.NamespacedName)
 		return ctrl.Result{}, err
 	}
 	for _, dashboard := range dashboardList.Items {
 		// Check if dashboard annotations are a subset of the ingress annotations
 		delete(dashboard.Annotations, "kubectl.kubernetes.io/last-applied-configuration")
-		if isSubset(ingress.Annotations, dashboard.Annotations) {
+		if utils.IsSubset(ingress.Annotations, dashboard.Annotations) {
 			// Check if Ingress should be included based on all filters
 			if shouldIncludeIngress, err := r.shouldIncludeIngressForDashboard(ctx, &ingress, &dashboard); err != nil {
 				log.Error(err, "unable to determine if Ingress should be included", "dashboard", dashboard.Name)
@@ -131,27 +131,9 @@ func (r *IngressReconciler) shouldIncludeIngressForDashboard(ctx context.Context
 	return true, nil
 }
 
-// isSubset checks if the first map is a subset of the second map
-func isSubset(map1, map2 map[string]string) bool {
-	for key, value := range map2 {
-		if map1[key] != value {
-			return false
-		}
-	}
-	return true
-}
-
 // SetupWithManager sets up the controller with the Manager.
 func (r *IngressReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingv1.Ingress{}).
 		Complete(r)
-}
-
-func getAllDashboard(ctx context.Context, r *IngressReconciler) (*homerv1alpha1.DashboardList, error) {
-	var clusterDashboards homerv1alpha1.DashboardList
-	if err := r.List(ctx, &clusterDashboards); err != nil {
-		return nil, err
-	}
-	return &clusterDashboards, nil
 }

@@ -360,8 +360,8 @@ func createDeploymentInternal(
 		},
 	}
 
-	// Let Homer's entrypoint handle asset initialization by not pre-creating config.yml
-	// We'll use a different approach - copy our config after Homer sets up defaults
+	// Strategy: Let Homer's entrypoint run first to initialize default assets,
+	// then override with our config. This preserves all default assets (icons, themes, etc.)
 	initCommand := "echo 'Init container ready - Homer will handle asset setup'"
 
 	// If custom assets ConfigMap is provided, add it as a volume and copy assets
@@ -383,17 +383,16 @@ func createDeploymentInternal(
 			MountPath: "/custom-assets",
 		})
 
-		// Update init command to copy config, default assets, then custom assets
-		// Copy only known asset files to prevent overwriting existing Homer assets
-		initCommand = "cp /config/config.yml /www/assets/config.yml && " +
-			"cp -r /www/default-assets/* /www/assets/ 2>/dev/null || true && " +
+		// Pre-stage custom assets but don't copy config.yml yet
+		// This allows Homer's entrypoint to run asset initialization first
+		initCommand = "echo 'Preparing custom assets...' && " +
 			"for file in favicon.ico apple-touch-icon.png pwa-192x192.png pwa-512x512.png; do " +
-			"[ -f /custom-assets/$file ] && cp /custom-assets/$file /www/assets/ || true; done"
+			"[ -f /custom-assets/$file ] && cp /custom-assets/$file /tmp/$file || true; done"
 	}
 
-	// Add PWA manifest creation if provided
+	// Add PWA manifest creation if provided - stage it in /tmp
 	if config.PWAManifest != "" {
-		initCommand += " && cat > /www/assets/manifest.json << 'EOF'\n" + config.PWAManifest + "\nEOF"
+		initCommand += " && cat > /tmp/manifest.json << 'EOF'\n" + config.PWAManifest + "\nEOF"
 	}
 
 	d := &appsv1.Deployment{
@@ -485,7 +484,12 @@ func createDeploymentInternal(
 										Command: []string{
 											"sh",
 											"-c",
-											"sleep 2 && cp /config/config.yml /www/assets/config.yml",
+											"sleep 5 && cp /config/config.yml /www/assets/config.yml && " +
+												"[ -f /tmp/favicon.ico ] && cp /tmp/favicon.ico /www/assets/ || true && " +
+												"[ -f /tmp/apple-touch-icon.png ] && cp /tmp/apple-touch-icon.png /www/assets/ || true && " +
+												"[ -f /tmp/pwa-192x192.png ] && cp /tmp/pwa-192x192.png /www/assets/ || true && " +
+												"[ -f /tmp/pwa-512x512.png ] && cp /tmp/pwa-512x512.png /www/assets/ || true && " +
+												"[ -f /tmp/manifest.json ] && cp /tmp/manifest.json /www/assets/ || true",
 										},
 									},
 								},

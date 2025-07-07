@@ -150,10 +150,10 @@ var _ = Describe("Asset Management Tests", func() {
 			}
 			Expect(hasCustomAssetsMount).To(BeTrue(), "Init container should have custom assets volume mount")
 
-			// Check that init command includes default assets and custom assets copying
+			// Check that init command includes custom assets staging
 			initCommand := initContainer.Command[2] // sh -c "command"
-			Expect(initCommand).To(ContainSubstring("cp -r /www/default-assets/* /www/assets/"))
-			Expect(initCommand).To(ContainSubstring("[ -f /custom-assets/$file ] && cp /custom-assets/$file /www/assets/"))
+			Expect(initCommand).To(ContainSubstring("echo 'Preparing custom assets...'"))
+			Expect(initCommand).To(ContainSubstring("[ -f /custom-assets/$file ] && cp /custom-assets/$file /tmp/$file || true"))
 		})
 	})
 

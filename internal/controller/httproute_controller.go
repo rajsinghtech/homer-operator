@@ -66,7 +66,7 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	for _, dashboard := range dashboardList.Items {
 		// Check if dashboard annotations are a subset of the HTTPRoute annotations
 		delete(dashboard.Annotations, "kubectl.kubernetes.io/last-applied-configuration")
-		if isSubset(httproute.Annotations, dashboard.Annotations) {
+		if utils.IsSubset(httproute.Annotations, dashboard.Annotations) {
 			// Check if HTTPRoute should be included based on all filters
 			if shouldIncludeHTTPRoute, err := r.shouldIncludeHTTPRouteForDashboard(ctx, httproute, &dashboard); err != nil {
 				log.Error(err, "unable to determine if HTTPRoute should be included", "dashboard", dashboard.Name)
