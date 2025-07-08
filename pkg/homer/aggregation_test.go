@@ -19,25 +19,39 @@ func TestServiceHealthEnhancement(t *testing.T) {
 	}
 
 	item := Item{
-		Name: "test-service",
-		Url:  "https://example.com",
+		Parameters: map[string]string{
+			"name": "test-service",
+			"url":  "https://example.com",
+		},
 	}
 
 	enhanceItemWithHealthCheck(&item, healthConfig)
 
-	if item.Type != GenericType {
-		t.Errorf("Expected type to be set to '%s', got '%s'", GenericType, item.Type)
+	// Check Parameters map for type
+	actualType := ""
+	if item.Parameters != nil {
+		actualType = item.Parameters["type"]
+	}
+	if actualType != GenericType {
+		t.Errorf("Expected type to be set to '%s', got '%s'", GenericType, actualType)
 	}
 
-	if item.Endpoint != "https://example.com/health" {
-		t.Errorf("Expected endpoint to be 'https://example.com/health', got '%s'", item.Endpoint)
+	// Check Parameters map for endpoint
+	expectedEndpoint := "https://example.com/health"
+	actualEndpoint := ""
+	if item.Parameters != nil {
+		actualEndpoint = item.Parameters["endpoint"]
+	}
+	if actualEndpoint != expectedEndpoint {
+		t.Errorf("Expected endpoint to be '%s', got '%s'", expectedEndpoint, actualEndpoint)
 	}
 
-	if item.Headers == nil {
+	// Check NestedObjects for headers
+	if item.NestedObjects == nil || item.NestedObjects["headers"] == nil {
 		t.Fatal("Expected headers to be set")
 	}
 
-	if item.Headers["User-Agent"] != "Homer-Operator-Health-Check" {
+	if item.NestedObjects["headers"]["User-Agent"] != "Homer-Operator-Health-Check" {
 		t.Errorf("Expected User-Agent header to be set")
 	}
 }
@@ -48,44 +62,68 @@ func TestServiceHealthEnhancementDisabled(t *testing.T) {
 	}
 
 	item := Item{
-		Name: "test-service",
-		Url:  "https://example.com",
+		Parameters: map[string]string{
+			"name": "test-service",
+			"url":  "https://example.com",
+		},
 	}
 
-	original := item
+	// Make a copy of the original parameters for comparison
+	originalType := ""
+	originalEndpoint := ""
+	if item.Parameters != nil {
+		originalType = item.Parameters["type"]
+		originalEndpoint = item.Parameters["endpoint"]
+	}
+
 	enhanceItemWithHealthCheck(&item, healthConfig)
 
 	// Item should remain unchanged
-	if item.Type != original.Type {
-		t.Errorf("Expected item to remain unchanged when health check disabled")
+	currentType := ""
+	currentEndpoint := ""
+	if item.Parameters != nil {
+		currentType = item.Parameters["type"]
+		currentEndpoint = item.Parameters["endpoint"]
 	}
-	if item.Endpoint != original.Endpoint {
-		t.Errorf("Expected item to remain unchanged when health check disabled")
+
+	if currentType != originalType {
+		t.Errorf("Expected item type to remain unchanged when health check disabled")
+	}
+	if currentEndpoint != originalEndpoint {
+		t.Errorf("Expected item endpoint to remain unchanged when health check disabled")
 	}
 }
 
 func TestAggregateServiceMetrics(t *testing.T) {
 	service := Service{
-		Name: "test-service",
+		Parameters: map[string]string{
+			"name": "test-service",
+		},
 		Items: []Item{
 			{
-				Name:       "api-service",
-				Url:        "https://api.example.com",
-				Type:       "Generic",
-				Endpoint:   "https://api.example.com/health",
-				Tag:        "api",
+				Parameters: map[string]string{
+					"name":     "api-service",
+					"url":      "https://api.example.com",
+					"type":     "Generic",
+					"endpoint": "https://api.example.com/health",
+					"tag":      "api",
+				},
 				LastUpdate: "2023-01-01T10:00:00Z",
 			},
 			{
-				Name:       "web-service",
-				Url:        "https://web.example.com",
-				Tag:        "web",
+				Parameters: map[string]string{
+					"name": "web-service",
+					"url":  "https://web.example.com",
+					"tag":  "web",
+				},
 				LastUpdate: "2023-01-01T11:00:00Z",
 			},
 			{
-				Name:       "static-service",
-				Url:        "https://static.example.com",
-				Keywords:   "static,cdn",
+				Parameters: map[string]string{
+					"name":     "static-service",
+					"url":      "https://static.example.com",
+					"keywords": "static,cdn",
+				},
 				LastUpdate: "2023-01-01T09:00:00Z",
 			},
 		},
@@ -126,32 +164,44 @@ func TestAggregateServiceMetrics(t *testing.T) {
 func TestFindServiceDependencies(t *testing.T) {
 	services := []Service{
 		{
-			Name: "frontend",
+			Parameters: map[string]string{
+				"name": "frontend",
+			},
 			Items: []Item{
 				{
-					Name:     "web-app",
-					Keywords: "web,api,backend",
-					Subtitle: "Frontend application using backend API",
+					Parameters: map[string]string{
+						"name":     "web-app",
+						"keywords": "web,api,backend",
+						"subtitle": "Frontend application using backend API",
+					},
 				},
 			},
 		},
 		{
-			Name: "backend",
+			Parameters: map[string]string{
+				"name": "backend",
+			},
 			Items: []Item{
 				{
-					Name:     "api-server",
-					Keywords: "api,database",
-					Subtitle: "Backend API server",
+					Parameters: map[string]string{
+						"name":     "api-server",
+						"keywords": "api,database",
+						"subtitle": "Backend API server",
+					},
 				},
 			},
 		},
 		{
-			Name: "database",
+			Parameters: map[string]string{
+				"name": "database",
+			},
 			Items: []Item{
 				{
-					Name:     "postgres",
-					Keywords: "database,storage",
-					Subtitle: "PostgreSQL database",
+					Parameters: map[string]string{
+						"name":     "postgres",
+						"keywords": "database,storage",
+						"subtitle": "PostgreSQL database",
+					},
 				},
 			},
 		},
@@ -189,30 +239,30 @@ func TestFindServiceDependencies(t *testing.T) {
 func TestOptimizeServiceLayout(t *testing.T) {
 	services := []Service{
 		{
-			Name: "small-service",
+			Parameters: map[string]string{"name": "small-service"},
 			Items: []Item{
-				{Name: "item1"},
+				{Parameters: map[string]string{"name": "item1"}},
 			},
 		},
 		{
-			Name: "large-service",
+			Parameters: map[string]string{"name": "large-service"},
 			Items: []Item{
-				{Name: "item1"},
-				{Name: "item2"},
-				{Name: "item3"},
+				{Parameters: map[string]string{"name": "item1"}},
+				{Parameters: map[string]string{"name": "item2"}},
+				{Parameters: map[string]string{"name": "item3"}},
 			},
 		},
 		{
-			Name: "medium-service",
+			Parameters: map[string]string{"name": "medium-service"},
 			Items: []Item{
-				{Name: "item1"},
-				{Name: "item2"},
+				{Parameters: map[string]string{"name": "item1"}},
+				{Parameters: map[string]string{"name": "item2"}},
 			},
 		},
 		{
-			Name: "another-small-service",
+			Parameters: map[string]string{"name": "another-small-service"},
 			Items: []Item{
-				{Name: "item1"},
+				{Parameters: map[string]string{"name": "item1"}},
 			},
 		},
 	}
@@ -229,8 +279,12 @@ func TestOptimizeServiceLayout(t *testing.T) {
 	}
 
 	for i, expectedName := range expectedOrder {
-		if optimized[i].Name != expectedName {
-			t.Errorf("Expected service at position %d to be '%s', got '%s'", i, expectedName, optimized[i].Name)
+		actualName := ""
+		if optimized[i].Parameters != nil {
+			actualName = optimized[i].Parameters["name"]
+		}
+		if actualName != expectedName {
+			t.Errorf("Expected service at position %d to be '%s', got '%s'", i, expectedName, actualName)
 		}
 	}
 }
@@ -238,26 +292,34 @@ func TestOptimizeServiceLayout(t *testing.T) {
 func TestCountingFunctions(t *testing.T) {
 	items := []Item{
 		{
-			Name: "item1",
-			Url:  "https://example1.com",
-			Tag:  "web",
-			Type: "Generic",
+			Parameters: map[string]string{
+				"name": "item1",
+				"url":  "https://example1.com",
+				"tag":  "web",
+				"type": "Generic",
+			},
 		},
 		{
-			Name: "item2",
-			Url:  "https://example2.com",
-			// No tag
-			// No type
+			Parameters: map[string]string{
+				"name": "item2",
+				"url":  "https://example2.com",
+				// No tag
+				// No type
+			},
 		},
 		{
-			Name: "item3",
-			// No URL
-			Tag:  "api",
-			Type: "Prometheus",
+			Parameters: map[string]string{
+				"name": "item3",
+				// No URL
+				"tag":  "api",
+				"type": "Prometheus",
+			},
 		},
 		{
-			Name: "item4",
-			// No URL, no tag, no type
+			Parameters: map[string]string{
+				"name": "item4",
+				// No URL, no tag, no type
+			},
 		},
 	}
 
@@ -281,15 +343,21 @@ func TestEnhanceHomerConfigWithAggregation(t *testing.T) {
 	config := &HomerConfig{
 		Services: []Service{
 			{
-				Name: "test-service",
+				Parameters: map[string]string{
+					"name": "test-service",
+				},
 				Items: []Item{
 					{
-						Name: "api-service",
-						Url:  "https://api.example.com",
+						Parameters: map[string]string{
+							"name": "api-service",
+							"url":  "https://api.example.com",
+						},
 					},
 					{
-						Name: "web-service",
-						Url:  "https://web.example.com",
+						Parameters: map[string]string{
+							"name": "web-service",
+							"url":  "https://web.example.com",
+						},
 					},
 				},
 			},
@@ -309,13 +377,25 @@ func TestEnhanceHomerConfigWithAggregation(t *testing.T) {
 	// Verify that items were enhanced with health check capabilities
 	for _, service := range config.Services {
 		for _, item := range service.Items {
-			if item.Type != GenericType {
-				t.Errorf("Expected item type to be '%s', got '%s'", GenericType, item.Type)
+			itemType := ""
+			endpoint := ""
+			if item.Parameters != nil {
+				itemType = item.Parameters["type"]
+				endpoint = item.Parameters["endpoint"]
 			}
-			if item.Endpoint == "" {
+
+			if itemType != GenericType {
+				t.Errorf("Expected item type to be '%s', got '%s'", GenericType, itemType)
+			}
+			if endpoint == "" {
 				t.Error("Expected item endpoint to be set")
 			}
-			if item.Headers == nil || item.Headers["User-Agent"] != "Homer-Health-Check" {
+
+			userAgent := ""
+			if item.NestedObjects != nil && item.NestedObjects["headers"] != nil {
+				userAgent = item.NestedObjects["headers"]["User-Agent"]
+			}
+			if userAgent != "Homer-Health-Check" {
 				t.Error("Expected health check headers to be set")
 			}
 		}
@@ -352,14 +432,23 @@ func TestServiceHealthConfigValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			item := Item{
-				Name: "test-item",
-				Url:  "https://example.com",
+				Parameters: map[string]string{
+					"name": "test-item",
+					"url":  "https://example.com",
+				},
 			}
 
-			originalType := item.Type
+			originalType := ""
+			if item.Parameters != nil {
+				originalType = item.Parameters["type"]
+			}
 			enhanceItemWithHealthCheck(&item, tt.config)
 
-			enhanced := item.Type != originalType
+			currentType := ""
+			if item.Parameters != nil {
+				currentType = item.Parameters["type"]
+			}
+			enhanced := currentType != originalType
 			if enhanced != tt.expected {
 				t.Errorf("Expected enhancement=%v, got enhancement=%v", tt.expected, enhanced)
 			}
@@ -374,13 +463,17 @@ func TestPerformanceWithLargeConfig(t *testing.T) {
 	// Add 50 services with 20 items each
 	for i := 0; i < 50; i++ {
 		service := Service{
-			Name: fmt.Sprintf("service-%d", i),
+			Parameters: map[string]string{
+				"name": fmt.Sprintf("service-%d", i),
+			},
 		}
 		for j := 0; j < 20; j++ {
 			item := Item{
-				Name:     fmt.Sprintf("item-%d-%d", i, j),
-				Url:      fmt.Sprintf("https://example-%d-%d.com", i, j),
-				Keywords: fmt.Sprintf("keyword%d,tag%d", i, j),
+				Parameters: map[string]string{
+					"name":     fmt.Sprintf("item-%d-%d", i, j),
+					"url":      fmt.Sprintf("https://example-%d-%d.com", i, j),
+					"keywords": fmt.Sprintf("keyword%d,tag%d", i, j),
+				},
 			}
 			service.Items = append(service.Items, item)
 		}
@@ -404,7 +497,11 @@ func TestPerformanceWithLargeConfig(t *testing.T) {
 	// Verify all items were enhanced
 	for _, service := range config.Services {
 		for _, item := range service.Items {
-			if item.Type != GenericType {
+			itemType := ""
+			if item.Parameters != nil {
+				itemType = item.Parameters["type"]
+			}
+			if itemType != GenericType {
 				t.Errorf("Expected all items to be enhanced with type '%s'", GenericType)
 			}
 		}

@@ -184,7 +184,12 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			for itemIdx := range homerConfig.Services[serviceIdx].Items {
 				item := &homerConfig.Services[serviceIdx].Items[itemIdx]
 				if err := homer.ResolveAPIKeyFromSecret(ctx, r.Client, item, secretRef, dashboard.Namespace); err != nil {
-					log.Error(err, "failed to resolve API key from secret", "item", item.Name)
+					// Get item name from Parameters map only
+					itemName := ""
+					if item.Parameters != nil {
+						itemName = item.Parameters["name"]
+					}
+					log.Error(err, "failed to resolve API key from secret", "item", itemName)
 					return ctrl.Result{}, err
 				}
 			}

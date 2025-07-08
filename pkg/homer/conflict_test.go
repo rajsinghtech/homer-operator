@@ -10,12 +10,16 @@ func TestBasicServiceUpdate(t *testing.T) {
 	config := &HomerConfig{
 		Services: []Service{
 			{
-				Name: "test-namespace",
+				Parameters: map[string]string{
+					"name": "test-namespace",
+				},
 				Items: []Item{
 					{
-						Name: "existing-service",
-						Url:  "http://old.example.com",
-						Tag:  "old-tag",
+						Parameters: map[string]string{
+							"name": "existing-service",
+							"url":  "http://old.example.com",
+							"tag":  "old-tag",
+						},
 					},
 				},
 			},
@@ -23,11 +27,17 @@ func TestBasicServiceUpdate(t *testing.T) {
 	}
 
 	// Test adding a new item to existing service
-	service := Service{Name: "test-namespace"}
+	service := Service{
+		Parameters: map[string]string{
+			"name": "test-namespace",
+		},
+	}
 	newItem := Item{
-		Name: "new-service",
-		Url:  "https://new.example.com",
-		Tag:  "new-tag",
+		Parameters: map[string]string{
+			"name": "new-service",
+			"url":  "https://new.example.com",
+			"tag":  "new-tag",
+		},
 	}
 	updateOrAddServiceItems(config, service, []Item{newItem})
 
@@ -41,9 +51,11 @@ func TestBasicServiceUpdate(t *testing.T) {
 
 	// Test replacing existing item
 	replacementItem := Item{
-		Name: "existing-service",
-		Url:  "https://updated.example.com",
-		Tag:  "updated-tag",
+		Parameters: map[string]string{
+			"name": "existing-service",
+			"url":  "https://updated.example.com",
+			"tag":  "updated-tag",
+		},
 	}
 	updateOrAddServiceItems(config, service, []Item{replacementItem})
 
@@ -54,7 +66,7 @@ func TestBasicServiceUpdate(t *testing.T) {
 	// Find the updated item
 	var updatedItem *Item
 	for i, item := range config.Services[0].Items {
-		if item.Name == "existing-service" {
+		if item.Parameters != nil && item.Parameters["name"] == "existing-service" {
 			updatedItem = &config.Services[0].Items[i]
 			break
 		}
@@ -64,8 +76,13 @@ func TestBasicServiceUpdate(t *testing.T) {
 		t.Fatal("Could not find updated item")
 	}
 
-	if updatedItem.Url != "https://updated.example.com" {
-		t.Errorf("Expected URL 'https://updated.example.com', got '%s'", updatedItem.Url)
+	expectedURL := "https://updated.example.com"
+	actualURL := ""
+	if updatedItem.Parameters != nil {
+		actualURL = updatedItem.Parameters["url"]
+	}
+	if actualURL != expectedURL {
+		t.Errorf("Expected URL '%s', got '%s'", expectedURL, actualURL)
 	}
 }
 
@@ -79,24 +96,17 @@ func TestHeadersAnnotation(t *testing.T) {
 
 	processItemAnnotations(&item, annotations)
 
-	if item.Name != "test-service" {
-		t.Errorf("Expected name 'test-service', got '%s'", item.Name)
+	if item.Parameters["name"] != "test-service" {
+		t.Errorf("Expected name 'test-service', got '%s'", item.Parameters["name"])
 	}
 
-	if item.Headers == nil {
-		t.Fatal("Expected headers to be set")
+	// Headers are now stored in Parameters with headers. prefix
+	if item.Parameters["headers.authorization"] != "Bearer token123" {
+		t.Errorf("Expected authorization header 'Bearer token123', got '%s'", item.Parameters["headers.authorization"])
 	}
 
-	if len(item.Headers) != 2 {
-		t.Errorf("Expected 2 headers, got %d", len(item.Headers))
-	}
-
-	if item.Headers["authorization"] != "Bearer token123" {
-		t.Errorf("Expected authorization header 'Bearer token123', got '%s'", item.Headers["authorization"])
-	}
-
-	if item.Headers["x-api-key"] != "key456" {
-		t.Errorf("Expected x-api-key header 'key456', got '%s'", item.Headers["x-api-key"])
+	if item.Parameters["headers.x-api-key"] != "key456" {
+		t.Errorf("Expected x-api-key header 'key456', got '%s'", item.Parameters["headers.x-api-key"])
 	}
 }
 
@@ -268,12 +278,16 @@ func TestServiceGroupingPerformance(t *testing.T) {
 	// Add 100 services with 10 items each
 	for i := 0; i < 100; i++ {
 		service := Service{
-			Name: fmt.Sprintf("service-%d", i),
+			Parameters: map[string]string{
+				"name": fmt.Sprintf("service-%d", i),
+			},
 		}
 		for j := 0; j < 10; j++ {
 			item := Item{
-				Name: fmt.Sprintf("item-%d-%d", i, j),
-				Url:  fmt.Sprintf("https://example-%d-%d.com", i, j),
+				Parameters: map[string]string{
+					"name": fmt.Sprintf("item-%d-%d", i, j),
+					"url":  fmt.Sprintf("https://example-%d-%d.com", i, j),
+				},
 			}
 			service.Items = append(service.Items, item)
 		}
@@ -283,10 +297,16 @@ func TestServiceGroupingPerformance(t *testing.T) {
 	// Test adding new items to existing services
 	start := time.Now()
 	for i := 0; i < 100; i++ {
-		service := Service{Name: fmt.Sprintf("service-%d", i)}
+		service := Service{
+			Parameters: map[string]string{
+				"name": fmt.Sprintf("service-%d", i),
+			},
+		}
 		newItem := Item{
-			Name: fmt.Sprintf("new-item-%d", i),
-			Url:  fmt.Sprintf("https://new-example-%d.com", i),
+			Parameters: map[string]string{
+				"name": fmt.Sprintf("new-item-%d", i),
+				"url":  fmt.Sprintf("https://new-example-%d.com", i),
+			},
 		}
 		updateOrAddServiceItems(config, service, []Item{newItem})
 	}

@@ -44,7 +44,9 @@ func TestHTTPRouteHostnameRemovalCleanup(t *testing.T) {
 	// Verify the specific items exist
 	itemNames := make(map[string]bool)
 	for _, item := range service.Items {
-		itemNames[item.Name] = true
+		if item.Parameters != nil {
+			itemNames[item.Parameters["name"]] = true
+		}
 	}
 
 	expectedInitialItems := []string{
@@ -82,7 +84,9 @@ func TestHTTPRouteHostnameRemovalCleanup(t *testing.T) {
 	// Verify the correct items remain
 	itemNames = make(map[string]bool)
 	for _, item := range service.Items {
-		itemNames[item.Name] = true
+		if item.Parameters != nil {
+			itemNames[item.Parameters["name"]] = true
+		}
 	}
 
 	expectedRemainingItems := []string{
@@ -157,7 +161,9 @@ func TestIngressHostnameRemovalCleanup(t *testing.T) {
 	// Verify the correct items remain
 	itemNames := make(map[string]bool)
 	for _, item := range service.Items {
-		itemNames[item.Name] = true
+		if item.Parameters != nil {
+			itemNames[item.Parameters["name"]] = true
+		}
 	}
 
 	expectedRemainingItems := []string{
@@ -279,20 +285,28 @@ func TestRemoveItemsFromHTTPRouteSource(t *testing.T) {
 	config := &HomerConfig{
 		Services: []Service{
 			{
-				Name: "test-service",
+				Parameters: map[string]string{
+					"name": "test-service",
+				},
 				Items: []Item{
 					{
-						Name:      "item1",
+						Parameters: map[string]string{
+							"name": "item1",
+						},
 						Source:    "route1",
 						Namespace: "test-ns",
 					},
 					{
-						Name:      "item2",
+						Parameters: map[string]string{
+							"name": "item2",
+						},
 						Source:    "route2",
 						Namespace: "test-ns",
 					},
 					{
-						Name:      "item3",
+						Parameters: map[string]string{
+							"name": "item3",
+						},
 						Source:    "route1",
 						Namespace: "test-ns",
 					},
@@ -344,8 +358,12 @@ func TestSingleHostnameToMultipleHostnameTransition(t *testing.T) {
 		t.Fatal("Expected 1 service with 1 item")
 	}
 
-	if config.Services[0].Items[0].Name != "app-route" {
-		t.Errorf("Expected item name 'app-route', got '%s'", config.Services[0].Items[0].Name)
+	actualName := ""
+	if config.Services[0].Items[0].Parameters != nil {
+		actualName = config.Services[0].Items[0].Parameters["name"]
+	}
+	if actualName != "app-route" {
+		t.Errorf("Expected item name 'app-route', got '%s'", actualName)
 	}
 
 	// Now add a second hostname
@@ -365,7 +383,9 @@ func TestSingleHostnameToMultipleHostnameTransition(t *testing.T) {
 
 	itemNames := make(map[string]bool)
 	for _, item := range service.Items {
-		itemNames[item.Name] = true
+		if item.Parameters != nil {
+			itemNames[item.Parameters["name"]] = true
+		}
 	}
 
 	expectedItems := []string{
@@ -382,5 +402,56 @@ func TestSingleHostnameToMultipleHostnameTransition(t *testing.T) {
 	// The old item without suffix should be gone
 	if itemNames["app-route"] {
 		t.Error("Expected old item 'app-route' to be removed")
+	}
+}
+
+func TestHTTPRouteWithEmptyNamespace(t *testing.T) {
+	config := &HomerConfig{
+		Title: "Test Dashboard",
+	}
+
+	// HTTPRoute with empty namespace - this was causing validation failures
+	httproute := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "empty-namespace-route",
+			Namespace:         "", // Empty namespace!
+			CreationTimestamp: metav1.NewTime(time.Now()),
+		},
+		Spec: gatewayv1.HTTPRouteSpec{
+			Hostnames: []gatewayv1.Hostname{
+				"app.internal.local",
+			},
+		},
+	}
+
+	domainFilters := []string{"internal.local"}
+	UpdateHomerConfigHTTPRoute(config, httproute, domainFilters)
+
+	// Verify service was created
+	if len(config.Services) != 1 {
+		t.Fatalf("Expected 1 service, got %d", len(config.Services))
+	}
+
+	service := config.Services[0]
+
+	// Verify service has proper parameters
+	if service.Parameters == nil {
+		t.Fatal("Service parameters should not be nil")
+	}
+
+	// Verify service name defaults to "default" when namespace is empty
+	serviceName := service.Parameters["name"]
+	if serviceName != "default" {
+		t.Errorf("Expected service name 'default' for empty namespace, got '%s'", serviceName)
+	}
+
+	// Verify the service has items
+	if len(service.Items) != 1 {
+		t.Fatalf("Expected 1 item, got %d", len(service.Items))
+	}
+
+	// Most importantly: verify validation passes
+	if err := ValidateHomerConfig(config); err != nil {
+		t.Errorf("Configuration validation failed: %v", err)
 	}
 }

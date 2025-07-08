@@ -287,6 +287,74 @@ spec:
   # ... httproute configuration
 ```
 
+### Dynamic Annotation System
+
+The Homer Operator features an intelligent, convention-based annotation system that supports **any Homer configuration parameter** automatically, without requiring code changes:
+
+#### Smart Type Detection
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: smart-app
+  annotations:
+    # Basic parameters (auto-detected as strings)
+    item.homer.rajsingh.info/name: "Smart Application"
+    item.homer.rajsingh.info/subtitle: "AI-powered service"
+    
+    # Boolean parameters (case-insensitive, multiple formats)
+    item.homer.rajsingh.info/useCredentials: "TRUE"  # or "true", "yes", "1"
+    item.homer.rajsingh.info/legacyapi: "false"      # or "FALSE", "no", "0"
+    
+    # Integer parameters (auto-detected by naming patterns)
+    item.homer.rajsingh.info/timeout: "30"           # *_value, *Interval patterns
+    item.homer.rajsingh.info/updateInterval: "5000"  # Auto-detected as integer
+    item.homer.rajsingh.info/warning_value: "80"     # Threshold parameters
+    item.homer.rajsingh.info/danger_value: "95"      # Auto-validated
+    
+    # Array parameters (comma-separated, auto-cleaned)
+    item.homer.rajsingh.info/keywords: " api , service , smart "  # Spaces trimmed
+    
+    # Object parameters (key:value pairs)
+    item.homer.rajsingh.info/headers: "Authorization: Bearer token, Content-Type: application/json"
+```
+
+#### Nested Object Support
+
+Supports complex nested configurations using slash notation:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: advanced-app
+  annotations:
+    # Nested object: customHeaders
+    item.homer.rajsingh.info/customHeaders/Authorization: "Bearer secret-token"
+    item.homer.rajsingh.info/customHeaders/X-API-Key: "api-key-123"
+    item.homer.rajsingh.info/customHeaders/Content-Type: "application/json"
+    
+    # Nested object: mapping (for smart cards)
+    item.homer.rajsingh.info/mapping/status: "health.status"
+    item.homer.rajsingh.info/mapping/version: "info.version"
+    
+    # Any Homer parameter works automatically!
+    item.homer.rajsingh.info/checkInterval: "30000"      # Smart card refresh
+    item.homer.rajsingh.info/location: "US-East"         # Custom parameters
+    item.homer.rajsingh.info/environment: "production"   # User-defined fields
+```
+
+#### Convention-Based Intelligence
+
+The system automatically detects parameter types using intelligent patterns:
+
+- **Booleans**: Parameters ending in `_enabled`, `_flag` or named `usecredentials`, `legacyapi`
+- **Integers**: Parameters ending in `Interval`, `_value`, `Value` or named `timeout`, `limit`
+- **Objects**: Parameters named `headers`, `mapping`, `customHeaders`
+- **Arrays**: Comma-separated values (automatically cleaned and trimmed)
+- **Validation**: Built-in validation for `url`, `target`, numeric values
+
 ### Production Deployment
 
 ```yaml

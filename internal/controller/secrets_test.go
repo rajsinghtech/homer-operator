@@ -77,40 +77,52 @@ var _ = Describe("Secret Integration Tests", func() {
 						Subtitle: "Dashboard with Secret Integration",
 						Services: []homer.Service{
 							{
-								Name: "Media Services",
-								Icon: "fas fa-film",
+								Parameters: map[string]string{
+									"name": "Media Services",
+									"icon": "fas fa-film",
+								},
 								Items: []homer.Item{
 									{
-										Name:     "Plex Server",
-										Subtitle: "Media Streaming",
-										Type:     "Emby", // Smart card type that uses API key
-										Url:      "https://plex.example.com",
-										Endpoint: "/api/v1",
+										Parameters: map[string]string{
+											"name":     "Plex Server",
+											"subtitle": "Media Streaming",
+											"type":     "Emby", // Smart card type that uses API key
+											"url":      "https://plex.example.com",
+											"endpoint": "/api/v1",
+										},
 									},
 									{
-										Name:     "Sonarr",
-										Subtitle: "TV Show Management",
-										Type:     "Sonarr", // Smart card type that uses API key
-										Url:      "https://sonarr.example.com",
+										Parameters: map[string]string{
+											"name":     "Sonarr",
+											"subtitle": "TV Show Management",
+											"type":     "Sonarr", // Smart card type that uses API key
+											"url":      "https://sonarr.example.com",
+										},
 									},
 								},
 							},
 							{
-								Name: "Monitoring",
-								Icon: "fas fa-chart-line",
+								Parameters: map[string]string{
+									"name": "Monitoring",
+									"icon": "fas fa-chart-line",
+								},
 								Items: []homer.Item{
 									{
-										Name:     "Prometheus",
-										Subtitle: "Metrics Collection",
-										Type:     "Prometheus", // Smart card type that uses token
-										Url:      "https://prometheus.example.com",
-										Endpoint: "/metrics",
+										Parameters: map[string]string{
+											"name":     "Prometheus",
+											"subtitle": "Metrics Collection",
+											"type":     "Prometheus", // Smart card type that uses token
+											"url":      "https://prometheus.example.com",
+											"endpoint": "/metrics",
+										},
 									},
 									{
-										Name:     "Grafana",
-										Subtitle: "Dashboards",
-										Type:     "Grafana", // Smart card type that uses username/password
-										Url:      "https://grafana.example.com",
+										Parameters: map[string]string{
+											"name":     "Grafana",
+											"subtitle": "Dashboards",
+											"type":     "Grafana", // Smart card type that uses username/password
+											"url":      "https://grafana.example.com",
+										},
 									},
 								},
 							},
@@ -229,12 +241,16 @@ var _ = Describe("Secret Integration Tests", func() {
 						Title: "Missing Secret Dashboard",
 						Services: []homer.Service{
 							{
-								Name: "Test Services",
+								Parameters: map[string]string{
+									"name": "Test Services",
+								},
 								Items: []homer.Item{
 									{
-										Name: "Test Smart Card",
-										Type: "Prometheus",
-										Url:  "https://test.example.com",
+										Parameters: map[string]string{
+											"name": "Test Smart Card",
+											"type": "Prometheus",
+											"url":  "https://test.example.com",
+										},
 									},
 								},
 							},
@@ -316,12 +332,16 @@ var _ = Describe("Secret Integration Tests", func() {
 						Title: "Missing Key Dashboard",
 						Services: []homer.Service{
 							{
-								Name: "Test Services",
+								Parameters: map[string]string{
+									"name": "Test Services",
+								},
 								Items: []homer.Item{
 									{
-										Name: "Test Smart Card",
-										Type: "Prometheus",
-										Url:  "https://test.example.com",
+										Parameters: map[string]string{
+											"name": "Test Smart Card",
+											"type": "Prometheus",
+											"url":  "https://test.example.com",
+										},
 									},
 								},
 							},
@@ -422,12 +442,16 @@ var _ = Describe("Secret Integration Tests", func() {
 						Title: "Cross-Namespace Secret Dashboard",
 						Services: []homer.Service{
 							{
-								Name: "Cross-NS Services",
+								Parameters: map[string]string{
+									"name": "Cross-NS Services",
+								},
 								Items: []homer.Item{
 									{
-										Name: "Cross-NS Smart Card",
-										Type: "Prometheus",
-										Url:  "https://cross-ns.example.com",
+										Parameters: map[string]string{
+											"name": "Cross-NS Smart Card",
+											"type": "Prometheus",
+											"url":  "https://cross-ns.example.com",
+										},
 									},
 								},
 							},
@@ -542,13 +566,17 @@ var _ = Describe("Secret Integration Tests", func() {
 						Title: "No Smart Cards Dashboard",
 						Services: []homer.Service{
 							{
-								Name: "Regular Services",
+								Parameters: map[string]string{
+									"name": "Regular Services",
+								},
 								Items: []homer.Item{
 									{
-										Name:     "Regular Link",
-										Subtitle: "No smart card",
-										Url:      "https://regular.example.com",
-										// No Type field = not a smart card
+										Parameters: map[string]string{
+											"name":     "Regular Link",
+											"subtitle": "No smart card",
+											"url":      "https://regular.example.com",
+											// No Type field = not a smart card
+										},
 									},
 								},
 							},

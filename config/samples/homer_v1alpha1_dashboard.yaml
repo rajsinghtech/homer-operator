@@ -1,22 +1,9 @@
 ---
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: dashboard-assets
-data:
-  # Custom favicon (32x32 PNG as favicon.ico equivalent)
-  favicon.ico: |
-    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
-  
-  # Apple Touch Icon (180x180 PNG - using original size resized)
-  apple-touch-icon.png: |
-    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
-
----
 apiVersion: homer.rajsingh.info/v1alpha1
 kind: Dashboard
 metadata:
   name: dashboard-sample
+  namespace: public
   labels:
     app: homer-dashboard
     tier: frontend
@@ -30,28 +17,32 @@ spec:
     footer: '<p>Powered by <strong>Homer-Operator</strong> | <a href="https://github.com/rajsinghtech/homer-operator">GitHub</a></p>'
     colors:
       light:
-        highlight-primary: "#3367d6"
-        highlight-secondary: "#4285f4"
-        highlight-hover: "#5a95f5"
-        background: "#f5f5f5"
-        card-background: "#ffffff"
-        text: "#363636"
-        text-header: "#ffffff"
-        text-title: "#303030"
-        text-subtitle: "#424242"
-        card-shadow: rgba(0, 0, 0, 0.1)
+        highlight-primary: "#d2b48c"
+        highlight-secondary: "#c8a974"
+        highlight-hover: "#b8956e"
+        background: "#fefcf9"
+        card-background: "#f6f0e8"
+        text: "#3b2f2f"
+        text-header: "#3b2f2f"
+        text-title: "#2f2626"
+        text-subtitle: "#6e5c5c"
+        card-shadow: rgba(120, 100, 80, 0.1)
+        link: "#a86c3f"            # Warm medium brown
+        link-hover: "#6b3e1d"      # Darker brown for hover contrast
 
       dark:
-        highlight-primary: "#3367d6"
-        highlight-secondary: "#141b27"
-        highlight-hover: "#364762"
-        background: "#111"
-        card-background: "#222"
-        text: "#eee"
-        text-header: "#eee"
-        text-title: "#eee"
-        text-subtitle: "#ccc"
+        highlight-primary: "#d2b48c"
+        highlight-secondary: "#a98e69"
+        highlight-hover: "#917555"
+        background: "#1b1a17"
+        card-background: "#2a2824"
+        text: "#e9e1d8"
+        text-header: "#e9e1d8"
+        text-title: "#f5f0e6"
+        text-subtitle: "#cbb9a8"
         card-shadow: none
+        link: "#e2b185"            # Light warm tan (for contrast in dark mode)
+        link-hover: "#f5cda3"      # Brighter hover tan
     
     # Default layout settings
     defaults:
@@ -78,30 +69,12 @@ spec:
     - name: "Infrastructure Services"
       icon: "fas fa-server"
       items:
-      - name: "Kubernetes Dashboard"
-        logo: "https://raw.githubusercontent.com/kubernetes/kubernetes/master/logo/logo.png"
-        subtitle: "Cluster Management"
-        tag: "k8s"
+      - name: "Tailscale"
+        logo: "https://raw.githubusercontent.com/tailscale/tailscale/refs/heads/main/client/web/src/assets/icons/tailscale-icon.svg"
+        subtitle: "Private Mesh Network"
+        tag: "network"
         tagstyle: "is-info"
-        url: "https://kubernetes.rajsingh.info/dashboard"
-        target: "_blank"
-        keywords: "kubernetes cluster management"
-      - name: "Grafana"
-        logo: "https://grafana.com/static/assets/img/grafana_icon.svg"
-        subtitle: "Monitoring & Dashboards"
-        tag: "monitoring"
-        tagstyle: "is-warning"
-        url: "https://grafana.rajsingh.info"
-        target: "_blank"
-        type: "Grafana"
-      - name: "Prometheus"
-        logo: "https://prometheus.io/assets/prometheus_logo_grey.svg"
-        subtitle: "Metrics Collection"
-        tag: "metrics"
-        tagstyle: "is-danger"
-        url: "https://prometheus.rajsingh.info"
-        target: "_blank"
-        type: "Prometheus"
+        url: "https://login.tailscale.com/admin/machines"
     
     - name: "Development Tools"
       icon: "fas fa-code"
@@ -112,6 +85,13 @@ spec:
         tag: "git"
         tagstyle: "is-primary"
         url: "https://github.com/rajsinghtech/kubernetes-manifests"
+        target: "_blank"
+      - name: "ArgoCD"
+        logo: "https://raw.githubusercontent.com/argoproj/argo-cd/master/ui/src/assets/images/argo.png"
+        subtitle: "GitOps Controller"
+        tag: "git"
+        tagstyle: "is-primary"
+        url: "https://argocd.rajsingh.info"
         target: "_blank"
   
   # Custom assets and PWA configuration

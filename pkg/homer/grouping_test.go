@@ -95,6 +95,30 @@ func TestDetermineServiceGroup(t *testing.T) {
 			},
 			expected: "production", // fallback to namespace
 		},
+		{
+			name:        "Empty namespace defaults to 'default'",
+			namespace:   "", // Empty namespace
+			labels:      map[string]string{},
+			annotations: map[string]string{},
+			config:      nil,
+			expected:    "default", // should default to "default"
+		},
+		{
+			name:        "Empty namespace with label strategy fallback",
+			namespace:   "", // Empty namespace
+			labels:      map[string]string{"app": "web"},
+			annotations: map[string]string{},
+			config:      &ServiceGroupingConfig{Strategy: ServiceGroupingLabel, LabelKey: "team"}, // team label doesn't exist
+			expected:    "default",                                                                // fallback to "default"
+		},
+		{
+			name:        "Empty label value with fallback",
+			namespace:   "production",
+			labels:      map[string]string{"team": ""}, // Empty label value
+			annotations: map[string]string{},
+			config:      &ServiceGroupingConfig{Strategy: ServiceGroupingLabel, LabelKey: "team"},
+			expected:    "production", // should fallback to namespace when label is empty
+		},
 	}
 
 	for _, tt := range tests {
@@ -233,8 +257,13 @@ func TestFlexibleGroupingIntegration(t *testing.T) {
 	}
 
 	service := config.Services[0]
-	if service.Name != "frontend" {
-		t.Errorf("Expected service name 'frontend', got '%s'", service.Name)
+	expectedName := "frontend"
+	actualName := ""
+	if service.Parameters != nil {
+		actualName = service.Parameters["name"]
+	}
+	if actualName != expectedName {
+		t.Errorf("Expected service name '%s', got '%s'", expectedName, actualName)
 	}
 
 	if len(service.Items) != 1 {
@@ -242,8 +271,14 @@ func TestFlexibleGroupingIntegration(t *testing.T) {
 	}
 
 	item := service.Items[0]
-	if item.Name != "My Web App" {
-		t.Errorf("Expected item name 'My Web App', got '%s'", item.Name)
+	// In the dynamic system, annotation-provided names are stored in Parameters
+	expectedItemName := "My Web App"
+	actualItemName := ""
+	if item.Parameters != nil && item.Parameters["name"] != "" {
+		actualItemName = item.Parameters["name"]
+	}
+	if actualItemName != expectedItemName {
+		t.Errorf("Expected item name '%s', got '%s'", expectedItemName, actualItemName)
 	}
 
 	// Test adding another service to the same group

@@ -543,18 +543,22 @@ var _ = Describe("Edge Cases and Error Handling Tests", func() {
 				items := make([]homer.Item, 20)
 				for j := 0; j < 20; j++ {
 					items[j] = homer.Item{
-						Name:     fmt.Sprintf("Service-%d-Item-%d", i, j),
-						Subtitle: fmt.Sprintf("This is item %d in service %d with a very long subtitle to test large configurations", j, i),
-						Url:      fmt.Sprintf("https://service-%d-item-%d.example.com/path/to/service", i, j),
-						Logo:     fmt.Sprintf("https://example.com/logos/service-%d-item-%d.png", i, j),
-						Keywords: fmt.Sprintf("service,item,test,large,config,service%d,item%d", i, j),
-						Tag:      fmt.Sprintf("v%d.%d", i, j),
-						Type:     "GenericWebhook",
+						Parameters: map[string]string{
+							"name":     fmt.Sprintf("Service-%d-Item-%d", i, j),
+							"subtitle": fmt.Sprintf("This is item %d in service %d with a very long subtitle to test large configurations", j, i),
+							"url":      fmt.Sprintf("https://service-%d-item-%d.example.com/path/to/service", i, j),
+							"logo":     fmt.Sprintf("https://example.com/logos/service-%d-item-%d.png", i, j),
+							"keywords": fmt.Sprintf("service,item,test,large,config,service%d,item%d", i, j),
+							"tag":      fmt.Sprintf("v%d.%d", i, j),
+							"type":     "GenericWebhook",
+						},
 					}
 				}
 				services[i] = homer.Service{
-					Name:  fmt.Sprintf("Service Group %d", i),
-					Icon:  "fas fa-server",
+					Parameters: map[string]string{
+						"name": fmt.Sprintf("Service Group %d", i),
+						"icon": "fas fa-server",
+					},
 					Items: items,
 				}
 			}
