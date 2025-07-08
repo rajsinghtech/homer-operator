@@ -261,10 +261,18 @@ var _ = Describe("Dashboard Controller", func() {
 				return err == nil
 			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
 
-			initContainer := deployment.Spec.Template.Spec.InitContainers[0]
-			initCommand := initContainer.Command[2] // The command is in position 2 (sh -c "command")
-			Expect(initCommand).To(ContainSubstring("manifest.json"))
-			Expect(initCommand).To(ContainSubstring("Test PWA"))
+			// Check that the config-sync sidecar contains PWA manifest logic
+			var sidecarContainer *corev1.Container
+			for i := range deployment.Spec.Template.Spec.Containers {
+				if deployment.Spec.Template.Spec.Containers[i].Name == "config-sync" {
+					sidecarContainer = &deployment.Spec.Template.Spec.Containers[i]
+					break
+				}
+			}
+			Expect(sidecarContainer).ToNot(BeNil(), "config-sync sidecar should exist")
+			sidecarCommand := sidecarContainer.Command[2] // The command is in position 2 (sh -c "command")
+			Expect(sidecarCommand).To(ContainSubstring("manifest.json"))
+			Expect(sidecarCommand).To(ContainSubstring("Test PWA"))
 		})
 	})
 

@@ -9,6 +9,29 @@ metadata:
     tier: frontend
 spec:
   replicas: 2
+  
+  # DNS Configuration (optional)
+  # Controls DNS policy and configuration for dashboard pods
+  # dnsPolicy: "ClusterFirst"  # ClusterFirst, ClusterFirstWithHostNet, Default, None
+  # dnsConfig: |
+  #   {
+  #     "nameservers": ["8.8.8.8", "8.8.4.4"],
+  #     "searches": ["example.com", "svc.cluster.local"],
+  #     "options": [
+  #       {"name": "ndots", "value": "2"},
+  #       {"name": "timeout", "value": "5"}
+  #     ]
+  #   }
+  
+  # Resource Requirements (optional)
+  # Define CPU and memory limits/requests for the Homer container
+  # resources:
+  #   limits:
+  #     cpu: "500m"
+  #     memory: "512Mi"
+  #   requests:
+  #     cpu: "100m"
+  #     memory: "128Mi"
   homerConfig:
     title: "Raj Singh's"
     subtitle: "Infrastructure Dashboard"
@@ -95,29 +118,49 @@ spec:
         target: "_blank"
   
   # Custom assets and PWA configuration
+  # Enables custom branding, icons, and Progressive Web App features
   # assets:
   #   configMapRef:
   #     name: "dashboard-assets"
+  #     namespace: "public"  # Optional: defaults to Dashboard namespace
   #   icons:
-  #     favicon: "favicon.ico"
-  #     appleTouchIcon: "apple-touch-icon.png"
-  #     pwaIcon192: "pwa-192x192.png"
-  #     pwaIcon512: "pwa-512x512.png"
+  #     favicon: "favicon.ico"                    # Custom favicon
+  #     appleTouchIcon: "apple-touch-icon.png"   # iOS home screen icon
+  #     pwaIcon192: "pwa-192x192.png"            # PWA icon 192x192
+  #     pwaIcon512: "pwa-512x512.png"            # PWA icon 512x512
   #   pwa:
   #     enabled: true
-  #     name: "Homer Dashboard"
-  #     shortName: "Homer"
+  #     name: "Homer Dashboard"                   # Full PWA name
+  #     shortName: "Homer"                       # Short name for home screen
   #     description: "Homer Dashboard powered by Homer-Operator"
-  #     themeColor: "#3367d6"
-  #     backgroundColor: "#ffffff"
-  #     display: "standalone"
-  #     startUrl: "/"
+  #     themeColor: "#3367d6"                    # Theme color for browser UI
+  #     backgroundColor: "#ffffff"               # Background color for splash screen
+  #     display: "standalone"                    # Display mode: standalone, fullscreen, minimal-ui, browser
+  #     startUrl: "/"                            # Starting URL when launched from home screen
   
-  # Optional: Secret references for smart cards
+  # Secret references for smart cards and authentication
+  # Enables secure storage of sensitive data for Homer smart cards
   # secrets:
   #   apiKey:
   #     name: "dashboard-secrets"
   #     key: "api-key"
+  #     namespace: "public"  # Optional: defaults to Dashboard namespace
+  #   token:
+  #     name: "dashboard-secrets"
+  #     key: "auth-token"
+  #   password:
+  #     name: "dashboard-secrets"
+  #     key: "password"
+  #   username:
+  #     name: "dashboard-secrets"
+  #     key: "username"
+  #   headers:  # Custom authentication headers from secrets
+  #     Authorization:
+  #       name: "dashboard-secrets"
+  #       key: "bearer-token"
+  #     X-API-Key:
+  #       name: "dashboard-secrets"
+  #       key: "api-key"
   
   # Optional selectors and filters for controlling which resources are included
   
@@ -132,14 +175,23 @@ spec:
   #     values: ["istio", "envoy-gateway", "nginx-gateway"]
 
   # HTTPRoute selector for filtering HTTPRoutes by their own labels (optional)
+  # Fine-grained control over which HTTPRoutes are included in the dashboard
   # httpRouteSelector:
   #   matchLabels:
-  #     environment: "production"
-  #     team: "platform"
+  #     environment: "production"    # Only include production HTTPRoutes
+  #     team: "platform"             # Only include platform team HTTPRoutes
+  #     tier: "frontend"             # Only include frontend HTTPRoutes
   #   matchExpressions:
   #   - key: "app.kubernetes.io/component"
   #     operator: In
   #     values: ["api", "frontend", "service"]
+  #   - key: "app.kubernetes.io/version"
+  #     operator: NotIn
+  #     values: ["v1.0.0", "legacy"]
+  #   - key: "monitoring.enabled"
+  #     operator: Exists                # Include only HTTPRoutes with monitoring enabled
+  #   - key: "deprecated"
+  #     operator: DoesNotExist          # Exclude deprecated HTTPRoutes
 
   # Ingress selector for filtering Ingresses by labels (optional)
   ingressSelector:
@@ -153,6 +205,53 @@ spec:
     - "rajsingh.info"
   #   - "mycompany.com"
   #   - "internal.local"
+  
+  # Service Grouping Configuration (optional)
+  # Controls how discovered services are organized into groups
+  # serviceGrouping:
+  #   strategy: "namespace"  # namespace, label, custom
+  #   # For label strategy - specify which label to use for grouping
+  #   labelKey: "app.kubernetes.io/component"
+  #   # For custom strategy - define custom grouping rules
+  #   customRules:
+  #   - name: "Frontend Services"
+  #     condition:
+  #       "app.kubernetes.io/component": "frontend"
+  #       "tier": "web"
+  #     priority: 10
+  #   - name: "API Services"
+  #     condition:
+  #       "app.kubernetes.io/component": "api"
+  #     priority: 5
+  #   - name: "Database Services"
+  #     condition:
+  #       "app.kubernetes.io/component": "database"
+  #     priority: 1
+  
+  # Validation Level (optional)
+  # Controls strictness of annotation validation
+  # validationLevel: "warn"  # strict, warn, none
+  
+  # Health Check Configuration (optional)
+  # Enables automatic health checking of discovered services
+  # healthCheck:
+  #   enabled: true
+  #   interval: "30s"        # Check interval
+  #   timeout: "10s"         # Request timeout
+  #   healthPath: "/health"  # Path to append for health checks
+  #   expectedCode: 200      # Expected HTTP status code
+  #   headers:               # Custom headers for health requests
+  #     Authorization: "Bearer token"
+  #     X-Health-Check: "true"
+  
+  # Advanced Features Configuration (optional)
+  # Enables advanced dashboard features and optimizations
+  # advanced:
+  #   enableDependencyAnalysis: true    # Auto-detect service dependencies
+  #   enableMetricsAggregation: true    # Collect and display service metrics
+  #   enableLayoutOptimization: true    # Auto-optimize service layout
+  #   maxServicesPerGroup: 20           # Limit services per group (0 = unlimited)
+  #   maxItemsPerService: 10            # Limit items per service (0 = unlimited)
 
   # ConfigMap for Homer configuration
   # configMap:

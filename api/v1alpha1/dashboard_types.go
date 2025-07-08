@@ -72,11 +72,6 @@ type DashboardSpec struct {
 	// ServiceGrouping configures how services are grouped in the dashboard.
 	ServiceGrouping *ServiceGroupingConfig `json:"serviceGrouping,omitempty"`
 
-	// ConflictResolution defines how to handle conflicts when multiple resources define the same item.
-	// +kubebuilder:validation:Enum=replace;merge;error
-	// +kubebuilder:default="replace"
-	ConflictResolution string `json:"conflictResolution,omitempty"`
-
 	// ValidationLevel defines the strictness of annotation validation.
 	// +kubebuilder:validation:Enum=strict;warn;none
 	// +kubebuilder:default="warn"

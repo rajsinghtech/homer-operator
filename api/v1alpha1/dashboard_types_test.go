@@ -112,8 +112,7 @@ func TestDashboardSpecValidation(t *testing.T) {
 						},
 					},
 				},
-				ConflictResolution: "merge",
-				ValidationLevel:    "strict",
+				ValidationLevel: "strict",
 				HealthCheck: &ServiceHealthConfig{
 					Enabled:      true,
 					Interval:     "60s",
@@ -349,8 +348,7 @@ func TestDashboardCreation(t *testing.T) {
 				Strategy: "label",
 				LabelKey: "team",
 			},
-			ConflictResolution: "merge",
-			ValidationLevel:    "warn",
+			ValidationLevel: "warn",
 			HealthCheck: &ServiceHealthConfig{
 				Enabled:      true,
 				Interval:     "45s",
@@ -387,10 +385,6 @@ func TestDashboardCreation(t *testing.T) {
 
 	if dashboard.Spec.ServiceGrouping.LabelKey != "team" {
 		t.Errorf("Expected label key 'team', got '%s'", dashboard.Spec.ServiceGrouping.LabelKey)
-	}
-
-	if dashboard.Spec.ConflictResolution != "merge" {
-		t.Errorf("Expected conflict resolution 'merge', got '%s'", dashboard.Spec.ConflictResolution)
 	}
 
 	if dashboard.Spec.ValidationLevel != "warn" {

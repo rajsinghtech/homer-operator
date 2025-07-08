@@ -25,15 +25,6 @@ import (
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
-// ConflictStrategy defines how to handle conflicts when merging items
-type ConflictStrategy string
-
-const (
-	ConflictStrategyReplace ConflictStrategy = "replace"
-	ConflictStrategyMerge   ConflictStrategy = "merge"
-	ConflictStrategyError   ConflictStrategy = "error"
-)
-
 // ServiceGroupingStrategy defines how services are grouped
 type ServiceGroupingStrategy string
 
@@ -63,6 +54,8 @@ const (
 	GenericType       = "Generic"
 	DefaultNamespace  = "default"
 	NameField         = "name"
+	URLField          = "url"
+	CRDSource         = "crd"
 	WarningValueField = "warning_value"
 	DangerValueField  = "danger_value"
 	BooleanTrue       = "true"
@@ -125,6 +118,11 @@ type Service struct {
 	// Items in this service group
 	Items []Item `json:"items,omitempty"`
 
+	// Common service fields (for CRD compatibility and user convenience)
+	Name string `json:"name,omitempty"`
+	Icon string `json:"icon,omitempty"`
+	Logo string `json:"logo,omitempty"`
+
 	// Dynamic parameters for annotation-driven configuration
 	Parameters map[string]string `json:"parameters,omitempty"`
 	// Nested objects for complex configuration (e.g., headers)
@@ -133,6 +131,19 @@ type Service struct {
 
 // Item represents a Homer dashboard item configuration
 type Item struct {
+	// Common item fields (for CRD compatibility and user convenience)
+	Name     string `json:"name,omitempty"`
+	Logo     string `json:"logo,omitempty"`
+	Icon     string `json:"icon,omitempty"`
+	Subtitle string `json:"subtitle,omitempty"`
+	URL      string `json:"url,omitempty"`
+	Tag      string `json:"tag,omitempty"`
+	TagStyle string `json:"tagstyle,omitempty"`
+	Target   string `json:"target,omitempty"`
+	Keywords string `json:"keywords,omitempty"`
+	Type     string `json:"type,omitempty"`
+	Endpoint string `json:"endpoint,omitempty"`
+
 	// Dynamic parameters for annotation-driven configuration
 	Parameters map[string]string `json:"parameters,omitempty"`
 	// Nested objects for complex configuration (e.g., customHeaders)
@@ -214,41 +225,122 @@ func cleanupHomerConfig(config *HomerConfig) {
 	// Filter out services with empty names or invalid structure
 	validServices := make([]Service, 0, len(config.Services))
 	for _, service := range config.Services {
-		// Ensure service has valid parameters map
-		if service.Parameters == nil {
-			service.Parameters = make(map[string]string)
-		}
+		// Convert and validate the service
+		normalizedService := normalizeCRDService(&service)
 
-		// Check if service has a valid name
-		serviceName := getServiceName(&service)
+		// Check if service has a valid name after normalization
+		serviceName := getServiceName(&normalizedService)
 		if serviceName == "" {
-			// Try to fix service name if possible, otherwise skip
+			// Skip services with no name
 			continue
 		}
 
 		// Clean up items in the service
 		var validItems []Item
-		for _, item := range service.Items {
-			// Ensure item has valid parameters map
-			if item.Parameters == nil {
-				item.Parameters = make(map[string]string)
-			}
+		for _, item := range normalizedService.Items {
+			// Convert and validate the item
+			normalizedItem := normalizeCRDItem(&item)
 
-			// Check if item has a valid name
-			itemName := getItemName(&item)
+			// Check if item has a valid name after normalization
+			itemName := getItemName(&normalizedItem)
 			if itemName == "" {
 				// Skip items with no name
 				continue
 			}
 
-			validItems = append(validItems, item)
+			// Mark as CRD source for conflict detection
+			normalizedItem.Source = CRDSource
+			normalizedItem.Namespace = "dashboard"
+			normalizedItem.LastUpdate = "crd-defined"
+
+			validItems = append(validItems, normalizedItem)
 		}
 
-		service.Items = validItems
-		validServices = append(validServices, service)
+		normalizedService.Items = validItems
+		validServices = append(validServices, normalizedService)
 	}
 
 	config.Services = validServices
+}
+
+// normalizeCRDService converts CRD-style service to modern Parameters format
+func normalizeCRDService(service *Service) Service {
+	normalized := *service
+
+	// Initialize Parameters map if not exists
+	if normalized.Parameters == nil {
+		normalized.Parameters = make(map[string]string)
+	}
+
+	// Initialize NestedObjects map if not exists
+	if normalized.NestedObjects == nil {
+		normalized.NestedObjects = make(map[string]map[string]string)
+	}
+
+	// Migrate struct fields to Parameters map (for consistency with dynamic approach)
+	if normalized.Name != "" && normalized.Parameters["name"] == "" {
+		normalized.Parameters["name"] = normalized.Name
+	}
+	if normalized.Icon != "" && normalized.Parameters["icon"] == "" {
+		normalized.Parameters["icon"] = normalized.Icon
+	}
+	if normalized.Logo != "" && normalized.Parameters["logo"] == "" {
+		normalized.Parameters["logo"] = normalized.Logo
+	}
+
+	return normalized
+}
+
+// normalizeCRDItem converts CRD-style item to modern Parameters format
+func normalizeCRDItem(item *Item) Item {
+	normalized := *item
+
+	// Initialize Parameters map if not exists
+	if normalized.Parameters == nil {
+		normalized.Parameters = make(map[string]string)
+	}
+
+	// Initialize NestedObjects map if not exists
+	if normalized.NestedObjects == nil {
+		normalized.NestedObjects = make(map[string]map[string]string)
+	}
+
+	// Migrate struct fields to Parameters map (for consistency with dynamic approach)
+	if normalized.Name != "" && normalized.Parameters["name"] == "" {
+		normalized.Parameters["name"] = normalized.Name
+	}
+	if normalized.Logo != "" && normalized.Parameters["logo"] == "" {
+		normalized.Parameters["logo"] = normalized.Logo
+	}
+	if normalized.Icon != "" && normalized.Parameters["icon"] == "" {
+		normalized.Parameters["icon"] = normalized.Icon
+	}
+	if normalized.Subtitle != "" && normalized.Parameters["subtitle"] == "" {
+		normalized.Parameters["subtitle"] = normalized.Subtitle
+	}
+	if normalized.URL != "" && normalized.Parameters["url"] == "" {
+		normalized.Parameters["url"] = normalized.URL
+	}
+	if normalized.Tag != "" && normalized.Parameters["tag"] == "" {
+		normalized.Parameters["tag"] = normalized.Tag
+	}
+	if normalized.TagStyle != "" && normalized.Parameters["tagstyle"] == "" {
+		normalized.Parameters["tagstyle"] = normalized.TagStyle
+	}
+	if normalized.Target != "" && normalized.Parameters["target"] == "" {
+		normalized.Parameters["target"] = normalized.Target
+	}
+	if normalized.Keywords != "" && normalized.Parameters["keywords"] == "" {
+		normalized.Parameters["keywords"] = normalized.Keywords
+	}
+	if normalized.Type != "" && normalized.Parameters["type"] == "" {
+		normalized.Parameters["type"] = normalized.Type
+	}
+	if normalized.Endpoint != "" && normalized.Parameters["endpoint"] == "" {
+		normalized.Parameters["endpoint"] = normalized.Endpoint
+	}
+
+	return normalized
 }
 
 // HotkeyConfig contains hotkey configuration
@@ -315,7 +407,10 @@ func CreateConfigMap(
 	// Clean up any invalid services from the initial config
 	cleanupHomerConfig(config)
 
-	_ = UpdateHomerConfig(config, ingresses, nil)
+	// Process each ingress individually using smart merging (CRD foundation + discoveries enhance)
+	for _, ingress := range ingresses.Items {
+		UpdateHomerConfigIngress(config, ingress, nil)
+	}
 
 	// Validate configuration before creating ConfigMap
 	if err := ValidateHomerConfig(config); err != nil {
@@ -374,8 +469,11 @@ func createConfigMapWithHTTPRoutesAndHealth(
 	// Clean up any invalid services from the initial config
 	cleanupHomerConfig(config)
 
-	_ = UpdateHomerConfig(config, ingresses, domainFilters)
-	// Update config with HTTPRoutes
+	// Process each ingress individually using smart merging (CRD foundation + discoveries enhance)
+	for _, ingress := range ingresses.Items {
+		UpdateHomerConfigIngress(config, ingress, domainFilters)
+	}
+	// Update config with HTTPRoutes using smart merging
 	for _, httproute := range httproutes {
 		UpdateHomerConfigHTTPRoute(config, &httproute, domainFilters)
 	}
@@ -463,24 +561,7 @@ func createDeploymentInternal(
 		},
 	}
 
-	// Base volume mounts for init container
-	initVolumeMounts := []corev1.VolumeMount{
-		{
-			Name:      "config-volume",
-			MountPath: "/config",
-		},
-		{
-			Name:      "assets-volume",
-			MountPath: "/www/assets",
-		},
-	}
-
-	// Strategy: Let Homer's entrypoint run first to initialize default assets,
-	// then override with our config. This preserves all default assets (icons, themes, etc.)
-	initCommand := "echo 'Init container ready - Homer will handle asset setup'"
-
-	// If custom assets ConfigMap is provided, add it as a volume and copy assets
-	// Only mount and copy assets when they are actually needed for PWA or custom assets
+	// Add custom assets ConfigMap volume if provided
 	if config.AssetsConfigMapName != "" {
 		volumes = append(volumes, corev1.Volume{
 			Name: config.AssetsConfigMapName,
@@ -492,22 +573,6 @@ func createDeploymentInternal(
 				},
 			},
 		})
-
-		initVolumeMounts = append(initVolumeMounts, corev1.VolumeMount{
-			Name:      config.AssetsConfigMapName,
-			MountPath: "/custom-assets",
-		})
-
-		// Pre-stage custom assets but don't copy config.yml yet
-		// This allows Homer's entrypoint to run asset initialization first
-		initCommand = "echo 'Preparing custom assets...' && " +
-			"for file in favicon.ico apple-touch-icon.png pwa-192x192.png pwa-512x512.png; do " +
-			"[ -f /custom-assets/$file ] && cp /custom-assets/$file /tmp/$file || true; done"
-	}
-
-	// Add PWA manifest creation if provided - stage it in /tmp
-	if config.PWAManifest != "" {
-		initCommand += " && cat > /tmp/manifest.json << 'EOF'\n" + config.PWAManifest + "\nEOF"
 	}
 
 	d := &appsv1.Deployment{
@@ -543,14 +608,15 @@ func createDeploymentInternal(
 							Type: corev1.SeccompProfileTypeRuntimeDefault,
 						},
 					},
-					InitContainers: []corev1.Container{
+					InitContainers: []corev1.Container{},
+					Containers: []corev1.Container{
 						{
-							Name:  "init-assets",
-							Image: "busybox:1.35",
+							Name:  "config-sync",
+							Image: "alpine:3.18",
 							Command: []string{
 								"sh",
 								"-c",
-								initCommand,
+								buildSidecarCommand(config),
 							},
 							SecurityContext: &corev1.SecurityContext{
 								AllowPrivilegeEscalation: &[]bool{false}[0],
@@ -564,10 +630,18 @@ func createDeploymentInternal(
 									Type: corev1.SeccompProfileTypeRuntimeDefault,
 								},
 							},
-							VolumeMounts: initVolumeMounts,
+							VolumeMounts: buildSidecarVolumeMounts(config),
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("5m"),
+									corev1.ResourceMemory: resource.MustParse("16Mi"),
+								},
+								Limits: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("50m"),
+									corev1.ResourceMemory: resource.MustParse("64Mi"),
+								},
+							},
 						},
-					},
-					Containers: []corev1.Container{
 						{
 							Name:  name,
 							Image: image,
@@ -591,22 +665,6 @@ func createDeploymentInternal(
 								{
 									Name:      "config-volume",
 									MountPath: "/config",
-								},
-							},
-							Lifecycle: &corev1.Lifecycle{
-								PostStart: &corev1.LifecycleHandler{
-									Exec: &corev1.ExecAction{
-										Command: []string{
-											"sh",
-											"-c",
-											"sleep 5 && cp /config/config.yml /www/assets/config.yml && " +
-												"[ -f /tmp/favicon.ico ] && cp /tmp/favicon.ico /www/assets/ || true && " +
-												"[ -f /tmp/apple-touch-icon.png ] && cp /tmp/apple-touch-icon.png /www/assets/ || true && " +
-												"[ -f /tmp/pwa-192x192.png ] && cp /tmp/pwa-192x192.png /www/assets/ || true && " +
-												"[ -f /tmp/pwa-512x512.png ] && cp /tmp/pwa-512x512.png /www/assets/ || true && " +
-												"[ -f /tmp/manifest.json ] && cp /tmp/manifest.json /www/assets/ || true",
-										},
-									},
 								},
 							},
 							Ports: []corev1.ContainerPort{
@@ -665,6 +723,71 @@ func getContainerResources(config *DeploymentConfig) corev1.ResourceRequirements
 			corev1.ResourceMemory: resource.MustParse("128Mi"),
 		},
 	}
+}
+
+// buildSidecarCommand creates the command for the config-sync sidecar container
+func buildSidecarCommand(config *DeploymentConfig) string {
+	// Initial setup: wait for Homer to initialize, then set up config and assets
+	cmd := "echo 'Waiting for Homer to initialize assets...' && sleep 10 && "
+
+	// Set up config.yml symlink
+	cmd += "ln -sf /config/config.yml /www/assets/config.yml && "
+	cmd += "echo 'Config symlink created' && "
+
+	// Copy custom assets if ConfigMap is provided
+	if config != nil && config.AssetsConfigMapName != "" {
+		cmd += "echo 'Setting up custom assets...' && "
+		cmd += "for file in favicon.ico apple-touch-icon.png pwa-192x192.png pwa-512x512.png; do " +
+			"[ -f /custom-assets/$file ] && cp /custom-assets/$file /www/assets/ || true; done && "
+	}
+
+	// Add PWA manifest if provided
+	if config != nil && config.PWAManifest != "" {
+		escapedManifest := strings.ReplaceAll(config.PWAManifest, "'", "'\"'\"'")
+		cmd += "echo 'Creating PWA manifest...' && " +
+			"cat > /www/assets/manifest.json << 'EOF'\n" + escapedManifest + "\nEOF && "
+	}
+
+	cmd += "echo 'Initial setup complete. Starting config watch...' && "
+
+	// Watch for ConfigMap changes using polling approach - no package installation needed
+	cmd += "last_config_link='' && " +
+		"while true; do " +
+		"current_config_link=$(readlink /config/config.yml 2>/dev/null || echo 'none') && " +
+		"if [ \"$current_config_link\" != \"$last_config_link\" ]; then " +
+		"echo 'Config change detected, updating symlink...' && " +
+		"ln -sf /config/config.yml /www/assets/config.yml && " +
+		"echo \"Config updated at $(date)\" && " +
+		"last_config_link=\"$current_config_link\"; " +
+		"fi; " +
+		"sleep 5; " +
+		"done"
+
+	return cmd
+}
+
+// buildSidecarVolumeMounts creates volume mounts for the config-sync sidecar
+func buildSidecarVolumeMounts(config *DeploymentConfig) []corev1.VolumeMount {
+	mounts := []corev1.VolumeMount{
+		{
+			Name:      "config-volume",
+			MountPath: "/config",
+		},
+		{
+			Name:      "assets-volume",
+			MountPath: "/www/assets",
+		},
+	}
+
+	// Add custom assets mount if configured
+	if config != nil && config.AssetsConfigMapName != "" {
+		mounts = append(mounts, corev1.VolumeMount{
+			Name:      config.AssetsConfigMapName,
+			MountPath: "/custom-assets",
+		})
+	}
+
+	return mounts
 }
 
 // CreateDeploymentWithAssets creates a Deployment with custom asset support and PWA manifest
@@ -878,65 +1001,6 @@ func CreateService(name string, namespace string, owner client.Object) corev1.Se
 	}
 	return *s
 }
-func UpdateHomerConfig(config *HomerConfig, ingresses networkingv1.IngressList, domainFilters []string) error {
-	var services []Service
-	// iterate over all ingresses and add them to the dashboard
-	for _, ingress := range ingresses.Items {
-		for _, rule := range ingress.Spec.Rules {
-			host := rule.Host
-			if host == "" {
-				continue // Skip rules without hostnames
-			}
-
-			// Apply domain filtering
-			if !utils.MatchesHostDomainFilters(host, domainFilters) {
-				continue // Skip hosts that don't match domain filters
-			}
-
-			item := Item{}
-			service := Service{}
-
-			// Set default values using helper functions
-			setServiceParameter(&service, "name", getNamespaceOrDefault(ingress.ObjectMeta.Namespace))
-			setServiceParameter(&service, "logo", NamespaceIconURL)
-			setItemParameter(&item, "name", ingress.ObjectMeta.Name)
-			setItemParameter(&item, "logo", IngressIconURL)
-			setItemParameter(&item, "subtitle", host)
-
-			if len(ingress.Spec.TLS) > 0 {
-				setItemParameter(&item, "url", "https://"+host)
-			} else {
-				setItemParameter(&item, "url", "http://"+host)
-			}
-
-			// Process annotations safely (these will override defaults)
-			processItemAnnotations(&item, ingress.ObjectMeta.Annotations)
-			processServiceAnnotations(&service, ingress.ObjectMeta.Annotations)
-			service.Items = append(service.Items, item)
-			services = append(services, service)
-		}
-	}
-	for _, s1 := range services {
-		complete := false
-		// Get s1 name from Parameters map
-		s1Name := getServiceName(&s1)
-
-		for j, s2 := range config.Services {
-			// Get s2 name from Parameters map
-			s2Name := getServiceName(&s2)
-
-			if s1Name != "" && s1Name == s2Name {
-				config.Services[j].Items = append(s2.Items, s1.Items[0])
-				complete = true
-				break
-			}
-		}
-		if !complete {
-			config.Services = append(config.Services, s1)
-		}
-	}
-	return nil
-}
 func UpdateHomerConfigIngress(homerConfig *HomerConfig, ingress networkingv1.Ingress, domainFilters []string) {
 	UpdateHomerConfigIngressWithGrouping(homerConfig, ingress, domainFilters, nil)
 }
@@ -1144,7 +1208,8 @@ func createHTTPRouteItem(httproute *gatewayv1.HTTPRoute, hostname, protocol stri
 	return item
 }
 
-// updateOrAddServiceItems updates existing items or adds new ones to the service
+// updateOrAddServiceItems updates existing items or adds new ones using smart merging
+// Smart strategy: CRD items = foundation, discovered items = enhancements
 func updateOrAddServiceItems(homerConfig *HomerConfig, service Service, items []Item) {
 	// Get service name from Parameters only
 	serviceName := getServiceName(&service)
@@ -1154,18 +1219,19 @@ func updateOrAddServiceItems(homerConfig *HomerConfig, service Service, items []
 		existingServiceName := getServiceName(&s)
 
 		if existingServiceName == serviceName {
-			// Service exists, update/add items
+			// Service exists, smart merge items
 			for _, newItem := range items {
 				updated := false
 				// Get new item name from Parameters map
 				newItemName := getItemName(&newItem)
 
-				// Check if item already exists and update it
+				// Check if item already exists
 				for ix, existingItem := range s.Items {
 					existingItemName := getItemName(&existingItem)
 
 					if existingItemName == newItemName {
-						homerConfig.Services[sx].Items[ix] = newItem
+						// Smart merge: preserve CRD foundation, enhance with discovered data
+						smartMergeItems(&homerConfig.Services[sx].Items[ix], &newItem)
 						updated = true
 						break
 					}
@@ -1182,6 +1248,74 @@ func updateOrAddServiceItems(homerConfig *HomerConfig, service Service, items []
 	// Service not found, create new service with all items
 	service.Items = items
 	homerConfig.Services = append(homerConfig.Services, service)
+}
+
+// smartMergeItems intelligently merges items prioritizing CRD foundation with discovered enhancements
+func smartMergeItems(existingItem, newItem *Item) {
+	// Initialize maps if they don't exist
+	if existingItem.Parameters == nil {
+		existingItem.Parameters = make(map[string]string)
+	}
+	if existingItem.NestedObjects == nil {
+		existingItem.NestedObjects = make(map[string]map[string]string)
+	}
+
+	// Smart merging rules based on item source
+	isCRDExisting := existingItem.Source == CRDSource
+	isDiscoveredNew := newItem.Source != CRDSource && newItem.Source != ""
+
+	if newItem.Parameters != nil {
+		for key, value := range newItem.Parameters {
+			// Smart precedence rules
+			switch key {
+			case NameField:
+				// CRD name always wins (foundation principle)
+				if !isCRDExisting {
+					existingItem.Parameters[key] = value
+				}
+			case URLField, "subtitle":
+				// Discovered items provide runtime URLs and subtitles (they know the actual endpoints)
+				if isDiscoveredNew {
+					existingItem.Parameters[key] = value
+				} else if existingItem.Parameters[key] == "" || !isCRDExisting {
+					// Fill in if empty OR if existing item is not from CRD (allow updates)
+					existingItem.Parameters[key] = value
+				}
+			default:
+				// For other fields, CRD takes precedence, discovered fills gaps
+				if isCRDExisting && existingItem.Parameters[key] != "" {
+					// Keep CRD value
+					continue
+				}
+				// Use new value (either CRD is empty or new item is CRD)
+				existingItem.Parameters[key] = value
+			}
+		}
+	}
+
+	// Merge nested objects (additive - both sources contribute)
+	if newItem.NestedObjects != nil {
+		for objectName, objectMap := range newItem.NestedObjects {
+			if existingItem.NestedObjects[objectName] == nil {
+				existingItem.NestedObjects[objectName] = make(map[string]string)
+			}
+			for key, value := range objectMap {
+				// Additive approach - both CRD and discovered can contribute
+				existingItem.NestedObjects[objectName][key] = value
+			}
+		}
+	}
+
+	// Update metadata intelligently
+	if isDiscoveredNew {
+		// Discovered items bring fresh runtime data
+		existingItem.LastUpdate = newItem.LastUpdate
+		// But preserve the fact that this was originally from CRD if applicable
+		if !isCRDExisting {
+			existingItem.Source = newItem.Source
+			existingItem.Namespace = newItem.Namespace
+		}
+	}
 }
 
 // determineProtocolFromHTTPRoute determines the protocol based on HTTPRoute configuration

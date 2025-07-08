@@ -32,6 +32,10 @@ import (
 	"github.com/rajsinghtech/homer-operator/pkg/homer"
 )
 
+const (
+	configSyncContainerName = "config-sync"
+)
+
 var _ = Describe("Asset Management Tests", func() {
 	Context("When creating Dashboard with custom assets ConfigMap", func() {
 		const dashboardName = "test-dashboard-assets"
@@ -139,21 +143,29 @@ var _ = Describe("Asset Management Tests", func() {
 			}
 			Expect(hasCustomAssetsVolume).To(BeTrue(), "Deployment should have custom assets volume")
 
-			// Check that init container has custom assets volume mount
-			initContainer := deployment.Spec.Template.Spec.InitContainers[0]
+			// Check that config-sync sidecar has custom assets volume mount
+			var sidecarContainer *corev1.Container
+			for i := range deployment.Spec.Template.Spec.Containers {
+				if deployment.Spec.Template.Spec.Containers[i].Name == configSyncContainerName {
+					sidecarContainer = &deployment.Spec.Template.Spec.Containers[i]
+					break
+				}
+			}
+			Expect(sidecarContainer).ToNot(BeNil(), "config-sync sidecar should exist")
+
 			hasCustomAssetsMount := false
-			for _, mount := range initContainer.VolumeMounts {
+			for _, mount := range sidecarContainer.VolumeMounts {
 				if mount.Name == assetsConfigMapName && mount.MountPath == "/custom-assets" {
 					hasCustomAssetsMount = true
 					break
 				}
 			}
-			Expect(hasCustomAssetsMount).To(BeTrue(), "Init container should have custom assets volume mount")
+			Expect(hasCustomAssetsMount).To(BeTrue(), "Sidecar container should have custom assets volume mount")
 
-			// Check that init command includes custom assets staging
-			initCommand := initContainer.Command[2] // sh -c "command"
-			Expect(initCommand).To(ContainSubstring("echo 'Preparing custom assets...'"))
-			Expect(initCommand).To(ContainSubstring("[ -f /custom-assets/$file ] && cp /custom-assets/$file /tmp/$file || true"))
+			// Check that sidecar command includes custom assets staging
+			sidecarCommand := sidecarContainer.Command[2] // sh -c "command"
+			Expect(sidecarCommand).To(ContainSubstring("echo 'Setting up custom assets...'"))
+			Expect(sidecarCommand).To(ContainSubstring("[ -f /custom-assets/$file ] && cp /custom-assets/$file /www/assets/ || true"))
 		})
 	})
 
@@ -234,19 +246,27 @@ var _ = Describe("Asset Management Tests", func() {
 				return err == nil
 			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
 
-			initContainer := deployment.Spec.Template.Spec.InitContainers[0]
-			initCommand := initContainer.Command[2]
+			// Check that config-sync sidecar contains PWA manifest logic
+			var sidecarContainer *corev1.Container
+			for i := range deployment.Spec.Template.Spec.Containers {
+				if deployment.Spec.Template.Spec.Containers[i].Name == configSyncContainerName {
+					sidecarContainer = &deployment.Spec.Template.Spec.Containers[i]
+					break
+				}
+			}
+			Expect(sidecarContainer).ToNot(BeNil(), "config-sync sidecar should exist")
+			sidecarCommand := sidecarContainer.Command[2]
 
 			// Check PWA manifest generation
-			Expect(initCommand).To(ContainSubstring("manifest.json"))
-			Expect(initCommand).To(ContainSubstring("Custom PWA App"))
-			Expect(initCommand).To(ContainSubstring("Custom PW")) // Short name gets truncated in display
-			Expect(initCommand).To(ContainSubstring("#ff6b6b"))
-			Expect(initCommand).To(ContainSubstring("#4ecdc4"))
-			Expect(initCommand).To(ContainSubstring("fullscreen"))
-			Expect(initCommand).To(ContainSubstring("/dashboard"))
-			Expect(initCommand).To(ContainSubstring("pwa-192x192.png"))
-			Expect(initCommand).To(ContainSubstring("pwa-512x512.png"))
+			Expect(sidecarCommand).To(ContainSubstring("manifest.json"))
+			Expect(sidecarCommand).To(ContainSubstring("Custom PWA App"))
+			Expect(sidecarCommand).To(ContainSubstring("Custom PW")) // Short name gets truncated in display
+			Expect(sidecarCommand).To(ContainSubstring("#ff6b6b"))
+			Expect(sidecarCommand).To(ContainSubstring("#4ecdc4"))
+			Expect(sidecarCommand).To(ContainSubstring("fullscreen"))
+			Expect(sidecarCommand).To(ContainSubstring("/dashboard"))
+			Expect(sidecarCommand).To(ContainSubstring("pwa-192x192.png"))
+			Expect(sidecarCommand).To(ContainSubstring("pwa-512x512.png"))
 		})
 	})
 
@@ -316,16 +336,24 @@ var _ = Describe("Asset Management Tests", func() {
 				return err == nil
 			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
 
-			initContainer := deployment.Spec.Template.Spec.InitContainers[0]
-			initCommand := initContainer.Command[2]
+			// Check that config-sync sidecar contains PWA manifest logic
+			var sidecarContainer *corev1.Container
+			for i := range deployment.Spec.Template.Spec.Containers {
+				if deployment.Spec.Template.Spec.Containers[i].Name == configSyncContainerName {
+					sidecarContainer = &deployment.Spec.Template.Spec.Containers[i]
+					break
+				}
+			}
+			Expect(sidecarContainer).ToNot(BeNil(), "config-sync sidecar should exist")
+			sidecarCommand := sidecarContainer.Command[2]
 
 			// Should include PWA manifest generation
-			Expect(initCommand).To(ContainSubstring("manifest.json"))
-			Expect(initCommand).To(ContainSubstring("Simple PWA"))
+			Expect(sidecarCommand).To(ContainSubstring("manifest.json"))
+			Expect(sidecarCommand).To(ContainSubstring("Simple PWA"))
 
 			// Should use default icons since no custom icons provided
-			Expect(initCommand).To(ContainSubstring("assets/icons/pwa-192x192.png"))
-			Expect(initCommand).To(ContainSubstring("assets/icons/pwa-512x512.png"))
+			Expect(sidecarCommand).To(ContainSubstring("assets/icons/pwa-192x192.png"))
+			Expect(sidecarCommand).To(ContainSubstring("assets/icons/pwa-512x512.png"))
 		})
 	})
 
@@ -394,24 +422,32 @@ var _ = Describe("Asset Management Tests", func() {
 				return err == nil
 			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
 
-			initContainer := deployment.Spec.Template.Spec.InitContainers[0]
-			initCommand := initContainer.Command[2]
+			// Check that config-sync sidecar contains PWA manifest logic
+			var sidecarContainer *corev1.Container
+			for i := range deployment.Spec.Template.Spec.Containers {
+				if deployment.Spec.Template.Spec.Containers[i].Name == configSyncContainerName {
+					sidecarContainer = &deployment.Spec.Template.Spec.Containers[i]
+					break
+				}
+			}
+			Expect(sidecarContainer).ToNot(BeNil(), "config-sync sidecar should exist")
+			sidecarCommand := sidecarContainer.Command[2]
 
 			// Should use Dashboard title as PWA name
-			Expect(initCommand).To(ContainSubstring("PWA Defaults Test"))
+			Expect(sidecarCommand).To(ContainSubstring("PWA Defaults Test"))
 
 			// Should use subtitle as description
-			Expect(initCommand).To(ContainSubstring("Testing PWA default values"))
+			Expect(sidecarCommand).To(ContainSubstring("Testing PWA default values"))
 
 			// Should include default colors
-			Expect(initCommand).To(ContainSubstring("#3367d6")) // Default theme color
-			Expect(initCommand).To(ContainSubstring("#ffffff")) // Default background color
+			Expect(sidecarCommand).To(ContainSubstring("#3367d6")) // Default theme color
+			Expect(sidecarCommand).To(ContainSubstring("#ffffff")) // Default background color
 
 			// Should include default display mode
-			Expect(initCommand).To(ContainSubstring("standalone"))
+			Expect(sidecarCommand).To(ContainSubstring("standalone"))
 
 			// Should include default start URL
-			Expect(initCommand).To(ContainSubstring("\"/\""))
+			Expect(sidecarCommand).To(ContainSubstring("\"/\""))
 		})
 	})
 

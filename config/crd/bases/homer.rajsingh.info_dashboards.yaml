@@ -147,15 +147,6 @@ spec:
                       is stored.
                     type: string
                 type: object
-              conflictResolution:
-                default: replace
-                description: ConflictResolution defines how to handle conflicts when
-                  multiple resources define the same item.
-                enum:
-                - replace
-                - merge
-                - error
-                type: string
               dnsConfig:
                 description: |-
                   DNSConfig defines the DNS parameters for the Homer dashboard deployment pods.
@@ -408,11 +399,25 @@ spec:
                     items:
                       description: Service represents a Homer service group configuration
                       properties:
+                        icon:
+                          type: string
                         items:
                           description: Items in this service group
                           items:
                             description: Item represents a Homer dashboard item configuration
                             properties:
+                              endpoint:
+                                type: string
+                              icon:
+                                type: string
+                              keywords:
+                                type: string
+                              logo:
+                                type: string
+                              name:
+                                description: Common item fields (for CRD compatibility
+                                  and user convenience)
+                                type: string
                               nestedObjects:
                                 additionalProperties:
                                   additionalProperties:
@@ -427,8 +432,26 @@ spec:
                                 description: Dynamic parameters for annotation-driven
                                   configuration
                                 type: object
+                              subtitle:
+                                type: string
+                              tag:
+                                type: string
+                              tagstyle:
+                                type: string
+                              target:
+                                type: string
+                              type:
+                                type: string
+                              url:
+                                type: string
                             type: object
                           type: array
+                        logo:
+                          type: string
+                        name:
+                          description: Common service fields (for CRD compatibility
+                            and user convenience)
+                          type: string
                         nestedObjects:
                           additionalProperties:
                             additionalProperties:
