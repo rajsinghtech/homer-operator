@@ -29,12 +29,67 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	homerv1alpha1 "github.com/rajsinghtech/homer-operator/api/v1alpha1"
 	"github.com/rajsinghtech/homer-operator/pkg/homer"
 )
+
+// Test helper functions to reduce repetition
+func createBasicDashboard(name, namespace string) *homerv1alpha1.Dashboard {
+	return &homerv1alpha1.Dashboard{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: homerv1alpha1.DashboardSpec{
+			HomerConfig: homer.HomerConfig{
+				Title:    "Test Dashboard",
+				Subtitle: "Testing Homer Operator",
+				Header:   true,
+			},
+		},
+	}
+}
+
+func reconcileDashboard(ctx context.Context, namespacedName types.NamespacedName) {
+	controllerReconciler := &DashboardReconciler{
+		Client: k8sClient,
+		Scheme: k8sClient.Scheme(),
+	}
+
+	// First reconcile: adds finalizer
+	_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+		NamespacedName: namespacedName,
+	})
+	Expect(err).NotTo(HaveOccurred())
+
+	// Second reconcile: processes the Dashboard
+	_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+		NamespacedName: namespacedName,
+	})
+	Expect(err).NotTo(HaveOccurred())
+}
+
+func verifyResourceCreated(ctx context.Context, name, namespace string, obj client.Object) {
+	Eventually(func() bool {
+		err := k8sClient.Get(ctx, types.NamespacedName{
+			Name:      name + "-homer",
+			Namespace: namespace,
+		}, obj)
+		return err == nil
+	}, time.Second*10, time.Millisecond*250).Should(BeTrue())
+}
+
+func cleanupDashboard(ctx context.Context, namespacedName types.NamespacedName) {
+	resource := &homerv1alpha1.Dashboard{}
+	err := k8sClient.Get(ctx, namespacedName, resource)
+	if err == nil {
+		Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+	}
+}
 
 var _ = Describe("Dashboard Controller", func() {
 	Context("When reconciling a basic Dashboard resource", func() {
@@ -50,51 +105,21 @@ var _ = Describe("Dashboard Controller", func() {
 		var dashboard *homerv1alpha1.Dashboard
 
 		BeforeEach(func() {
-			dashboard = &homerv1alpha1.Dashboard{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      resourceName,
-					Namespace: namespaceName,
-				},
-				Spec: homerv1alpha1.DashboardSpec{
-					HomerConfig: homer.HomerConfig{
-						Title:    "Test Dashboard",
-						Subtitle: "Testing Homer Operator",
-						Header:   true,
-					},
-				},
-			}
+			dashboard = createBasicDashboard(resourceName, namespaceName)
 			Expect(k8sClient.Create(ctx, dashboard)).To(Succeed())
 		})
 
 		AfterEach(func() {
-			resource := &homerv1alpha1.Dashboard{}
-			err := k8sClient.Get(ctx, typeNamespacedName, resource)
-			if err == nil {
-				Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
-			}
+			cleanupDashboard(ctx, typeNamespacedName)
 		})
 
 		It("should successfully reconcile and create all required resources", func() {
 			By("Reconciling the created resource")
-			controllerReconciler := &DashboardReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
-			}
-
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
+			reconcileDashboard(ctx, typeNamespacedName)
 
 			By("Checking that Deployment was created")
 			deployment := &appsv1.Deployment{}
-			Eventually(func() bool {
-				err := k8sClient.Get(ctx, types.NamespacedName{
-					Name:      resourceName + "-homer",
-					Namespace: namespaceName,
-				}, deployment)
-				return err == nil
-			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
+			verifyResourceCreated(ctx, resourceName, namespaceName, deployment)
 
 			Expect(deployment.Name).To(Equal(resourceName + "-homer"))
 			Expect(deployment.Namespace).To(Equal(namespaceName))
@@ -102,13 +127,7 @@ var _ = Describe("Dashboard Controller", func() {
 
 			By("Checking that Service was created")
 			service := &corev1.Service{}
-			Eventually(func() bool {
-				err := k8sClient.Get(ctx, types.NamespacedName{
-					Name:      resourceName + "-homer",
-					Namespace: namespaceName,
-				}, service)
-				return err == nil
-			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
+			verifyResourceCreated(ctx, resourceName, namespaceName, service)
 
 			Expect(service.Name).To(Equal(resourceName + "-homer"))
 			Expect(service.Spec.Ports[0].Port).To(Equal(int32(80)))
@@ -116,13 +135,7 @@ var _ = Describe("Dashboard Controller", func() {
 
 			By("Checking that ConfigMap was created")
 			configMap := &corev1.ConfigMap{}
-			Eventually(func() bool {
-				err := k8sClient.Get(ctx, types.NamespacedName{
-					Name:      resourceName + "-homer",
-					Namespace: namespaceName,
-				}, configMap)
-				return err == nil
-			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
+			verifyResourceCreated(ctx, resourceName, namespaceName, configMap)
 
 			Expect(configMap.Data["config.yml"]).To(ContainSubstring("title: Test Dashboard"))
 			Expect(configMap.Data["config.yml"]).To(ContainSubstring("subtitle: Testing Homer Operator"))
@@ -173,7 +186,14 @@ var _ = Describe("Dashboard Controller", func() {
 				Scheme: k8sClient.Scheme(),
 			}
 
+			// First reconcile: adds finalizer and returns early
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile: actually processes the Dashboard and creates resources
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
@@ -246,7 +266,14 @@ var _ = Describe("Dashboard Controller", func() {
 				Scheme: k8sClient.Scheme(),
 			}
 
+			// First reconcile: adds finalizer and returns early
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile: actually processes the Dashboard and creates resources
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
@@ -319,7 +346,14 @@ var _ = Describe("Dashboard Controller", func() {
 				Scheme: k8sClient.Scheme(),
 			}
 
+			// First reconcile: adds finalizer and returns early
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile: actually processes validation and should fail
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).To(HaveOccurred())
@@ -399,7 +433,14 @@ var _ = Describe("Dashboard Controller", func() {
 				EnableGatewayAPI: true,
 			}
 
+			// First reconcile: adds finalizer and returns early
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile: actually processes the Dashboard and creates resources
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
@@ -510,7 +551,14 @@ var _ = Describe("Dashboard Controller", func() {
 				Scheme: k8sClient.Scheme(),
 			}
 
+			// First reconcile: adds finalizer and returns early
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile: actually processes the Dashboard and creates resources
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
@@ -560,7 +608,14 @@ var _ = Describe("Dashboard Controller", func() {
 				Scheme: k8sClient.Scheme(),
 			}
 
+			// First reconcile: adds finalizer and returns early
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile: actually processes the Dashboard and creates resources
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())

@@ -51,21 +51,28 @@ spec:
         {{- end }}
         {{- end }}
         - --health-probe-bind-address={{ .Values.operator.healthProbe.bindAddress }}
+        {{- if .Values.operator.enableGatewayAPI }}
+        - --enable-gateway-api
+        {{- end }}
+        {{- $envVars := include "homer-operator.env" . }}
+        {{- if $envVars }}
         env:
-        {{- include "homer-operator.env" . | nindent 8 }}
-        {{- if .Values.envFrom }}
+        {{- $envVars | nindent 8 }}
+        {{- end }}
+        {{- $envFromVars := include "homer-operator.envFrom" . }}
+        {{- if $envFromVars }}
         envFrom:
-        {{- include "homer-operator.envFrom" . | nindent 8 }}
+        {{- $envFromVars | nindent 8 }}
         {{- end }}
         ports:
+        - containerPort: {{ .Values.operator.healthProbe.bindAddress | replace ":" "" | int }}
+          name: health
+          protocol: TCP
         {{- if .Values.operator.metrics.enabled }}
-        - containerPort: 8080
+        - containerPort: {{ .Values.operator.metrics.bindAddress | replace ":" "" | int }}
           name: metrics
           protocol: TCP
         {{- end }}
-        - containerPort: 8081
-          name: health
-          protocol: TCP
         livenessProbe:
           {{- toYaml .Values.livenessProbe | nindent 10 }}
         readinessProbe:
@@ -83,40 +90,36 @@ spec:
         image: {{ .Values.operator.metrics.rbacProxy.image.repository }}:{{ .Values.operator.metrics.rbacProxy.image.tag }}
         imagePullPolicy: {{ .Values.operator.metrics.rbacProxy.image.pullPolicy }}
         args:
-        - --secure-listen-address=0.0.0.0:8443
-        - --upstream=http://127.0.0.1:8080/
+        - --secure-listen-address=0.0.0.0:{{ .Values.services.metrics.port }}
+        - --upstream=http://127.0.0.1:{{ .Values.operator.metrics.bindAddress | replace ":" "" }}/
         - --v=0
         ports:
-        - containerPort: 8443
+        - containerPort: {{ .Values.services.metrics.port }}
           name: https
           protocol: TCP
         resources:
           {{- toYaml .Values.operator.metrics.rbacProxy.resources | nindent 10 }}
         securityContext:
-          allowPrivilegeEscalation: false
-          readOnlyRootFilesystem: true
-          seccompProfile:
-            type: RuntimeDefault
-          capabilities:
-            drop:
-            - "ALL"
+          {{- toYaml .Values.securityContext | nindent 10 }}
       {{- end }}
       {{- with .Values.volumes }}
       volumes:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.nodeSelector }}
+      {{- with .Values.scheduling }}
+      {{- with .nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
+      {{- with .affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.tolerations }}
+      {{- with .tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.priorityClassName }}
+      {{- with .priorityClassName }}
       priorityClassName: {{ . }}
+      {{- end }}
       {{- end }}

@@ -13,7 +13,9 @@ spec:
     header: true  # Required field
     theme: "nonexistent-theme"  # This should cause validation error
     services:
-      - name: "Test Services"
+      - parameters:
+          name: "Test Services"
         items:
-          - name: "Test Service"
-            url: "https://example.com"
+          - parameters:
+              name: "Test Service"
+              url: "https://example.com"

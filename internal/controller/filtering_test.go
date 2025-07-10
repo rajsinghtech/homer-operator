@@ -35,6 +35,122 @@ import (
 
 const nullValue = "null"
 
+// Helper functions for filtering tests
+func createDashboardWithGatewaySelector(name, namespace string) *homerv1alpha1.Dashboard {
+	return &homerv1alpha1.Dashboard{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: homerv1alpha1.DashboardSpec{
+			HomerConfig: homer.HomerConfig{
+				Title:  "Gateway Selector Test",
+				Header: true,
+			},
+			GatewaySelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"gateway":     "public",
+					"environment": "production",
+				},
+			},
+		},
+	}
+}
+
+func createDashboardWithHTTPRouteSelector(name, namespace string) *homerv1alpha1.Dashboard {
+	return &homerv1alpha1.Dashboard{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: homerv1alpha1.DashboardSpec{
+			HomerConfig: homer.HomerConfig{
+				Title:  "HTTPRoute Selector Test",
+				Header: true,
+			},
+			HTTPRouteSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"app": "test-app",
+				},
+			},
+		},
+	}
+}
+
+func createDashboardWithIngressSelector(name, namespace string) *homerv1alpha1.Dashboard {
+	return &homerv1alpha1.Dashboard{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: homerv1alpha1.DashboardSpec{
+			HomerConfig: homer.HomerConfig{
+				Title:  "Ingress Selector Test",
+				Header: true,
+			},
+			IngressSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"app": "test-app",
+				},
+			},
+		},
+	}
+}
+
+func createDashboardWithDomainFilters(name, namespace string) *homerv1alpha1.Dashboard {
+	return &homerv1alpha1.Dashboard{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: homerv1alpha1.DashboardSpec{
+			HomerConfig: homer.HomerConfig{
+				Title:  "Domain Filter Test",
+				Header: true,
+			},
+			DomainFilters: []string{
+				"test.example.com",
+				"api.example.com",
+			},
+		},
+	}
+}
+
+func createBasicGateway(name, namespace string, labels map[string]string) *gatewayv1.Gateway {
+	return &gatewayv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			Labels:    labels,
+		},
+		Spec: gatewayv1.GatewaySpec{
+			GatewayClassName: "nginx",
+			Listeners: []gatewayv1.Listener{
+				{
+					Name:     "http",
+					Port:     80,
+					Protocol: gatewayv1.HTTPProtocolType,
+				},
+			},
+		},
+	}
+}
+
+func waitForConfigMapUpdate(ctx context.Context, dashboardName string) {
+	configMap := &corev1.ConfigMap{}
+	Eventually(func() bool {
+		err := k8sClient.Get(ctx, types.NamespacedName{
+			Name:      dashboardName + homer.ResourceSuffix,
+			Namespace: "default",
+		}, configMap)
+		if err != nil {
+			return false
+		}
+		configYaml := configMap.Data["config.yml"]
+		return configYaml != "" && configYaml != nullValue
+	}, time.Second*10, time.Millisecond*250).Should(BeTrue())
+}
+
 var _ = Describe("Filtering Controller Tests", func() {
 	BeforeEach(func() {
 		if !isGatewayAPIAvailable() {
@@ -55,44 +171,18 @@ var _ = Describe("Filtering Controller Tests", func() {
 
 		BeforeEach(func() {
 			// Create Gateway with specific labels
-			gateway = &gatewayv1.Gateway{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "public-gateway",
-					Namespace: namespaceName,
-					Labels: map[string]string{
-						"gateway":     "public",
-						"environment": "production",
-					},
-				},
-				Spec: gatewayv1.GatewaySpec{
-					GatewayClassName: "test-gateway-class",
-					Listeners: []gatewayv1.Listener{
-						{
-							Name:     "http",
-							Port:     80,
-							Protocol: gatewayv1.HTTPProtocolType,
-						},
-					},
-				},
-			}
+			gateway = createBasicGateway("public-gateway", namespaceName, map[string]string{
+				"gateway":     "public",
+				"environment": "production",
+			})
+			gateway.Spec.GatewayClassName = "test-gateway-class"
 			Expect(k8sClient.Create(ctx, gateway)).To(Succeed())
 
 			// Create Dashboard with Gateway selector
-			dashboard = &homerv1alpha1.Dashboard{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      dashboardName,
-					Namespace: namespaceName,
-				},
-				Spec: homerv1alpha1.DashboardSpec{
-					HomerConfig: homer.HomerConfig{
-						Title: "Gateway Filtered Dashboard",
-					},
-					GatewaySelector: &metav1.LabelSelector{
-						MatchLabels: map[string]string{
-							"gateway": "public",
-						},
-					},
-				},
+			dashboard = createDashboardWithGatewaySelector(dashboardName, namespaceName)
+			dashboard.Spec.HomerConfig.Title = "Gateway Filtered Dashboard"
+			dashboard.Spec.GatewaySelector.MatchLabels = map[string]string{
+				"gateway": "public",
 			}
 			Expect(k8sClient.Create(ctx, dashboard)).To(Succeed())
 
@@ -196,18 +286,12 @@ var _ = Describe("Filtering Controller Tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Checking that ConfigMap only contains HTTPRoutes from matching Gateways")
+			waitForConfigMapUpdate(ctx, dashboardName)
 			configMap := &corev1.ConfigMap{}
-			Eventually(func() bool {
-				err := k8sClient.Get(ctx, types.NamespacedName{
-					Name:      dashboardName + "-homer",
-					Namespace: namespaceName,
-				}, configMap)
-				if err != nil {
-					return false
-				}
-				configYaml := configMap.Data["config.yml"]
-				return configYaml != "" && configYaml != nullValue
-			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name:      dashboardName + "-homer",
+				Namespace: namespaceName,
+			}, configMap)).To(Succeed())
 
 			configYaml := configMap.Data["config.yml"]
 			// Should contain HTTPRoute from matching Gateway
@@ -229,22 +313,11 @@ var _ = Describe("Filtering Controller Tests", func() {
 
 		BeforeEach(func() {
 			// Create Dashboard with HTTPRoute selector
-			dashboard = &homerv1alpha1.Dashboard{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      dashboardName,
-					Namespace: namespaceName,
-				},
-				Spec: homerv1alpha1.DashboardSpec{
-					HomerConfig: homer.HomerConfig{
-						Title: "HTTPRoute Filtered Dashboard",
-					},
-					HTTPRouteSelector: &metav1.LabelSelector{
-						MatchLabels: map[string]string{
-							"team": "platform",
-							"tier": "frontend",
-						},
-					},
-				},
+			dashboard = createDashboardWithHTTPRouteSelector(dashboardName, namespaceName)
+			dashboard.Spec.HomerConfig.Title = "HTTPRoute Filtered Dashboard"
+			dashboard.Spec.HTTPRouteSelector.MatchLabels = map[string]string{
+				"team": "platform",
+				"tier": "frontend",
 			}
 			Expect(k8sClient.Create(ctx, dashboard)).To(Succeed())
 
@@ -355,18 +428,12 @@ var _ = Describe("Filtering Controller Tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Checking that ConfigMap only contains HTTPRoutes with matching labels")
+			waitForConfigMapUpdate(ctx, dashboardName)
 			configMap := &corev1.ConfigMap{}
-			Eventually(func() bool {
-				err := k8sClient.Get(ctx, types.NamespacedName{
-					Name:      dashboardName + "-homer",
-					Namespace: namespaceName,
-				}, configMap)
-				if err != nil {
-					return false
-				}
-				configYaml := configMap.Data["config.yml"]
-				return configYaml != "" && configYaml != nullValue
-			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name:      dashboardName + "-homer",
+				Namespace: namespaceName,
+			}, configMap)).To(Succeed())
 
 			configYaml := configMap.Data["config.yml"]
 			// Should contain HTTPRoute with matching labels
@@ -388,22 +455,11 @@ var _ = Describe("Filtering Controller Tests", func() {
 
 		BeforeEach(func() {
 			// Create Dashboard with Ingress selector
-			dashboard = &homerv1alpha1.Dashboard{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      dashboardName,
-					Namespace: namespaceName,
-				},
-				Spec: homerv1alpha1.DashboardSpec{
-					HomerConfig: homer.HomerConfig{
-						Title: "Ingress Filtered Dashboard",
-					},
-					IngressSelector: &metav1.LabelSelector{
-						MatchLabels: map[string]string{
-							"environment": "production",
-							"public":      "true",
-						},
-					},
-				},
+			dashboard = createDashboardWithIngressSelector(dashboardName, namespaceName)
+			dashboard.Spec.HomerConfig.Title = "Ingress Filtered Dashboard"
+			dashboard.Spec.IngressSelector.MatchLabels = map[string]string{
+				"environment": "production",
+				"public":      "true",
 			}
 			Expect(k8sClient.Create(ctx, dashboard)).To(Succeed())
 
@@ -515,18 +571,12 @@ var _ = Describe("Filtering Controller Tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Checking that ConfigMap only contains Ingresses with matching labels")
+			waitForConfigMapUpdate(ctx, dashboardName)
 			configMap := &corev1.ConfigMap{}
-			Eventually(func() bool {
-				err := k8sClient.Get(ctx, types.NamespacedName{
-					Name:      dashboardName + "-homer",
-					Namespace: namespaceName,
-				}, configMap)
-				if err != nil {
-					return false
-				}
-				configYaml := configMap.Data["config.yml"]
-				return configYaml != "" && configYaml != nullValue
-			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name:      dashboardName + "-homer",
+				Namespace: namespaceName,
+			}, configMap)).To(Succeed())
 
 			configYaml := configMap.Data["config.yml"]
 			// Should contain Ingress with matching labels
@@ -551,20 +601,11 @@ var _ = Describe("Filtering Controller Tests", func() {
 
 		BeforeEach(func() {
 			// Create Dashboard with domain filters
-			dashboard = &homerv1alpha1.Dashboard{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      dashboardName,
-					Namespace: namespaceName,
-				},
-				Spec: homerv1alpha1.DashboardSpec{
-					HomerConfig: homer.HomerConfig{
-						Title: "Domain Filtered Dashboard",
-					},
-					DomainFilters: []string{
-						"mycompany.com",
-						"internal.local",
-					},
-				},
+			dashboard = createDashboardWithDomainFilters(dashboardName, namespaceName)
+			dashboard.Spec.HomerConfig.Title = "Domain Filtered Dashboard"
+			dashboard.Spec.DomainFilters = []string{
+				"mycompany.com",
+				"internal.local",
 			}
 			Expect(k8sClient.Create(ctx, dashboard)).To(Succeed())
 
@@ -775,18 +816,12 @@ var _ = Describe("Filtering Controller Tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Checking that ConfigMap only contains resources with matching domains")
+			waitForConfigMapUpdate(ctx, dashboardName)
 			configMap := &corev1.ConfigMap{}
-			Eventually(func() bool {
-				err := k8sClient.Get(ctx, types.NamespacedName{
-					Name:      dashboardName + "-homer",
-					Namespace: namespaceName,
-				}, configMap)
-				if err != nil {
-					return false
-				}
-				configYaml := configMap.Data["config.yml"]
-				return configYaml != "" && configYaml != nullValue
-			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name:      dashboardName + "-homer",
+				Namespace: namespaceName,
+			}, configMap)).To(Succeed())
 
 			configYaml := configMap.Data["config.yml"]
 			// Should contain exact domain match
@@ -815,26 +850,11 @@ var _ = Describe("Filtering Controller Tests", func() {
 
 		BeforeEach(func() {
 			// Create Gateway with specific labels
-			gateway = &gatewayv1.Gateway{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "platform-gateway",
-					Namespace: namespaceName,
-					Labels: map[string]string{
-						"gateway":     "public",
-						"environment": "production",
-					},
-				},
-				Spec: gatewayv1.GatewaySpec{
-					GatewayClassName: "test-gateway-class",
-					Listeners: []gatewayv1.Listener{
-						{
-							Name:     "http",
-							Port:     80,
-							Protocol: gatewayv1.HTTPProtocolType,
-						},
-					},
-				},
-			}
+			gateway = createBasicGateway("platform-gateway", namespaceName, map[string]string{
+				"gateway":     "public",
+				"environment": "production",
+			})
+			gateway.Spec.GatewayClassName = "test-gateway-class"
 			Expect(k8sClient.Create(ctx, gateway)).To(Succeed())
 
 			// Create Dashboard with multiple filters
@@ -1012,18 +1032,12 @@ var _ = Describe("Filtering Controller Tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Checking that ConfigMap only contains HTTPRoutes matching all filters")
+			waitForConfigMapUpdate(ctx, dashboardName)
 			configMap := &corev1.ConfigMap{}
-			Eventually(func() bool {
-				err := k8sClient.Get(ctx, types.NamespacedName{
-					Name:      dashboardName + "-homer",
-					Namespace: namespaceName,
-				}, configMap)
-				if err != nil {
-					return false
-				}
-				configYaml := configMap.Data["config.yml"]
-				return configYaml != "" && configYaml != nullValue
-			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name:      dashboardName + "-homer",
+				Namespace: namespaceName,
+			}, configMap)).To(Succeed())
 
 			configYaml := configMap.Data["config.yml"]
 			// Should contain HTTPRoute that matches ALL filters

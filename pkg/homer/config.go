@@ -4,13 +4,14 @@ package homer
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/rajsinghtech/homer-operator/pkg/utils"
 	yaml "gopkg.in/yaml.v2"
@@ -25,17 +26,31 @@ import (
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
-// ServiceGroupingStrategy defines how services are grouped
 type ServiceGroupingStrategy string
+type ValidationLevel string
 
 const (
-	ServiceGroupingNamespace ServiceGroupingStrategy = "namespace"
-	ServiceGroupingLabel     ServiceGroupingStrategy = "label"
-	ServiceGroupingCustom    ServiceGroupingStrategy = "custom"
+	ResourceSuffix      = "-homer"
+	DefaultHomerPort    = 8080
+	DefaultServicePort  = 80
+	DefaultContainerUID = 1000
+	DefaultContainerGID = 1000
+	DefaultNamespace    = "default"
+	GenericType         = "Generic"
+	CRDSource           = "crd"
+	NameField           = "name"
+	URLField            = "url"
+	WarningValueField   = "warning_value"
+	DangerValueField    = "danger_value"
+	BooleanTrue         = "true"
+	BooleanFalse        = "false"
+	NamespaceIconURL    = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/" +
+		"resources/labeled/ns-128.png"
+	IngressIconURL = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/" +
+		"resources/labeled/ing-128.png"
+	ServiceIconURL = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/" +
+		"resources/labeled/svc-128.png"
 )
-
-// ValidationLevel defines the strictness of validation
-type ValidationLevel string
 
 const (
 	ValidationLevelStrict ValidationLevel = "strict"
@@ -43,37 +58,15 @@ const (
 	ValidationLevelNone   ValidationLevel = "none"
 )
 
-// Common repeated strings
 const (
-	NamespaceIconURL = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/resources/labeled/" +
-		"ns-128.png"
-	IngressIconURL = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/resources/labeled/" +
-		"ing-128.png"
-	ServiceIconURL = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/resources/labeled/" +
-		"svc-128.png"
-	GenericType       = "Generic"
-	DefaultNamespace  = "default"
-	NameField         = "name"
-	URLField          = "url"
-	CRDSource         = "crd"
-	WarningValueField = "warning_value"
-	DangerValueField  = "danger_value"
-	BooleanTrue       = "true"
-	BooleanFalse      = "false"
+	ServiceGroupingNamespace ServiceGroupingStrategy = "namespace"
+	ServiceGroupingLabel     ServiceGroupingStrategy = "label"
+	ServiceGroupingCustom    ServiceGroupingStrategy = "custom"
 )
 
-// Convention-based type detection patterns
 var (
-	// Boolean patterns - parameters that should be treated as booleans
-	booleanSuffixes = []string{"_enabled", "_flag"}
-	booleanNames    = []string{"usecredentials", "legacyapi"}
-
-	// Integer patterns - parameters that should be treated as integers
-	integerSuffixes = []string{"Interval", "interval", "_value"}
-	integerNames    = []string{"timeout", "limit", WarningValueField, DangerValueField}
-
-	// Known object parameters - these are always objects regardless of content
-	objectParameters = []string{"headers", "mapping", "customHeaders"}
+	configMutex    sync.Mutex
+	configMapMutex sync.Mutex
 )
 
 // HomerConfig contains base configuration for Homer dashboard.
@@ -105,54 +98,23 @@ type ProxyConfig struct {
 	Headers        map[string]string `json:"headers,omitempty"`
 }
 
-// DefaultConfig contains default settings for the Homer dashboard.
 type DefaultConfig struct {
-	// Layout is the layout of the dashboard.
-	Layout string `json:"layout,omitempty"`
-	// ColorTheme is the name of the color theme to be used.
+	Layout     string `json:"layout,omitempty"`
 	ColorTheme string `json:"colorTheme,omitempty"`
 }
 
-// Service represents a Homer service group configuration
 type Service struct {
-	// Items in this service group
-	Items []Item `json:"items,omitempty"`
-
-	// Common service fields (for CRD compatibility and user convenience)
-	Name string `json:"name,omitempty"`
-	Icon string `json:"icon,omitempty"`
-	Logo string `json:"logo,omitempty"`
-
-	// Dynamic parameters for annotation-driven configuration
-	Parameters map[string]string `json:"parameters,omitempty"`
-	// Nested objects for complex configuration (e.g., headers)
+	Items         []Item                       `json:"items,omitempty"`
+	Parameters    map[string]string            `json:"parameters,omitempty"`
 	NestedObjects map[string]map[string]string `json:"nestedObjects,omitempty"`
 }
 
-// Item represents a Homer dashboard item configuration
 type Item struct {
-	// Common item fields (for CRD compatibility and user convenience)
-	Name     string `json:"name,omitempty"`
-	Logo     string `json:"logo,omitempty"`
-	Icon     string `json:"icon,omitempty"`
-	Subtitle string `json:"subtitle,omitempty"`
-	URL      string `json:"url,omitempty"`
-	Tag      string `json:"tag,omitempty"`
-	TagStyle string `json:"tagstyle,omitempty"`
-	Target   string `json:"target,omitempty"`
-	Keywords string `json:"keywords,omitempty"`
-	Type     string `json:"type,omitempty"`
-	Endpoint string `json:"endpoint,omitempty"`
-
-	// Dynamic parameters for annotation-driven configuration
-	Parameters map[string]string `json:"parameters,omitempty"`
-	// Nested objects for complex configuration (e.g., customHeaders)
+	Parameters    map[string]string            `json:"parameters,omitempty"`
 	NestedObjects map[string]map[string]string `json:"nestedObjects,omitempty"`
-
-	// Internal metadata for service discovery (not serialized to Homer config)
-	Source     string `json:"-"` // Source ingress/httproute name
-	Namespace  string `json:"-"` // Source namespace
-	LastUpdate string `json:"-"` // Last update timestamp
+	Source        string                       `json:"-"`
+	Namespace     string                       `json:"-"`
+	LastUpdate    string                       `json:"-"`
 }
 
 type Link struct {
@@ -162,9 +124,13 @@ type Link struct {
 	Target string `json:"target,omitempty"`
 }
 
-// Helper functions for consistent field access
+func getParameter(params map[string]string, key string) string {
+	if params != nil {
+		return params[key]
+	}
+	return ""
+}
 
-// getServiceName returns the service name from Parameters map
 func getServiceName(service *Service) string {
 	if service.Parameters != nil {
 		return service.Parameters["name"]
@@ -172,7 +138,6 @@ func getServiceName(service *Service) string {
 	return ""
 }
 
-// getItemName returns the item name from Parameters map
 func getItemName(item *Item) string {
 	if item.Parameters != nil {
 		return item.Parameters["name"]
@@ -180,7 +145,6 @@ func getItemName(item *Item) string {
 	return ""
 }
 
-// getItemURL returns the item URL from Parameters map
 func getItemURL(item *Item) string {
 	if item.Parameters != nil {
 		return item.Parameters["url"]
@@ -188,7 +152,6 @@ func getItemURL(item *Item) string {
 	return ""
 }
 
-// getItemType returns the item type from Parameters map
 func getItemType(item *Item) string {
 	if item.Parameters != nil {
 		return item.Parameters["type"]
@@ -196,7 +159,6 @@ func getItemType(item *Item) string {
 	return ""
 }
 
-// getItemEndpoint returns the item endpoint from Parameters map
 func getItemEndpoint(item *Item) string {
 	if item.Parameters != nil {
 		return item.Parameters["endpoint"]
@@ -204,15 +166,6 @@ func getItemEndpoint(item *Item) string {
 	return ""
 }
 
-// setItemParameter sets any item parameter in Parameters map
-func setItemParameter(item *Item, key, value string) {
-	if item.Parameters == nil {
-		item.Parameters = make(map[string]string)
-	}
-	item.Parameters[key] = value
-}
-
-// setServiceParameter sets any service parameter in Parameters map
 func setServiceParameter(service *Service, key, value string) {
 	if service.Parameters == nil {
 		service.Parameters = make(map[string]string)
@@ -220,130 +173,51 @@ func setServiceParameter(service *Service, key, value string) {
 	service.Parameters[key] = value
 }
 
-// cleanupHomerConfig cleans up any invalid services/items that might come from the Dashboard CRD
+func setItemParameter(item *Item, key, value string) {
+	if item.Parameters == nil {
+		item.Parameters = make(map[string]string)
+	}
+	item.Parameters[key] = value
+}
+
 func cleanupHomerConfig(config *HomerConfig) {
-	// Filter out services with empty names or invalid structure
 	validServices := make([]Service, 0, len(config.Services))
 	for _, service := range config.Services {
-		// Convert and validate the service
-		normalizedService := normalizeCRDService(&service)
-
-		// Check if service has a valid name after normalization
-		serviceName := getServiceName(&normalizedService)
-		if serviceName == "" {
-			// Skip services with no name
+		ensureParameterMaps(&service.Parameters, &service.NestedObjects)
+		if getParameter(service.Parameters, "name") == "" {
 			continue
 		}
 
-		// Clean up items in the service
 		var validItems []Item
-		for _, item := range normalizedService.Items {
-			// Convert and validate the item
-			normalizedItem := normalizeCRDItem(&item)
-
-			// Check if item has a valid name after normalization
-			itemName := getItemName(&normalizedItem)
-			if itemName == "" {
-				// Skip items with no name
+		for _, item := range service.Items {
+			ensureParameterMaps(&item.Parameters, &item.NestedObjects)
+			if getParameter(item.Parameters, "name") == "" {
 				continue
 			}
 
-			// Mark as CRD source for conflict detection
-			normalizedItem.Source = CRDSource
-			normalizedItem.Namespace = "dashboard"
-			normalizedItem.LastUpdate = "crd-defined"
+			item.Source = "crd"
+			item.Namespace = "dashboard"
+			item.LastUpdate = "crd-defined"
 
-			validItems = append(validItems, normalizedItem)
+			validItems = append(validItems, item)
 		}
 
-		normalizedService.Items = validItems
-		validServices = append(validServices, normalizedService)
+		service.Items = validItems
+		validServices = append(validServices, service)
 	}
 
 	config.Services = validServices
 }
 
-// normalizeCRDService converts CRD-style service to modern Parameters format
-func normalizeCRDService(service *Service) Service {
-	normalized := *service
-
-	// Initialize Parameters map if not exists
-	if normalized.Parameters == nil {
-		normalized.Parameters = make(map[string]string)
+func ensureParameterMaps(params *map[string]string, nested *map[string]map[string]string) {
+	if *params == nil {
+		*params = make(map[string]string)
 	}
-
-	// Initialize NestedObjects map if not exists
-	if normalized.NestedObjects == nil {
-		normalized.NestedObjects = make(map[string]map[string]string)
+	if *nested == nil {
+		*nested = make(map[string]map[string]string)
 	}
-
-	// Migrate struct fields to Parameters map (for consistency with dynamic approach)
-	if normalized.Name != "" && normalized.Parameters["name"] == "" {
-		normalized.Parameters["name"] = normalized.Name
-	}
-	if normalized.Icon != "" && normalized.Parameters["icon"] == "" {
-		normalized.Parameters["icon"] = normalized.Icon
-	}
-	if normalized.Logo != "" && normalized.Parameters["logo"] == "" {
-		normalized.Parameters["logo"] = normalized.Logo
-	}
-
-	return normalized
 }
 
-// normalizeCRDItem converts CRD-style item to modern Parameters format
-func normalizeCRDItem(item *Item) Item {
-	normalized := *item
-
-	// Initialize Parameters map if not exists
-	if normalized.Parameters == nil {
-		normalized.Parameters = make(map[string]string)
-	}
-
-	// Initialize NestedObjects map if not exists
-	if normalized.NestedObjects == nil {
-		normalized.NestedObjects = make(map[string]map[string]string)
-	}
-
-	// Migrate struct fields to Parameters map (for consistency with dynamic approach)
-	if normalized.Name != "" && normalized.Parameters["name"] == "" {
-		normalized.Parameters["name"] = normalized.Name
-	}
-	if normalized.Logo != "" && normalized.Parameters["logo"] == "" {
-		normalized.Parameters["logo"] = normalized.Logo
-	}
-	if normalized.Icon != "" && normalized.Parameters["icon"] == "" {
-		normalized.Parameters["icon"] = normalized.Icon
-	}
-	if normalized.Subtitle != "" && normalized.Parameters["subtitle"] == "" {
-		normalized.Parameters["subtitle"] = normalized.Subtitle
-	}
-	if normalized.URL != "" && normalized.Parameters["url"] == "" {
-		normalized.Parameters["url"] = normalized.URL
-	}
-	if normalized.Tag != "" && normalized.Parameters["tag"] == "" {
-		normalized.Parameters["tag"] = normalized.Tag
-	}
-	if normalized.TagStyle != "" && normalized.Parameters["tagstyle"] == "" {
-		normalized.Parameters["tagstyle"] = normalized.TagStyle
-	}
-	if normalized.Target != "" && normalized.Parameters["target"] == "" {
-		normalized.Parameters["target"] = normalized.Target
-	}
-	if normalized.Keywords != "" && normalized.Parameters["keywords"] == "" {
-		normalized.Parameters["keywords"] = normalized.Keywords
-	}
-	if normalized.Type != "" && normalized.Parameters["type"] == "" {
-		normalized.Parameters["type"] = normalized.Type
-	}
-	if normalized.Endpoint != "" && normalized.Parameters["endpoint"] == "" {
-		normalized.Parameters["endpoint"] = normalized.Endpoint
-	}
-
-	return normalized
-}
-
-// HotkeyConfig contains hotkey configuration
 type HotkeyConfig struct {
 	Search string `json:"search,omitempty"`
 }
@@ -371,7 +245,6 @@ type ThemeColors struct {
 	BackgroundImage    string `json:"background-image,omitempty" yaml:"background-image,omitempty"`
 }
 
-// MessageConfig contains dynamic message configuration
 type MessageConfig struct {
 	Url             string            `json:"url,omitempty"`
 	Mapping         map[string]string `json:"mapping,omitempty"`
@@ -382,7 +255,6 @@ type MessageConfig struct {
 	Content         string            `json:"content,omitempty"`
 }
 
-// LoadHomerConfigFromFile loads HomerConfig from a YAML file.
 func LoadHomerConfigFromFile(filename string) (*HomerConfig, error) {
 	config := HomerConfig{}
 	data, err := os.ReadFile(filename)
@@ -404,29 +276,25 @@ func CreateConfigMap(
 	ingresses networkingv1.IngressList,
 	owner client.Object,
 ) (corev1.ConfigMap, error) {
-	// Clean up any invalid services from the initial config
 	cleanupHomerConfig(config)
 
-	// Process each ingress individually using smart merging (CRD foundation + discoveries enhance)
 	for _, ingress := range ingresses.Items {
 		UpdateHomerConfigIngress(config, ingress, nil)
 	}
 
-	// Validate configuration before creating ConfigMap
 	if err := ValidateHomerConfig(config); err != nil {
-		return corev1.ConfigMap{}, fmt.Errorf("homer config validation failed: %w", err)
+		return corev1.ConfigMap{}, fmt.Errorf("config validation: %w", err)
 	}
 
-	// Set default values if not specified
 	normalizeHomerConfig(config)
 
 	objYAML, err := marshalHomerConfigToYAML(config)
 	if err != nil {
-		return corev1.ConfigMap{}, fmt.Errorf("failed to marshal homer config to YAML: %w", err)
+		return corev1.ConfigMap{}, fmt.Errorf("marshal config: %w", err)
 	}
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name + "-homer",
+			Name:      name + ResourceSuffix,
 			Namespace: namespace,
 			Labels: map[string]string{
 				"managed-by":                         "homer-operator",
@@ -441,7 +309,6 @@ func CreateConfigMap(
 	return *cm, nil
 }
 
-// CreateConfigMapWithHTTPRoutes creates a ConfigMap with both Ingress and HTTPRoute resources
 func CreateConfigMapWithHTTPRoutes(
 	config *HomerConfig,
 	name string,
@@ -455,7 +322,6 @@ func CreateConfigMapWithHTTPRoutes(
 		config, name, namespace, ingresses, httproutes, owner, domainFilters, nil)
 }
 
-// createConfigMapWithHTTPRoutesAndHealth creates a ConfigMap with advanced aggregation features
 func createConfigMapWithHTTPRoutesAndHealth(
 	config *HomerConfig,
 	name string,
@@ -466,38 +332,39 @@ func createConfigMapWithHTTPRoutesAndHealth(
 	domainFilters []string,
 	healthConfig *ServiceHealthConfig,
 ) (corev1.ConfigMap, error) {
-	// Clean up any invalid services from the initial config
+	originalConfig := *config
+
 	cleanupHomerConfig(config)
 
-	// Process each ingress individually using smart merging (CRD foundation + discoveries enhance)
 	for _, ingress := range ingresses.Items {
 		UpdateHomerConfigIngress(config, ingress, domainFilters)
 	}
-	// Update config with HTTPRoutes using smart merging
 	for _, httproute := range httproutes {
 		UpdateHomerConfigHTTPRoute(config, &httproute, domainFilters)
 	}
 
-	// Enhance config with aggregation features if health config provided
+	if err := validateCRDServicePreservation(&originalConfig, config); err != nil {
+		log.Printf("Warning: %v", err)
+	}
+
 	if healthConfig != nil {
 		enhanceHomerConfigWithAggregation(config, healthConfig)
 	}
 
 	// Validate configuration before creating ConfigMap
 	if err := ValidateHomerConfig(config); err != nil {
-		return corev1.ConfigMap{}, fmt.Errorf("homer config validation failed: %w", err)
+		return corev1.ConfigMap{}, fmt.Errorf("config validation: %w", err)
 	}
 
-	// Set default values if not specified
 	normalizeHomerConfig(config)
 
 	objYAML, err := marshalHomerConfigToYAML(config)
 	if err != nil {
-		return corev1.ConfigMap{}, fmt.Errorf("failed to marshal homer config to YAML: %w", err)
+		return corev1.ConfigMap{}, fmt.Errorf("marshal config: %w", err)
 	}
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name + "-homer",
+			Name:      name + ResourceSuffix,
 			Namespace: namespace,
 			Labels: map[string]string{
 				"managed-by":                         "homer-operator",
@@ -512,17 +379,14 @@ func createConfigMapWithHTTPRoutesAndHealth(
 	return *cm, nil
 }
 
-// DeploymentConfig contains all configuration options for creating a Homer deployment
 type DeploymentConfig struct {
 	AssetsConfigMapName string
 	PWAManifest         string
 	DNSPolicy           string
 	DNSConfig           string
-	// Resource configuration for Homer container
-	Resources *corev1.ResourceRequirements
+	Resources           *corev1.ResourceRequirements
 }
 
-// CreateDeployment creates a Homer deployment with all optional configuration
 func CreateDeployment(
 	name string, namespace string, replicas *int32, owner client.Object, config *DeploymentConfig,
 ) appsv1.Deployment {
@@ -548,7 +412,7 @@ func createDeploymentInternal(
 			VolumeSource: corev1.VolumeSource{
 				ConfigMap: &corev1.ConfigMapVolumeSource{
 					LocalObjectReference: corev1.LocalObjectReference{
-						Name: name + "-homer",
+						Name: name + ResourceSuffix,
 					},
 				},
 			},
@@ -577,7 +441,7 @@ func createDeploymentInternal(
 
 	d := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name + "-homer",
+			Name:      name + ResourceSuffix,
 			Namespace: namespace,
 			Labels: map[string]string{
 				"managed-by":                         "homer-operator",
@@ -601,9 +465,9 @@ func createDeploymentInternal(
 				Spec: corev1.PodSpec{
 					SecurityContext: &corev1.PodSecurityContext{
 						RunAsNonRoot: &[]bool{true}[0],
-						RunAsUser:    &[]int64{1000}[0],
-						RunAsGroup:   &[]int64{1000}[0],
-						FSGroup:      &[]int64{1000}[0],
+						RunAsUser:    &[]int64{DefaultContainerUID}[0],
+						RunAsGroup:   &[]int64{DefaultContainerGID}[0],
+						FSGroup:      &[]int64{DefaultContainerGID}[0],
 						SeccompProfile: &corev1.SeccompProfile{
 							Type: corev1.SeccompProfileTypeRuntimeDefault,
 						},
@@ -621,8 +485,8 @@ func createDeploymentInternal(
 							SecurityContext: &corev1.SecurityContext{
 								AllowPrivilegeEscalation: &[]bool{false}[0],
 								RunAsNonRoot:             &[]bool{true}[0],
-								RunAsUser:                &[]int64{1000}[0],
-								RunAsGroup:               &[]int64{1000}[0],
+								RunAsUser:                &[]int64{DefaultContainerUID}[0],
+								RunAsGroup:               &[]int64{DefaultContainerGID}[0],
 								Capabilities: &corev1.Capabilities{
 									Drop: []corev1.Capability{"ALL"},
 								},
@@ -648,8 +512,8 @@ func createDeploymentInternal(
 							SecurityContext: &corev1.SecurityContext{
 								AllowPrivilegeEscalation: &[]bool{false}[0],
 								RunAsNonRoot:             &[]bool{true}[0],
-								RunAsUser:                &[]int64{1000}[0],
-								RunAsGroup:               &[]int64{1000}[0],
+								RunAsUser:                &[]int64{DefaultContainerUID}[0],
+								RunAsGroup:               &[]int64{DefaultContainerGID}[0],
 								Capabilities: &corev1.Capabilities{
 									Drop: []corev1.Capability{"ALL"},
 								},
@@ -669,7 +533,7 @@ func createDeploymentInternal(
 							},
 							Ports: []corev1.ContainerPort{
 								{
-									ContainerPort: 8080,
+									ContainerPort: DefaultHomerPort,
 								},
 							},
 							Env: []corev1.EnvVar{
@@ -679,7 +543,7 @@ func createDeploymentInternal(
 								},
 								{
 									Name:  "PORT",
-									Value: "8080",
+									Value: strconv.Itoa(DefaultHomerPort),
 								},
 								{
 									Name:  "IPV6_DISABLE",
@@ -699,8 +563,17 @@ func createDeploymentInternal(
 	if config.DNSPolicy != "" {
 		d.Spec.Template.Spec.DNSPolicy = corev1.DNSPolicy(config.DNSPolicy)
 	}
-	// DNSConfig would require JSON parsing if needed
-	// For now, skipping complex DNS config parsing
+
+	// Parse and apply DNSConfig if provided
+	if config.DNSConfig != "" {
+		var dnsConfig corev1.PodDNSConfig
+		if err := json.Unmarshal([]byte(config.DNSConfig), &dnsConfig); err != nil {
+			// Log error but don't fail deployment - DNS config is optional
+			log.Printf("Warning: parse DNSConfig: %v", err)
+		} else {
+			d.Spec.Template.Spec.DNSConfig = &dnsConfig
+		}
+	}
 
 	return *d
 }
@@ -818,7 +691,14 @@ func CreateDeploymentWithDNS(
 	if dnsPolicy != nil {
 		config.DNSPolicy = string(*dnsPolicy)
 	}
-	// Note: DNSConfig is complex and would require JSON serialization for full support
+	if dnsConfig != nil {
+		// Convert PodDNSConfig to JSON string for consistency with DeploymentConfig
+		if dnsConfigJSON, err := json.Marshal(dnsConfig); err == nil {
+			config.DNSConfig = string(dnsConfigJSON)
+		} else {
+			log.Printf("Warning: serialize DNSConfig: %v", err)
+		}
+	}
 	return CreateDeployment(name, namespace, replicas, owner, config)
 }
 
@@ -832,7 +712,7 @@ func ValidateTheme(theme string) error {
 	if slices.Contains(validThemes, theme) {
 		return nil
 	}
-	return fmt.Errorf("unsupported theme '%s'. Valid themes are: %v", theme, validThemes)
+	return fmt.Errorf("theme: %s", theme)
 }
 
 // SecretKeyRef represents a reference to a key in a Secret (local type to avoid circular imports)
@@ -866,12 +746,16 @@ func ResolveAPIKeyFromSecret(
 		Name:      secretRef.Name,
 		Namespace: secretNamespace,
 	}, secret); err != nil {
-		return fmt.Errorf("failed to get secret %s/%s: %w", secretNamespace, secretRef.Name, err)
+		return fmt.Errorf("secret %s/%s: %w", secretNamespace, secretRef.Name, err)
+	}
+
+	if secret.Data == nil {
+		return fmt.Errorf("secret %s/%s: no data", secretNamespace, secretRef.Name)
 	}
 
 	value, exists := secret.Data[secretRef.Key]
 	if !exists {
-		return fmt.Errorf("key %s not found in secret %s/%s", secretRef.Key, secretNamespace, secretRef.Name)
+		return fmt.Errorf("secret %s/%s: key %s not found", secretNamespace, secretRef.Name, secretRef.Key)
 	}
 
 	// Set the API key in the item Parameters
@@ -979,7 +863,7 @@ func truncateString(s string, maxLen int) string {
 func CreateService(name string, namespace string, owner client.Object) corev1.Service {
 	s := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name + "-homer",
+			Name:      name + ResourceSuffix,
 			Namespace: namespace,
 			Labels: map[string]string{
 				"managed-by":                         "homer-operator",
@@ -993,8 +877,8 @@ func CreateService(name string, namespace string, owner client.Object) corev1.Se
 			},
 			Ports: []corev1.ServicePort{
 				{
-					Port:       80,
-					TargetPort: intstr.FromInt(8080),
+					Port:       DefaultServicePort,
+					TargetPort: intstr.FromInt(DefaultHomerPort),
 				},
 			},
 		},
@@ -1012,10 +896,38 @@ func UpdateHomerConfigIngressWithGrouping(
 	domainFilters []string,
 	groupingConfig *ServiceGroupingConfig,
 ) {
+	// Setup service configuration
+	service := setupIngressService(homerConfig, ingress, groupingConfig)
+
+	// Validate ingress has rules
+	if len(ingress.Spec.Rules) == 0 {
+		return // Skip Ingress resources without rules
+	}
+
+	// Remove existing items and process service annotations
+	removeItemsFromIngressSource(homerConfig, ingress.ObjectMeta.Name, ingress.ObjectMeta.Namespace)
+	processServiceAnnotations(&service, ingress.ObjectMeta.Annotations)
+
+	// Create items from ingress rules
+	items := createIngressItems(ingress, domainFilters)
+
+	// Update service if we have matching items
+	if len(items) > 0 {
+		updateOrAddServiceItems(homerConfig, service, items)
+	}
+}
+
+// setupIngressService creates and configures a service for an ingress
+func setupIngressService(
+	homerConfig *HomerConfig,
+	ingress networkingv1.Ingress,
+	groupingConfig *ServiceGroupingConfig,
+) Service {
 	service := Service{}
 
-	// Determine service group using flexible grouping and set parameters
-	serviceName := determineServiceGroup(
+	// Determine service group using CRD-aware flexible grouping and set parameters
+	serviceName := determineServiceGroupWithCRDRespect(
+		homerConfig,
 		ingress.ObjectMeta.Namespace,
 		ingress.ObjectMeta.Labels,
 		ingress.ObjectMeta.Annotations,
@@ -1024,22 +936,39 @@ func UpdateHomerConfigIngressWithGrouping(
 	setServiceParameter(&service, "name", serviceName)
 	setServiceParameter(&service, "logo", NamespaceIconURL)
 
-	// Check if there are any rules before accessing them
-	if len(ingress.Spec.Rules) == 0 {
-		// Skip Ingress resources without rules
-		return
+	return service
+}
+
+// createIngressItems creates dashboard items from ingress rules
+func createIngressItems(ingress networkingv1.Ingress, domainFilters []string) []Item {
+	items := make([]Item, 0, len(ingress.Spec.Rules))
+
+	// First pass: count valid rules for naming
+	validRuleCount := countValidIngressRules(ingress, domainFilters)
+
+	// Second pass: create items for valid rules
+	for _, rule := range ingress.Spec.Rules {
+		host := rule.Host
+		if host == "" {
+			continue // Skip rules without hostnames
+		}
+
+		// Apply domain filtering
+		if !utils.MatchesHostDomainFilters(host, domainFilters) {
+			continue // Skip hosts that don't match domain filters
+		}
+
+		item := createIngressItem(ingress, host, validRuleCount)
+		processItemAnnotations(&item, ingress.ObjectMeta.Annotations)
+		items = append(items, item)
 	}
 
-	// FIRST: Remove any existing items from this Ingress source to ensure clean slate
-	removeItemsFromIngressSource(homerConfig, ingress.ObjectMeta.Name, ingress.ObjectMeta.Namespace)
+	return items
+}
 
-	// Process service-level annotations
-	processServiceAnnotations(&service, ingress.ObjectMeta.Annotations)
-
-	// Process each rule's host with domain filtering
-	items := make([]Item, 0, len(ingress.Spec.Rules))
+// countValidIngressRules counts rules that pass domain filtering
+func countValidIngressRules(ingress networkingv1.Ingress, domainFilters []string) int {
 	validRuleCount := 0
-	// First pass: count valid rules
 	for _, rule := range ingress.Spec.Rules {
 		host := rule.Host
 		if host == "" {
@@ -1051,51 +980,41 @@ func UpdateHomerConfigIngressWithGrouping(
 		}
 		validRuleCount++
 	}
-	for _, rule := range ingress.Spec.Rules {
-		host := rule.Host
-		if host == "" {
-			continue // Skip rules without hostnames
-		}
+	return validRuleCount
+}
 
-		// Apply domain filtering
-		if !utils.MatchesHostDomainFilters(host, domainFilters) {
-			continue // Skip hosts that don't match domain filters
-		}
+// createIngressItem creates a single dashboard item for an ingress rule
+func createIngressItem(ingress networkingv1.Ingress, host string, validRuleCount int) Item {
+	item := Item{}
 
-		item := Item{}
+	// Set default values using helper functions
+	name := ingress.ObjectMeta.Name
+	if validRuleCount > 1 {
+		name = ingress.ObjectMeta.Name + "-" + host
+	}
+	setItemParameter(&item, "name", name)
+	setItemParameter(&item, "logo", IngressIconURL)
+	setItemParameter(&item, "subtitle", host)
 
-		// Set default values using helper functions
-		name := ingress.ObjectMeta.Name
-		if validRuleCount > 1 {
-			name = ingress.ObjectMeta.Name + "-" + host
-		}
-		setItemParameter(&item, "name", name)
-		setItemParameter(&item, "logo", IngressIconURL)
-		setItemParameter(&item, "subtitle", host)
-
-		if len(ingress.Spec.TLS) > 0 {
-			setItemParameter(&item, "url", "https://"+host)
-		} else {
-			setItemParameter(&item, "url", "http://"+host)
-		}
-
-		// Set metadata for conflict detection
-		item.Source = ingress.ObjectMeta.Name
-		item.Namespace = ingress.ObjectMeta.Namespace
-		item.LastUpdate = ingress.ObjectMeta.CreationTimestamp.Time.Format("2006-01-02T15:04:05Z")
-
-		// Process annotations safely
-		processItemAnnotations(&item, ingress.ObjectMeta.Annotations)
-		items = append(items, item)
+	// Determine protocol based on TLS configuration
+	if len(ingress.Spec.TLS) > 0 {
+		setItemParameter(&item, "url", "https://"+host)
+	} else {
+		setItemParameter(&item, "url", "http://"+host)
 	}
 
-	// Only update the service if we have matching items
-	if len(items) > 0 {
-		updateOrAddServiceItems(homerConfig, service, items)
-	}
+	// Set metadata for conflict detection
+	item.Source = ingress.ObjectMeta.Name
+	item.Namespace = ingress.ObjectMeta.Namespace
+	item.LastUpdate = ingress.ObjectMeta.CreationTimestamp.Time.Format("2006-01-02T15:04:05Z")
+
+	return item
 }
 
 func UpdateConfigMapIngress(cm *corev1.ConfigMap, ingress networkingv1.Ingress, domainFilters []string) {
+	configMapMutex.Lock()
+	defer configMapMutex.Unlock()
+
 	homerConfig := HomerConfig{}
 	err := yaml.Unmarshal([]byte(cm.Data["config.yml"]), &homerConfig)
 	if err != nil {
@@ -1123,8 +1042,9 @@ func updateHomerConfigWithHTTPRoutes(
 ) {
 	service := Service{}
 
-	// Determine service group using flexible grouping and set parameters
-	serviceName := determineServiceGroup(
+	// Determine service group using CRD-aware flexible grouping and set parameters
+	serviceName := determineServiceGroupWithCRDRespect(
+		homerConfig,
 		httproute.ObjectMeta.Namespace,
 		httproute.ObjectMeta.Labels,
 		httproute.ObjectMeta.Annotations,
@@ -1211,6 +1131,9 @@ func createHTTPRouteItem(httproute *gatewayv1.HTTPRoute, hostname, protocol stri
 // updateOrAddServiceItems updates existing items or adds new ones using smart merging
 // Smart strategy: CRD items = foundation, discovered items = enhancements
 func updateOrAddServiceItems(homerConfig *HomerConfig, service Service, items []Item) {
+	configMutex.Lock()
+	defer configMutex.Unlock()
+
 	// Get service name from Parameters only
 	serviceName := getServiceName(&service)
 
@@ -1441,172 +1364,68 @@ func processDynamicParameter(item *Item, fieldName, value string, validationLeve
 }
 
 // smartInferType uses convention-based detection to infer parameter types
-func smartInferType(key, value string) interface{} {
-	// Check for boolean patterns first
-	if isBooleanParameter(key) {
-		return parseBooleanValue(value)
+func smartInferType(value string) interface{} {
+	value = strings.TrimSpace(value)
+
+	// Boolean detection
+	lower := strings.ToLower(value)
+	if lower == "true" || lower == "1" || lower == "yes" || lower == "on" {
+		return true
+	}
+	if lower == "false" || lower == "0" || lower == "no" || lower == "off" {
+		return false
 	}
 
-	// Check for integer patterns
-	if isIntegerParameter(key) {
-		if i, err := strconv.Atoi(value); err == nil {
-			return i
-		}
-		// If conversion fails, fall through to other types
+	// Integer detection
+	if i, err := strconv.Atoi(value); err == nil {
+		return i
 	}
 
-	// Check for known object parameters
-	if isObjectParameter(key) {
-		result := make(map[string]string)
-		parseHeadersAnnotation(result, value)
-		return result
+	// Array detection (simple comma-separated)
+	if strings.Contains(value, ",") {
+		return parseArrayValue(value)
 	}
 
-	// Smart detection based on value content
-
-	// URLs should always remain as strings, regardless of content
-	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") || strings.HasPrefix(value, "ftp://") {
-		return value
-	}
-
-	// Try boolean detection by value
-	val := strings.ToLower(strings.TrimSpace(value))
-	if val == BooleanTrue || val == BooleanFalse || val == "yes" || val == "no" ||
-		val == "on" || val == "off" || val == "1" || val == "0" {
-		return parseBooleanValue(value)
-	}
-
-	// Try integer detection (but only if it looks like a number)
-	if strings.TrimSpace(value) != "" && !strings.Contains(value, ".") {
-		if i, err := strconv.Atoi(strings.TrimSpace(value)); err == nil {
-			return i
-		}
-	}
-
-	// Try array detection (comma-separated values) - but exclude keywords which should be strings
-	if strings.Contains(value, ",") && !strings.Contains(value, ":") && key != "keywords" {
-		items := strings.Split(value, ",")
-		if len(items) > 1 {
-			var result []string
-			for _, item := range items {
-				trimmed := strings.TrimSpace(item)
-				if trimmed != "" {
-					result = append(result, trimmed)
-				}
-			}
-			return result
-		}
-	}
-
-	// Try object detection (key:value pairs)
-	if strings.Contains(value, ":") && (strings.Contains(value, ",") || strings.Count(value, ":") == 1) {
-		result := make(map[string]string)
-		parseHeadersAnnotation(result, value)
-		return result
-	}
-
-	// Default to string
 	return value
 }
 
-// isBooleanParameter checks if a parameter should be treated as boolean
-func isBooleanParameter(key string) bool {
-	// Check exact matches
-	for _, name := range booleanNames {
-		if strings.EqualFold(key, name) {
-			return true
-		}
+// parseArrayValue efficiently parses comma-separated values into an array
+func parseArrayValue(value string) []string {
+	items := strings.Split(value, ",")
+	if len(items) <= 1 {
+		return []string{value} // Single item, return as-is
 	}
 
-	// Check suffixes
-	for _, suffix := range booleanSuffixes {
-		if strings.HasSuffix(strings.ToLower(key), strings.ToLower(suffix)) {
-			return true
+	// Pre-allocate result slice for better performance
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		if trimmed := strings.TrimSpace(item); trimmed != "" {
+			result = append(result, trimmed)
 		}
 	}
-
-	return false
-}
-
-// isIntegerParameter checks if a parameter should be treated as integer
-func isIntegerParameter(key string) bool {
-	// Check exact matches
-	for _, name := range integerNames {
-		if strings.EqualFold(key, name) {
-			return true
-		}
-	}
-
-	// Check suffixes
-	for _, suffix := range integerSuffixes {
-		if strings.HasSuffix(key, suffix) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// isObjectParameter checks if a parameter should be treated as object
-func isObjectParameter(key string) bool {
-	for _, name := range objectParameters {
-		if strings.EqualFold(key, name) {
-			return true
-		}
-	}
-	return false
+	return result
 }
 
 // validateParameterValue validates string values according to their expected type
 
-// parseBooleanValue parses various boolean representations
-func parseBooleanValue(value string) bool {
-	val := strings.ToLower(strings.TrimSpace(value))
-	return val == BooleanTrue || val == "1" || val == "yes" || val == "on"
-}
-
-// parseHeadersAnnotation parses comma-separated key:value pairs into headers map
-func parseHeadersAnnotation(headers map[string]string, value string) {
-	pairs := strings.Split(value, ",")
-	for _, pair := range pairs {
-		part := strings.SplitN(strings.TrimSpace(pair), ":", 2)
-		if len(part) == 2 {
-			headers[strings.TrimSpace(part[0])] = strings.TrimSpace(part[1])
-		}
-	}
-}
-
 // validateAnnotationValue validates annotation values based on field type
 func validateAnnotationValue(fieldName, value string, level ValidationLevel) error {
+	if level != ValidationLevelStrict || value == "" {
+		return nil
+	}
+
 	switch strings.ToLower(fieldName) {
 	case "url":
-		if value != "" && !isValidURL(value) {
-			if level == ValidationLevelStrict {
-				return fmt.Errorf("invalid URL format: %s", value)
-			}
-			if level == ValidationLevelWarn {
-				log.Printf("Warning: potentially invalid URL format: %s", value)
-			}
+		if !isValidURL(value) {
+			return fmt.Errorf("url: %s", value)
 		}
 	case "target":
-		if value != "" && value != "_blank" && value != "_self" && value != "_parent" && value != "_top" {
-			if level == ValidationLevelStrict {
-				return fmt.Errorf("invalid target value: %s, must be one of: _blank, _self, _parent, _top", value)
-			}
-			if level == ValidationLevelWarn {
-				log.Printf("Warning: potentially invalid target value: %s", value)
-			}
+		if value != "_blank" && value != "_self" && value != "_parent" && value != "_top" {
+			return fmt.Errorf("target: %s", value)
 		}
 	case WarningValueField, DangerValueField:
-		if value != "" {
-			if _, err := strconv.ParseFloat(value, 64); err != nil {
-				if level == ValidationLevelStrict {
-					return fmt.Errorf("invalid numeric value for %s: %s", fieldName, value)
-				}
-				if level == ValidationLevelWarn {
-					log.Printf("Warning: potentially invalid numeric value for %s: %s", fieldName, value)
-				}
-			}
+		if _, err := strconv.ParseFloat(value, 64); err != nil {
+			return fmt.Errorf("%s: %s", fieldName, value)
 		}
 	}
 	return nil
@@ -1664,6 +1483,172 @@ func determineServiceGroup(
 	default: // ServiceGroupingNamespace
 		return getNamespaceOrDefault(namespace)
 	}
+}
+
+// determineServiceGroupWithCRDRespect determines service group while respecting existing CRD groups
+func determineServiceGroupWithCRDRespect(
+	homerConfig *HomerConfig,
+	namespace string,
+	labels map[string]string,
+	annotations map[string]string,
+	config *ServiceGroupingConfig,
+) string {
+	// Check for explicit service name annotation first
+	if serviceName := getServiceNameFromAnnotations(annotations); serviceName != "" {
+		return serviceName
+	}
+
+	// Try to find a suitable existing CRD service group
+	if existingGroup := findBestMatchingCRDServiceGroup(homerConfig, namespace, labels, annotations); existingGroup != "" {
+		return existingGroup
+	}
+
+	// Fall back to standard determination
+	return determineServiceGroup(namespace, labels, annotations, config)
+}
+
+// findBestMatchingCRDServiceGroup finds the best existing CRD service group for a discovered service
+func findBestMatchingCRDServiceGroup(
+	homerConfig *HomerConfig,
+	namespace string,
+	labels map[string]string,
+	annotations map[string]string,
+) string {
+	bestMatch := ""
+	bestScore := 0
+
+	for _, service := range homerConfig.Services {
+		// Only consider CRD services (services with CRD items)
+		if !hasCRDItems(service) {
+			continue
+		}
+
+		serviceName := getServiceName(&service)
+		if serviceName == "" {
+			continue
+		}
+
+		// Score the match based on various criteria
+		score := scoreCRDServiceGroupMatch(serviceName, namespace, labels, annotations)
+		if score > bestScore {
+			bestScore = score
+			bestMatch = serviceName
+		}
+	}
+
+	return bestMatch
+}
+
+// hasCRDItems checks if a service has any items from CRD source
+func hasCRDItems(service Service) bool {
+	for _, item := range service.Items {
+		if item.Source == CRDSource {
+			return true
+		}
+	}
+	return false
+}
+
+// scoreCRDServiceGroupMatch scores how well a discovered service matches an existing CRD service group
+func scoreCRDServiceGroupMatch(
+	crdServiceName string,
+	discoveredNamespace string,
+	discoveredLabels map[string]string,
+	discoveredAnnotations map[string]string,
+) int {
+	score := 0
+
+	// Normalize service name for comparison
+	normalizedCRDName := strings.ToLower(crdServiceName)
+	normalizedNamespace := strings.ToLower(discoveredNamespace)
+
+	// Direct name match with namespace
+	if normalizedCRDName == normalizedNamespace {
+		score += 100
+	}
+
+	// Partial name match with namespace
+	if strings.Contains(normalizedCRDName, normalizedNamespace) ||
+		strings.Contains(normalizedNamespace, normalizedCRDName) {
+		score += 50
+	}
+
+	// Check for common service group patterns
+	serviceGroupPatterns := map[string][]string{
+		"media":          {"media", "plex", "sonarr", "radarr", "lidarr", "readarr", "jellyfin", "transmission"},
+		"development":    {"dev", "development", "tools", "git", "code", "ci", "cd", "argocd", "jenkins"},
+		"infrastructure": {"infra", "infrastructure", "system", "monitoring", "logging", "metrics", "prometheus", "grafana"},
+		"security":       {"security", "auth", "authentication", "vault", "keycloak", "oauth"},
+		"home":           {"home", "automation", "iot", "smart", "homeassistant", "camera", "frigate"},
+		"storage":        {"storage", "backup", "sync", "nextcloud", "nas", "minio"},
+		"network":        {"network", "networking", "dns", "proxy", "vpn", "tailscale", "wireguard"},
+	}
+
+	for category, patterns := range serviceGroupPatterns {
+		if strings.Contains(normalizedCRDName, category) {
+			for _, pattern := range patterns {
+				if strings.Contains(normalizedNamespace, pattern) ||
+					containsPattern(discoveredLabels, pattern) ||
+					containsPattern(discoveredAnnotations, pattern) {
+					score += 30
+					break
+				}
+			}
+		}
+	}
+
+	// Check for explicit grouping annotations
+	if groupAnnotation, exists := discoveredAnnotations["service.homer.rajsingh.info/group"]; exists {
+		if strings.EqualFold(groupAnnotation, crdServiceName) {
+			score += 200 // Highest priority for explicit annotation
+		}
+	}
+
+	return score
+}
+
+// containsPattern checks if any value in a map contains the given pattern
+func containsPattern(m map[string]string, pattern string) bool {
+	for _, value := range m {
+		if strings.Contains(strings.ToLower(value), pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+// validateCRDServicePreservation validates that CRD services are preserved after discovery
+func validateCRDServicePreservation(originalConfig, processedConfig *HomerConfig) error {
+	crdServiceNames := make(map[string]bool)
+	for _, service := range originalConfig.Services {
+		if hasCRDItems(service) {
+			if serviceName := getServiceName(&service); serviceName != "" {
+				crdServiceNames[serviceName] = true
+			}
+		}
+	}
+
+	preservedCRDServices := make(map[string]bool)
+	for _, service := range processedConfig.Services {
+		if hasCRDItems(service) {
+			if serviceName := getServiceName(&service); serviceName != "" {
+				preservedCRDServices[serviceName] = true
+			}
+		}
+	}
+
+	var missingServices []string
+	for serviceName := range crdServiceNames {
+		if !preservedCRDServices[serviceName] {
+			missingServices = append(missingServices, serviceName)
+		}
+	}
+
+	if len(missingServices) > 0 {
+		return fmt.Errorf("CRD services lost: %v", missingServices)
+	}
+
+	return nil
 }
 
 // getNamespaceOrDefault returns the namespace if it's not empty, otherwise returns a default name
@@ -1779,6 +1764,9 @@ func processServiceNestedObjectField(service *Service, fieldName, value string) 
 
 // UpdateConfigMapHTTPRoute updates the ConfigMap with HTTPRoute information
 func UpdateConfigMapHTTPRoute(cm *corev1.ConfigMap, httproute *gatewayv1.HTTPRoute, domainFilters []string) {
+	configMapMutex.Lock()
+	defer configMapMutex.Unlock()
+
 	homerConfig := HomerConfig{}
 	err := yaml.Unmarshal([]byte(cm.Data["config.yml"]), &homerConfig)
 	if err != nil {
@@ -1795,60 +1783,53 @@ func UpdateConfigMapHTTPRoute(cm *corev1.ConfigMap, httproute *gatewayv1.HTTPRou
 // ValidateHomerConfig validates the Homer configuration for common issues
 func ValidateHomerConfig(config *HomerConfig) error {
 	if config == nil {
-		return errors.New("homer config cannot be nil")
+		return fmt.Errorf("config: nil")
 	}
 
-	// Validate title is not empty for user experience
 	if config.Title == "" {
-		return errors.New("title is required for dashboard")
+		return fmt.Errorf("title: required")
 	}
 
-	// Validate color themes if specified
-	if config.Colors.Light.Background != "" || config.Colors.Dark.Background != "" {
-		if config.Colors.Light.Background != "" && !isValidColor(config.Colors.Light.Background) {
-			return fmt.Errorf("invalid light background color: %s", config.Colors.Light.Background)
-		}
-		if config.Colors.Dark.Background != "" && !isValidColor(config.Colors.Dark.Background) {
-			return fmt.Errorf("invalid dark background color: %s", config.Colors.Dark.Background)
-		}
+	if config.Colors.Light.Background != "" && !isValidColor(config.Colors.Light.Background) {
+		return fmt.Errorf("light background color: %s", config.Colors.Light.Background)
+	}
+	if config.Colors.Dark.Background != "" && !isValidColor(config.Colors.Dark.Background) {
+		return fmt.Errorf("dark background color: %s", config.Colors.Dark.Background)
 	}
 
-	// Validate layout options
-	if config.Defaults.Layout != "" {
-		if config.Defaults.Layout != "columns" && config.Defaults.Layout != "list" {
-			return fmt.Errorf("invalid layout '%s', must be 'columns' or 'list'", config.Defaults.Layout)
-		}
+	if config.Defaults.Layout != "" && config.Defaults.Layout != "columns" && config.Defaults.Layout != "list" {
+		return fmt.Errorf("layout: %s", config.Defaults.Layout)
 	}
 
-	// Validate color theme options
 	if config.Defaults.ColorTheme != "" {
-		if config.Defaults.ColorTheme != "auto" && config.Defaults.ColorTheme != "light" &&
-			config.Defaults.ColorTheme != "dark" {
-			return fmt.Errorf("invalid colorTheme '%s', must be 'auto', 'light', or 'dark'", config.Defaults.ColorTheme)
+		validThemes := []string{"auto", "light", "dark"}
+		valid := false
+		for _, theme := range validThemes {
+			if config.Defaults.ColorTheme == theme {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			return fmt.Errorf("colorTheme: %s", config.Defaults.ColorTheme)
 		}
 	}
 
-	// Validate services and items
 	for i, service := range config.Services {
-		// Get service name from Parameters map
 		serviceName := getServiceName(&service)
 		if serviceName == "" {
-			// Debug: print the service to see what's wrong
-			log.Printf("DEBUG: Service at index %d has no name in Parameters. Service: %+v", i, service)
-			return fmt.Errorf("service at index %d is missing name", i)
+			return fmt.Errorf("service[%d]: missing name", i)
 		}
 
 		for j, item := range service.Items {
-			// Get item name from Parameters map
 			itemName := getItemName(&item)
 			if itemName == "" {
-				return fmt.Errorf("item at index %d in service '%s' is missing name", j, serviceName)
+				return fmt.Errorf("service[%d].item[%d]: missing name", i, j)
 			}
 
-			// Get item URL from Parameters map
 			itemURL := getItemURL(&item)
 			if itemURL != "" && !isValidURL(itemURL) {
-				return fmt.Errorf("invalid URL '%s' for item '%s'", itemURL, itemName)
+				return fmt.Errorf("service[%d].item[%d]: invalid URL %s", i, j, itemURL)
 			}
 		}
 	}
@@ -1856,42 +1837,38 @@ func ValidateHomerConfig(config *HomerConfig) error {
 	return nil
 }
 
-// isValidColor checks if a color string is valid (basic validation)
 func isValidColor(color string) bool {
-	// Check for hex colors (#rgb, #rrggbb)
 	if strings.HasPrefix(color, "#") {
-		color = color[1:]
-		if len(color) != 3 && len(color) != 6 {
+		hex := color[1:]
+		if len(hex) != 3 && len(hex) != 6 {
 			return false
 		}
-		for _, c := range color {
-			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+		for _, c := range hex {
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
 				return false
 			}
 		}
 		return true
 	}
 
-	// Check for common CSS color names
-	commonColors := []string{
-		"red", "blue", "green", "yellow", "orange", "purple",
-		"pink", "brown", "black", "white", "gray", "grey",
+	commonColors := map[string]bool{
+		"red": true, "blue": true, "green": true, "yellow": true,
+		"orange": true, "purple": true, "pink": true, "brown": true,
+		"black": true, "white": true, "gray": true, "grey": true,
 	}
-	if slices.Contains(commonColors, strings.ToLower(color)) {
+
+	lowerColor := strings.ToLower(color)
+	if commonColors[lowerColor] {
 		return true
 	}
 
-	// Check for rgb/rgba format
-	return strings.HasPrefix(strings.ToLower(color), "rgb")
+	return strings.HasPrefix(lowerColor, "rgb")
 }
 
-// isValidURL checks if a URL string has basic valid format
 func isValidURL(url string) bool {
 	if url == "" {
-		return true // empty URLs are valid (optional)
+		return true
 	}
-
-	// Basic URL validation - must start with protocol
 	return strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "ftp://")
 }
 
@@ -1990,9 +1967,142 @@ func normalizeHomerConfig(config *HomerConfig) {
 	}
 }
 
-// buildThemeColorsMap converts ThemeColors struct to map for YAML output
-func buildThemeColorsMap(colors ThemeColors) map[string]any {
-	colorMap := map[string]any{}
+// marshalHomerConfigToYAML creates properly formatted YAML for Homer
+func marshalHomerConfigToYAML(config *HomerConfig) ([]byte, error) {
+	// Create a flat map to avoid nested structure
+	configMap := make(map[string]interface{})
+
+	// Add all HomerConfig fields to the map
+	if config.Title != "" {
+		configMap["title"] = config.Title
+	}
+	if config.Subtitle != "" {
+		configMap["subtitle"] = config.Subtitle
+	}
+	if config.DocumentTitle != "" {
+		configMap["documentTitle"] = config.DocumentTitle
+	}
+	if config.Logo != "" {
+		configMap["logo"] = config.Logo
+	}
+	if config.Icon != "" {
+		configMap["icon"] = config.Icon
+	}
+	configMap["header"] = config.Header
+	if config.Footer != "" {
+		configMap["footer"] = config.Footer
+	}
+	if config.Columns != "" {
+		configMap["columns"] = config.Columns
+	}
+	if config.ConnectivityCheck {
+		configMap["connectivityCheck"] = config.ConnectivityCheck
+	}
+	if config.Theme != "" {
+		configMap["theme"] = config.Theme
+	}
+	if len(config.Stylesheet) > 0 {
+		configMap["stylesheet"] = config.Stylesheet
+	}
+	if config.ExternalConfig != "" {
+		configMap["externalConfig"] = config.ExternalConfig
+	}
+
+	// Add hotkey config if present
+	if config.Hotkey.Search != "" {
+		configMap["hotkey"] = map[string]interface{}{
+			"search": config.Hotkey.Search,
+		}
+	}
+
+	// Add colors config if present
+	if config.Colors.Light != (ThemeColors{}) || config.Colors.Dark != (ThemeColors{}) {
+		colorsMap := make(map[string]interface{})
+		if config.Colors.Light != (ThemeColors{}) {
+			lightMap := make(map[string]interface{})
+			addThemeColors(lightMap, config.Colors.Light)
+			if len(lightMap) > 0 {
+				colorsMap["light"] = lightMap
+			}
+		}
+		if config.Colors.Dark != (ThemeColors{}) {
+			darkMap := make(map[string]interface{})
+			addThemeColors(darkMap, config.Colors.Dark)
+			if len(darkMap) > 0 {
+				colorsMap["dark"] = darkMap
+			}
+		}
+		if len(colorsMap) > 0 {
+			configMap["colors"] = colorsMap
+		}
+	}
+
+	// Add defaults config if present
+	if config.Defaults.ColorTheme != "" || config.Defaults.Layout != "" {
+		defaultsMap := make(map[string]interface{})
+		if config.Defaults.Layout != "" {
+			defaultsMap["layout"] = config.Defaults.Layout
+		}
+		if config.Defaults.ColorTheme != "" {
+			defaultsMap["colorTheme"] = config.Defaults.ColorTheme
+		}
+		configMap["defaults"] = defaultsMap
+	}
+
+	// Add proxy config if present
+	if config.Proxy.UseCredentials || len(config.Proxy.Headers) > 0 {
+		proxyMap := make(map[string]interface{})
+		if config.Proxy.UseCredentials {
+			proxyMap["useCredentials"] = config.Proxy.UseCredentials
+		}
+		if len(config.Proxy.Headers) > 0 {
+			proxyMap["headers"] = config.Proxy.Headers
+		}
+		configMap["proxy"] = proxyMap
+	}
+
+	// Add message config if present
+	if config.Message.Title != "" || config.Message.Content != "" || config.Message.Url != "" {
+		messageMap := make(map[string]interface{})
+		if config.Message.Title != "" {
+			messageMap["title"] = config.Message.Title
+		}
+		if config.Message.Content != "" {
+			messageMap["content"] = config.Message.Content
+		}
+		if config.Message.Icon != "" {
+			messageMap["icon"] = config.Message.Icon
+		}
+		if config.Message.Style != "" {
+			messageMap["style"] = config.Message.Style
+		}
+		if config.Message.Url != "" {
+			messageMap["url"] = config.Message.Url
+		}
+		if config.Message.RefreshInterval > 0 {
+			messageMap["refreshInterval"] = config.Message.RefreshInterval
+		}
+		if len(config.Message.Mapping) > 0 {
+			messageMap["mapping"] = config.Message.Mapping
+		}
+		configMap["message"] = messageMap
+	}
+
+	// Add links if present
+	if len(config.Links) > 0 {
+		configMap["links"] = config.Links
+	}
+
+	// Add services with dynamic parameters
+	if len(config.Services) > 0 {
+		configMap["services"] = flattenServicesForYAML(config.Services)
+	}
+
+	return yaml.Marshal(configMap)
+}
+
+// addThemeColors adds theme color fields to a map
+func addThemeColors(colorMap map[string]interface{}, colors ThemeColors) {
 	if colors.HighlightPrimary != "" {
 		colorMap["highlight-primary"] = colors.HighlightPrimary
 	}
@@ -2005,8 +2115,14 @@ func buildThemeColorsMap(colors ThemeColors) map[string]any {
 	if colors.Background != "" {
 		colorMap["background"] = colors.Background
 	}
+	if colors.BackgroundImage != "" {
+		colorMap["background-image"] = colors.BackgroundImage
+	}
 	if colors.CardBackground != "" {
 		colorMap["card-background"] = colors.CardBackground
+	}
+	if colors.CardShadow != "" {
+		colorMap["card-shadow"] = colors.CardShadow
 	}
 	if colors.Text != "" {
 		colorMap["text"] = colors.Text
@@ -2020,137 +2136,28 @@ func buildThemeColorsMap(colors ThemeColors) map[string]any {
 	if colors.TextSubtitle != "" {
 		colorMap["text-subtitle"] = colors.TextSubtitle
 	}
-	if colors.CardShadow != "" {
-		colorMap["card-shadow"] = colors.CardShadow
-	}
 	if colors.Link != "" {
 		colorMap["link"] = colors.Link
 	}
 	if colors.LinkHover != "" {
 		colorMap["link-hover"] = colors.LinkHover
 	}
-	if colors.BackgroundImage != "" {
-		colorMap["background-image"] = colors.BackgroundImage
-	}
-	return colorMap
 }
 
-// marshalHomerConfigToYAML creates properly formatted YAML for Homer
-func marshalHomerConfigToYAML(config *HomerConfig) ([]byte, error) {
-	// Create a map with proper field names for Homer
-	configMap := map[string]any{
-		"title":             config.Title,
-		"subtitle":          config.Subtitle,
-		"documentTitle":     config.DocumentTitle,
-		"logo":              config.Logo,
-		"icon":              config.Icon,
-		"header":            config.Header,
-		"footer":            config.Footer,
-		"columns":           config.Columns,
-		"connectivityCheck": config.ConnectivityCheck,
-		"theme":             config.Theme,
-		"stylesheet":        config.Stylesheet,
-		"externalConfig":    config.ExternalConfig,
-	}
-
-	// Add hotkey if configured
-	if config.Hotkey.Search != "" {
-		configMap["hotkey"] = map[string]any{
-			"search": config.Hotkey.Search,
-		}
-	}
-
-	// Add colors with proper field names
-	if config.Colors.Light.HighlightPrimary != "" || config.Colors.Dark.HighlightPrimary != "" {
-		colors := map[string]any{}
-
-		if light := buildThemeColorsMap(config.Colors.Light); len(light) > 0 {
-			colors["light"] = light
-		}
-
-		if dark := buildThemeColorsMap(config.Colors.Dark); len(dark) > 0 {
-			colors["dark"] = dark
-		}
-
-		if len(colors) > 0 {
-			configMap["colors"] = colors
-		}
-	}
-
-	// Add defaults
-	if config.Defaults.Layout != "" || config.Defaults.ColorTheme != "" {
-		defaults := map[string]any{}
-		if config.Defaults.Layout != "" {
-			defaults["layout"] = config.Defaults.Layout
-		}
-		if config.Defaults.ColorTheme != "" {
-			defaults["colorTheme"] = config.Defaults.ColorTheme
-		}
-		configMap["defaults"] = defaults
-	}
-
-	// Add proxy if configured
-	if config.Proxy.UseCredentials || len(config.Proxy.Headers) > 0 {
-		proxy := map[string]any{}
-		proxy["useCredentials"] = config.Proxy.UseCredentials
-		if len(config.Proxy.Headers) > 0 {
-			proxy["headers"] = config.Proxy.Headers
-		}
-		configMap["proxy"] = proxy
-	}
-
-	// Add message if configured
-	if config.Message.Title != "" || config.Message.Content != "" {
-		message := map[string]any{}
-		if config.Message.Url != "" {
-			message["url"] = config.Message.Url
-		}
-		if len(config.Message.Mapping) > 0 {
-			message["mapping"] = config.Message.Mapping
-		}
-		if config.Message.RefreshInterval > 0 {
-			message["refreshInterval"] = config.Message.RefreshInterval
-		}
-		if config.Message.Style != "" {
-			message["style"] = config.Message.Style
-		}
-		if config.Message.Title != "" {
-			message["title"] = config.Message.Title
-		}
-		if config.Message.Icon != "" {
-			message["icon"] = config.Message.Icon
-		}
-		if config.Message.Content != "" {
-			message["content"] = config.Message.Content
-		}
-		configMap["message"] = message
-	}
-
-	// Add links
-	if len(config.Links) > 0 {
-		configMap["links"] = config.Links
-	}
-
-	// Add services with dynamic parameter flattening
-	if len(config.Services) > 0 {
-		configMap["services"] = flattenServicesForYAML(config.Services)
-	}
-
-	return yaml.Marshal(configMap)
-}
-
-// flattenServicesForYAML converts services with dynamic parameters to YAML-friendly maps
 func flattenServicesForYAML(services []Service) []map[string]interface{} {
-	result := make([]map[string]interface{}, len(services))
+	if len(services) == 0 {
+		return nil
+	}
 
-	for i, service := range services {
+	result := make([]map[string]interface{}, 0, len(services))
+
+	for _, service := range services {
 		serviceMap := make(map[string]interface{})
 
-		// Add parameters from Parameters map with smart type inference
+		// Add parameters with smart type inference
 		if service.Parameters != nil {
 			for key, value := range service.Parameters {
-				convertedValue := smartInferType(key, value)
-				serviceMap[key] = convertedValue
+				serviceMap[key] = smartInferType(value)
 			}
 		}
 
@@ -2163,39 +2170,34 @@ func flattenServicesForYAML(services []Service) []map[string]interface{} {
 
 		// Add items with flattening
 		if len(service.Items) > 0 {
-			serviceMap["items"] = flattenItemsForYAML(service.Items)
+			if flattenedItems := flattenItemsForYAML(service.Items); len(flattenedItems) > 0 {
+				serviceMap["items"] = flattenedItems
+			}
 		}
 
-		result[i] = serviceMap
+		if len(serviceMap) > 0 {
+			result = append(result, serviceMap)
+		}
 	}
 
 	return result
 }
 
-// flattenItemsForYAML converts items with dynamic parameters to YAML-friendly maps
 func flattenItemsForYAML(items []Item) []map[string]interface{} {
-	result := make([]map[string]interface{}, len(items))
+	if len(items) == 0 {
+		return nil
+	}
 
-	for i, item := range items {
+	result := make([]map[string]interface{}, 0, len(items))
+
+	for _, item := range items {
 		itemMap := make(map[string]interface{})
 
-		// Add parameters from Parameters map with smart type inference
+		// Add parameters with smart type inference
 		if item.Parameters != nil {
 			for key, value := range item.Parameters {
-				// Handle special cases that need specific YAML field names
-				yamlKey := key
-				switch strings.ToLower(key) {
-				case "legacyapi":
-					yamlKey = "legacyApi"
-				case "librarytype":
-					yamlKey = "libraryType"
-				case "usecredentials":
-					yamlKey = "useCredentials"
-				}
-
-				// Apply smart type inference
-				convertedValue := smartInferType(key, value)
-				itemMap[yamlKey] = convertedValue
+				yamlKey := getYAMLKey(key)
+				itemMap[yamlKey] = smartInferType(value)
 			}
 		}
 
@@ -2206,10 +2208,26 @@ func flattenItemsForYAML(items []Item) []map[string]interface{} {
 			}
 		}
 
-		result[i] = itemMap
+		if len(itemMap) > 0 {
+			result = append(result, itemMap)
+		}
 	}
 
 	return result
+}
+
+// getYAMLKey converts parameter keys to proper YAML field names
+func getYAMLKey(key string) string {
+	switch strings.ToLower(key) {
+	case "legacyapi":
+		return "legacyApi"
+	case "librarytype":
+		return "libraryType"
+	case "usecredentials":
+		return "useCredentials"
+	default:
+		return key
+	}
 }
 
 // ServiceHealthConfig defines health checking configuration for services
@@ -2453,9 +2471,14 @@ func optimizeServiceLayout(services []Service, _ []ServiceDependency) []Service 
 
 // removeItemsFromHTTPRouteSource removes all items that originated from a specific HTTPRoute
 func removeItemsFromHTTPRouteSource(homerConfig *HomerConfig, sourceName, sourceNamespace string) {
+	configMutex.Lock()
+	defer configMutex.Unlock()
+
 	for serviceIndex := range homerConfig.Services {
 		service := &homerConfig.Services[serviceIndex]
-		var filteredItems []Item
+
+		// Create a new slice for filtered items to avoid race conditions
+		filteredItems := make([]Item, 0, len(service.Items))
 
 		// Keep only items that did NOT come from the specified HTTPRoute source
 		for _, item := range service.Items {
@@ -2464,7 +2487,7 @@ func removeItemsFromHTTPRouteSource(homerConfig *HomerConfig, sourceName, source
 				// Skip this item (remove it)
 				continue
 			}
-			// Keep this item
+			// Keep this item by creating a copy
 			filteredItems = append(filteredItems, item)
 		}
 
@@ -2478,25 +2501,25 @@ func removeItemsFromHTTPRouteSource(homerConfig *HomerConfig, sourceName, source
 
 // removeItemsFromIngressSource removes all items that originated from a specific Ingress
 func removeItemsFromIngressSource(homerConfig *HomerConfig, sourceName, sourceNamespace string) {
-	// Pre-allocate slices to reduce allocations
+	configMutex.Lock()
+	defer configMutex.Unlock()
+
 	for serviceIndex := range homerConfig.Services {
 		service := &homerConfig.Services[serviceIndex]
 
-		// Use in-place filtering to avoid extra allocations
-		filteredCount := 0
-		for i, item := range service.Items {
-			// Keep items that did NOT come from the specified Ingress source
+		// Create a new slice for filtered items to avoid race conditions
+		filteredItems := make([]Item, 0, len(service.Items))
+
+		// Keep items that did NOT come from the specified Ingress source
+		for _, item := range service.Items {
 			if !(item.Source == sourceName && item.Namespace == sourceNamespace) {
-				// Move kept item to the front of the slice
-				if filteredCount != i {
-					service.Items[filteredCount] = item
-				}
-				filteredCount++
+				// Keep this item by creating a copy
+				filteredItems = append(filteredItems, item)
 			}
 		}
 
-		// Truncate slice to remove unwanted items
-		service.Items = service.Items[:filteredCount]
+		// Update the service with filtered items
+		service.Items = filteredItems
 	}
 
 	// Remove any services that now have no items

@@ -89,33 +89,49 @@ spec:
     
     # Comprehensive service catalog
     services:
-    - name: "Infrastructure Services"
-      icon: "fas fa-server"
+    - parameters:
+        name: "Infrastructure"
+        icon: "fas fa-server"
       items:
-      - name: "Tailscale"
-        logo: "https://raw.githubusercontent.com/tailscale/tailscale/refs/heads/main/client/web/src/assets/icons/tailscale-icon.svg"
-        subtitle: "Private Mesh Network"
-        tag: "network"
-        tagstyle: "is-info"
-        url: "https://login.tailscale.com/admin/machines"
+      - parameters:
+          name: "Tailscale"
+          logo: "https://raw.githubusercontent.com/tailscale/tailscale/refs/heads/main/client/web/src/assets/icons/tailscale-icon.svg"
+          subtitle: "Private Mesh Network"
+          tag: "network"
+          tagstyle: "is-info"
+          url: "https://login.tailscale.com/admin/machines"
     
-    - name: "Development Tools"
-      icon: "fas fa-code"
+    - parameters:
+        name: "Development Tools"
+        icon: "fas fa-code"
       items:
-      - name: "Kubernetes Manifests"
-        logo: "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/resources/labeled/deploy-128.png"
-        subtitle: "GitOps Repository"
-        tag: "git"
-        tagstyle: "is-primary"
-        url: "https://github.com/rajsinghtech/kubernetes-manifests"
-        target: "_blank"
-      - name: "ArgoCD"
-        logo: "https://raw.githubusercontent.com/argoproj/argo-cd/master/ui/src/assets/images/argo.png"
-        subtitle: "GitOps Controller"
-        tag: "git"
-        tagstyle: "is-primary"
-        url: "https://argocd.rajsingh.info"
-        target: "_blank"
+      - parameters:
+          name: "Kubernetes Manifests"
+          logo: "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/resources/labeled/deploy-128.png"
+          subtitle: "GitOps Repository"
+          tag: "git"
+          tagstyle: "is-primary"
+          url: "https://github.com/rajsinghtech/kubernetes-manifests"
+          target: "_blank"
+      - parameters:
+          name: "ArgoCD"
+          logo: "https://raw.githubusercontent.com/argoproj/argo-cd/master/ui/src/assets/images/argo.png"
+          subtitle: "GitOps Controller"
+          tag: "git"
+          tagstyle: "is-primary"
+          url: "https://argocd.rajsingh.info"
+          target: "_blank"
+  
+    - parameters:
+        name: "Home"
+        icon: "fas fa-home"
+      items:
+      - parameters:
+          name: "Frigate NVR"
+          subtitle: "AI-powered Security Camera System"
+          logo: "https://raw.githubusercontent.com/blakeblackshear/frigate/dev/docs/static/img/logo.svg"
+          tag: "home"
+          keywords: "security, camera, nvr, ai, monitoring"
   
   # Custom assets and PWA configuration
   # Enables custom branding, icons, and Progressive Web App features
@@ -168,6 +184,7 @@ spec:
   # If not specified, all HTTPRoutes matching annotation criteria are included
   gatewaySelector:
     matchLabels:
+      # external-dns: unifi
       gateway: public
   #   matchExpressions:
   #   - key: "app.kubernetes.io/name"

@@ -18,10 +18,10 @@ package controller
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"reflect"
 
+	"github.com/go-logr/logr"
 	homerv1alpha1 "github.com/rajsinghtech/homer-operator/api/v1alpha1"
 	homer "github.com/rajsinghtech/homer-operator/pkg/homer"
 	"github.com/rajsinghtech/homer-operator/pkg/utils"
@@ -35,8 +35,14 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+)
+
+const (
+	dashboardFinalizer = "homer.rajsingh.info/finalizer"
+	gatewayKind        = "Gateway"
 )
 
 // DashboardReconciler reconciles a Dashboard object
@@ -55,95 +61,136 @@ type DashboardReconciler struct {
 //+kubebuilder:rbac:groups="",resources=services/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",resources=configmaps/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 //+kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
 //+kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
 
-// Reconcile manages Dashboard resources and their associated Homer deployments.
 func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
 	var dashboard homerv1alpha1.Dashboard
 	if err := r.Get(ctx, req.NamespacedName, &dashboard); err != nil {
 		if apierrors.IsNotFound(err) {
-			// Dashboard was deleted, this is normal during deletion
-			log.V(1).Info("Dashboard not found - likely deleted", "dashboard", req.NamespacedName)
 			return ctrl.Result{}, nil
 		}
-		log.Error(err, "failed to fetch Dashboard", "dashboard", req.NamespacedName)
 		return ctrl.Result{}, err
 	}
-	// List ingresses with performance optimization using dashboard selectors
-	clusterIngresses := &networkingv1.IngressList{}
 
-	// Build list options for efficient querying
-	listOpts := []client.ListOption{}
+	if shouldStop, err := r.handleFinalization(ctx, &dashboard); shouldStop {
+		return ctrl.Result{}, err
+	}
 
-	// Use label selector if specified in dashboard
-	if dashboard.Spec.IngressSelector != nil {
-		selector, err := metav1.LabelSelectorAsSelector(dashboard.Spec.IngressSelector)
-		if err != nil {
-			log.Error(err, "invalid ingress selector", "dashboard", req.NamespacedName)
-			return ctrl.Result{}, err
+	filteredIngressList, err := r.getFilteredIngresses(ctx, &dashboard)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if err := r.validateDashboardConfig(&dashboard); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	resources, _, err := r.prepareResources(ctx, &dashboard, filteredIngressList)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if err := r.createOrUpdateResources(ctx, resources, dashboard.Name); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if !dashboard.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, nil
+	}
+
+	if err := r.updateStatus(ctx, &dashboard); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
 		}
-		listOpts = append(listOpts, client.MatchingLabelsSelector{Selector: selector})
 	}
 
-	// Note: Namespace filtering is handled later in shouldIncludeIngressForDashboard
-	// for domain-based filtering and other criteria
+	return ctrl.Result{}, nil
+}
 
-	if err := r.List(ctx, clusterIngresses, listOpts...); err != nil {
-		log.Error(err, "failed to list Ingresses", "dashboard", req.NamespacedName)
-		return ctrl.Result{}, err
+func (r *DashboardReconciler) handleFinalization(ctx context.Context, dashboard *homerv1alpha1.Dashboard) (bool, error) {
+	if dashboard.ObjectMeta.DeletionTimestamp.IsZero() {
+		if !controllerutil.ContainsFinalizer(dashboard, dashboardFinalizer) {
+			controllerutil.AddFinalizer(dashboard, dashboardFinalizer)
+			return true, r.Update(ctx, dashboard)
+		}
+	} else {
+		if controllerutil.ContainsFinalizer(dashboard, dashboardFinalizer) {
+			if err := r.cleanupResources(ctx, dashboard); err != nil {
+				return true, err
+			}
+			controllerutil.RemoveFinalizer(dashboard, dashboardFinalizer)
+			return true, r.Update(ctx, dashboard)
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func (r *DashboardReconciler) getFilteredIngresses(ctx context.Context, dashboard *homerv1alpha1.Dashboard) (networkingv1.IngressList, error) {
+	clusterIngresses := &networkingv1.IngressList{}
+	if err := r.List(ctx, clusterIngresses); err != nil {
+		return networkingv1.IngressList{}, err
 	}
 
-	// Filter Ingresses based on remaining dashboard selectors (domain filters, namespace selectors)
 	filteredIngresses := []networkingv1.Ingress{}
 	for _, ingress := range clusterIngresses.Items {
-		shouldInclude, err := r.shouldIncludeIngressForDashboard(ctx, &ingress, &dashboard)
+		shouldInclude, err := r.shouldIncludeIngress(ctx, &ingress, dashboard)
 		if err != nil {
-			log.Error(err, "failed to filter Ingress", "dashboard", dashboard.Name, "ingress", ingress.Name)
-			return ctrl.Result{}, err
+			return networkingv1.IngressList{}, err
 		}
 		if shouldInclude {
 			filteredIngresses = append(filteredIngresses, ingress)
 		}
 	}
 
-	// Create filtered Ingress list
-	filteredIngressList := networkingv1.IngressList{
-		Items: filteredIngresses,
-	}
+	return networkingv1.IngressList{Items: filteredIngresses}, nil
+}
 
-	// Validate theme configuration
+func (r *DashboardReconciler) validateDashboardConfig(dashboard *homerv1alpha1.Dashboard) error {
 	if err := homer.ValidateTheme(dashboard.Spec.HomerConfig.Theme); err != nil {
-		log.Error(err, "invalid theme configuration", "dashboard", req.NamespacedName)
-		return ctrl.Result{}, err
+		return err
+	}
+	return homer.ValidateHomerConfig(&dashboard.Spec.HomerConfig)
+}
+
+func (r *DashboardReconciler) prepareResources(ctx context.Context, dashboard *homerv1alpha1.Dashboard, filteredIngressList networkingv1.IngressList) ([]client.Object, *homer.HomerConfig, error) {
+	deploymentConfig := r.buildDeploymentConfig(dashboard)
+	deployment := homer.CreateDeployment(dashboard.Name, dashboard.Namespace, dashboard.Spec.Replicas, dashboard, deploymentConfig)
+	service := homer.CreateService(dashboard.Name, dashboard.Namespace, dashboard)
+
+	homerConfig, err := r.buildHomerConfig(ctx, dashboard)
+	if err != nil {
+		return nil, nil, err
 	}
 
-	// Resource Created - Create all resources
-	var deployment appsv1.Deployment
+	configMap, err := r.createConfigMap(ctx, homerConfig, dashboard, filteredIngressList)
+	if err != nil {
+		return nil, nil, err
+	}
 
-	// Generate PWA manifest if enabled
-	pwaManifest := r.generatePWAManifest(&dashboard)
+	return []client.Object{&deployment, &service, &configMap}, homerConfig, nil
+}
 
-	// Create deployment config
+func (r *DashboardReconciler) buildDeploymentConfig(dashboard *homerv1alpha1.Dashboard) *homer.DeploymentConfig {
+	pwaManifest := r.generatePWAManifest(dashboard)
 	deploymentConfig := &homer.DeploymentConfig{
 		PWAManifest: pwaManifest,
 	}
 
-	// Check if custom assets are configured
-	// Mount assets ConfigMap if explicitly specified (user intent)
 	if dashboard.Spec.Assets != nil && dashboard.Spec.Assets.ConfigMapRef != nil {
 		deploymentConfig.AssetsConfigMapName = dashboard.Spec.Assets.ConfigMapRef.Name
 	}
 
-	// Add DNS configuration if provided
 	if dashboard.Spec.DNSPolicy != "" {
 		deploymentConfig.DNSPolicy = dashboard.Spec.DNSPolicy
 	}
+	if dashboard.Spec.DNSConfig != "" {
+		deploymentConfig.DNSConfig = dashboard.Spec.DNSConfig
+	}
 
-	// Add resource configuration if provided
 	if dashboard.Spec.Resources != nil {
-		// Convert from API ResourceRequirements to Kubernetes ResourceRequirements
 		k8sResources := &corev1.ResourceRequirements{
 			Limits:   corev1.ResourceList{},
 			Requests: corev1.ResourceList{},
@@ -164,16 +211,13 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		deploymentConfig.Resources = k8sResources
 	}
 
-	deployment = homer.CreateDeployment(dashboard.Name, dashboard.Namespace, dashboard.Spec.Replicas, &dashboard, deploymentConfig)
+	return deploymentConfig
+}
 
-	service := homer.CreateService(dashboard.Name, dashboard.Namespace, &dashboard)
-
-	// Create a copy of the HomerConfig to avoid modifying the original
+func (r *DashboardReconciler) buildHomerConfig(ctx context.Context, dashboard *homerv1alpha1.Dashboard) (*homer.HomerConfig, error) {
 	homerConfig := dashboard.Spec.HomerConfig.DeepCopy()
 
-	// Resolve secrets for smart card items if configured
 	if dashboard.Spec.Secrets != nil && dashboard.Spec.Secrets.APIKey != nil {
-		// Convert API type to local type to avoid circular imports
 		secretRef := &homer.SecretKeyRef{
 			Name:      dashboard.Spec.Secrets.APIKey.Name,
 			Key:       dashboard.Spec.Secrets.APIKey.Key,
@@ -184,158 +228,89 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			for itemIdx := range homerConfig.Services[serviceIdx].Items {
 				item := &homerConfig.Services[serviceIdx].Items[itemIdx]
 				if err := homer.ResolveAPIKeyFromSecret(ctx, r.Client, item, secretRef, dashboard.Namespace); err != nil {
-					// Get item name from Parameters map only
-					itemName := ""
-					if item.Parameters != nil {
-						itemName = item.Parameters["name"]
-					}
-					log.Error(err, "failed to resolve API key from secret", "item", itemName)
-					return ctrl.Result{}, err
+					return nil, err
 				}
 			}
 		}
 	}
 
-	// Check if external ConfigMap is specified
 	if dashboard.Spec.ConfigMap.Name != "" {
-		// Use external ConfigMap instead of generating one
-		externalHomerConfig, err := r.getExternalHomerConfig(ctx, &dashboard)
+		externalHomerConfig, err := r.getExternalConfig(ctx, dashboard)
 		if err != nil {
-			log.Error(err, "failed to retrieve external ConfigMap", "configMap", dashboard.Spec.ConfigMap.Name)
-			return ctrl.Result{}, err
+			return nil, err
 		}
 		homerConfig = externalHomerConfig
 	}
 
-	configMap, err := r.createConfigMapForDashboard(ctx, req, homerConfig, &dashboard, filteredIngressList)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	// Create or update all resources
-	resources := []client.Object{&deployment, &service, &configMap}
-	if err := r.createOrUpdateResources(ctx, resources, dashboard.Name); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	return ctrl.Result{}, nil
+	return homerConfig, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *DashboardReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&homerv1alpha1.Dashboard{}).
+		Owns(&appsv1.Deployment{}).
 		Complete(r)
 }
 
-// shouldIncludeHTTPRouteForDashboard determines if an HTTPRoute should be included
-// based on the Dashboard's selectors and filters. If no selectors are specified, all HTTPRoutes are included.
-func (r *DashboardReconciler) shouldIncludeHTTPRouteForDashboard(ctx context.Context, httproute *gatewayv1.HTTPRoute, dashboard *homerv1alpha1.Dashboard) (bool, error) {
+func (r *DashboardReconciler) shouldIncludeIngress(ctx context.Context, ingress *networkingv1.Ingress, dashboard *homerv1alpha1.Dashboard) (bool, error) {
 	log := log.FromContext(ctx)
 
-	// Check HTTPRoute label selector
-	if dashboard.Spec.HTTPRouteSelector != nil {
-		selector, err := metav1.LabelSelectorAsSelector(dashboard.Spec.HTTPRouteSelector)
-		if err != nil {
-			return false, err
-		}
-		if !selector.Matches(labels.Set(httproute.Labels)) {
-			log.V(1).Info("HTTPRoute excluded by HTTPRoute label selector", "httproute", httproute.Name)
-			return false, nil
-		}
+	if match, err := validateLabelSelector(dashboard.Spec.IngressSelector, ingress.Labels, ingress.Name, "ingress", log); err != nil {
+		return false, err
+	} else if !match {
+		return false, nil
 	}
 
-	// Check domain filters
-	if len(dashboard.Spec.DomainFilters) > 0 {
-		if !utils.MatchesHTTPRouteDomainFilters(httproute.Spec.Hostnames, dashboard.Spec.DomainFilters) {
-			log.Info("HTTPRoute excluded by domain filters", "httproute", httproute.Name, "hostnames", httproute.Spec.Hostnames, "domainFilters", dashboard.Spec.DomainFilters)
-			return false, nil
-		}
-		log.V(1).Info("HTTPRoute included by domain filters", "httproute", httproute.Name, "hostnames", httproute.Spec.Hostnames, "domainFilters", dashboard.Spec.DomainFilters)
+	if !validateIngressDomainFilters(ingress, dashboard.Spec.DomainFilters, log) {
+		return false, nil
 	}
 
-	// Check Gateway selector
+	return true, nil
+}
+
+func (r *DashboardReconciler) shouldIncludeHTTPRoute(ctx context.Context, httproute *gatewayv1.HTTPRoute, dashboard *homerv1alpha1.Dashboard) (bool, error) {
+	log := log.FromContext(ctx)
+
+	if match, err := validateLabelSelector(dashboard.Spec.HTTPRouteSelector, httproute.Labels, httproute.Name, "httproute", log); err != nil {
+		return false, err
+	} else if !match {
+		return false, nil
+	}
+
+	if !validateHTTPRouteDomainFilters(httproute, dashboard.Spec.DomainFilters, log) {
+		return false, nil
+	}
+
 	if dashboard.Spec.GatewaySelector != nil {
 		selector, err := metav1.LabelSelectorAsSelector(dashboard.Spec.GatewaySelector)
 		if err != nil {
 			return false, err
 		}
 
-		gatewayMatched := false
-		// Check each parent Gateway reference in the HTTPRoute
 		for _, parentRef := range httproute.Spec.ParentRefs {
-			// Default to Gateway kind if not specified
-			const gatewayKind = "Gateway"
-			kind := gatewayKind
-			if parentRef.Kind != nil {
-				kind = string(*parentRef.Kind)
-			}
-
-			// Only check Gateway resources
-			if kind != gatewayKind {
+			if parentRef.Kind != nil && string(*parentRef.Kind) != gatewayKind {
 				continue
 			}
 
-			// Default to same namespace as HTTPRoute if not specified
 			namespace := httproute.Namespace
 			if parentRef.Namespace != nil {
 				namespace = string(*parentRef.Namespace)
 			}
 
-			// Fetch the Gateway
 			gateway := &gatewayv1.Gateway{}
-			gatewayKey := client.ObjectKey{
-				Name:      string(parentRef.Name),
-				Namespace: namespace,
-			}
-
-			if err := r.Get(ctx, gatewayKey, gateway); err != nil {
+			if err := r.Get(ctx, client.ObjectKey{Name: string(parentRef.Name), Namespace: namespace}, gateway); err != nil {
 				if apierrors.IsNotFound(err) {
-					log.V(1).Info("Gateway not found", "gateway", gatewayKey)
 					continue
 				}
 				return false, err
 			}
 
-			// Check if Gateway labels match the selector
 			if selector.Matches(labels.Set(gateway.Labels)) {
-				gatewayMatched = true
-				break
+				return true, nil
 			}
 		}
-
-		if !gatewayMatched {
-			log.V(1).Info("HTTPRoute excluded by Gateway selector", "httproute", httproute.Name)
-			return false, nil
-		}
-	}
-
-	return true, nil
-}
-
-// shouldIncludeIngressForDashboard determines if an Ingress should be included
-// based on the Dashboard's selectors and filters. If no selectors are specified, all Ingresses are included.
-func (r *DashboardReconciler) shouldIncludeIngressForDashboard(ctx context.Context, ingress *networkingv1.Ingress, dashboard *homerv1alpha1.Dashboard) (bool, error) {
-	log := log.FromContext(ctx)
-
-	// Check Ingress label selector
-	if dashboard.Spec.IngressSelector != nil {
-		selector, err := metav1.LabelSelectorAsSelector(dashboard.Spec.IngressSelector)
-		if err != nil {
-			return false, err
-		}
-		if !selector.Matches(labels.Set(ingress.Labels)) {
-			log.V(1).Info("Ingress excluded by Ingress label selector", "ingress", ingress.Name)
-			return false, nil
-		}
-	}
-
-	// Check domain filters
-	if len(dashboard.Spec.DomainFilters) > 0 {
-		if !utils.MatchesIngressDomainFilters(ingress, dashboard.Spec.DomainFilters) {
-			log.V(1).Info("Ingress excluded by domain filters", "ingress", ingress.Name)
-			return false, nil
-		}
+		return false, nil
 	}
 
 	return true, nil
@@ -349,15 +324,17 @@ func (r *DashboardReconciler) createOrUpdateResources(ctx context.Context, resou
 		newResource := reflect.New(reflect.TypeOf(resource).Elem()).Interface().(client.Object)
 		err := r.Get(ctx, client.ObjectKey{Namespace: resource.GetNamespace(), Name: resource.GetName()}, newResource)
 		switch {
-		case err != nil:
+		case apierrors.IsNotFound(err):
+			// Resource doesn't exist, create it
 			err = r.Create(ctx, resource)
 			if err != nil {
-				log.Error(err, "unable to create resource", "resource", resource)
+				log.Error(err, "unable to create resource", "type", resource.GetObjectKind().GroupVersionKind().Kind, "name", resource.GetName())
 				return err
 			}
-			log.Info("Resource created", "resource", resource)
-		case client.IgnoreNotFound(err) != nil:
-			log.Error(err, "unable to fetch resource", "resource", resource)
+			log.Info("Resource created", "type", resource.GetObjectKind().GroupVersionKind().Kind, "name", resource.GetName())
+		case err != nil:
+			// Other error occurred while fetching
+			log.Error(err, "unable to fetch resource", "type", resource.GetObjectKind().GroupVersionKind().Kind, "name", resource.GetName())
 			return err
 		default:
 			if configMap, ok := resource.(*corev1.ConfigMap); ok {
@@ -366,46 +343,27 @@ func (r *DashboardReconciler) createOrUpdateResources(ctx context.Context, resou
 				err = r.Update(ctx, resource)
 			}
 			if err != nil {
-				log.Error(err, "unable to update resource", "resource", resource)
+				log.Error(err, "unable to update resource", "type", resource.GetObjectKind().GroupVersionKind().Kind, "name", resource.GetName())
 				return err
 			}
-			log.Info("Resource updated", "resource", resource)
+			log.Info("Resource updated", "type", resource.GetObjectKind().GroupVersionKind().Kind, "name", resource.GetName())
 		}
 	}
 	return nil
 }
 
-// createConfigMapForDashboard creates the appropriate ConfigMap based on Gateway API enablement
-func (r *DashboardReconciler) createConfigMapForDashboard(ctx context.Context, req ctrl.Request, homerConfig *homer.HomerConfig, dashboard *homerv1alpha1.Dashboard, filteredIngressList networkingv1.IngressList) (corev1.ConfigMap, error) {
-	log := log.FromContext(ctx)
-
+func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *homer.HomerConfig, dashboard *homerv1alpha1.Dashboard, filteredIngressList networkingv1.IngressList) (corev1.ConfigMap, error) {
 	if r.EnableGatewayAPI {
 		clusterHTTPRoutes := &gatewayv1.HTTPRouteList{}
 
-		// Build list options for efficient HTTPRoute querying
-		httpRouteListOpts := []client.ListOption{}
-
-		// Use HTTPRoute label selector if specified in dashboard
-		if dashboard.Spec.HTTPRouteSelector != nil {
-			selector, err := metav1.LabelSelectorAsSelector(dashboard.Spec.HTTPRouteSelector)
-			if err != nil {
-				log.Error(err, "invalid HTTPRoute selector", "dashboard", req.NamespacedName)
-				return corev1.ConfigMap{}, err
-			}
-			httpRouteListOpts = append(httpRouteListOpts, client.MatchingLabelsSelector{Selector: selector})
-		}
-
-		if err := r.List(ctx, clusterHTTPRoutes, httpRouteListOpts...); err != nil {
-			log.Error(err, "unable to list HTTPRoutes", "dashboard", req.NamespacedName)
+		if err := r.List(ctx, clusterHTTPRoutes); err != nil {
 			return corev1.ConfigMap{}, err
 		}
 
-		// Filter HTTPRoutes based on remaining dashboard selectors (domain filters, gateway selectors)
 		filteredHTTPRoutes := []gatewayv1.HTTPRoute{}
 		for _, httproute := range clusterHTTPRoutes.Items {
-			shouldInclude, err := r.shouldIncludeHTTPRouteForDashboard(ctx, &httproute, dashboard)
+			shouldInclude, err := r.shouldIncludeHTTPRoute(ctx, &httproute, dashboard)
 			if err != nil {
-				log.Error(err, "failed to filter HTTPRoute", "dashboard", dashboard.Name, "httproute", httproute.Name)
 				return corev1.ConfigMap{}, err
 			}
 			if shouldInclude {
@@ -485,11 +443,11 @@ func (r *DashboardReconciler) generatePWAManifest(dashboard *homerv1alpha1.Dashb
 }
 
 // getExternalHomerConfig retrieves Homer configuration from an external ConfigMap
-func (r *DashboardReconciler) getExternalHomerConfig(ctx context.Context, dashboard *homerv1alpha1.Dashboard) (*homer.HomerConfig, error) {
+func (r *DashboardReconciler) getExternalConfig(ctx context.Context, dashboard *homerv1alpha1.Dashboard) (*homer.HomerConfig, error) {
 	log := log.FromContext(ctx)
 
 	if dashboard.Spec.ConfigMap.Name == "" {
-		return nil, errors.New("external ConfigMap name is empty")
+		return nil, fmt.Errorf("external ConfigMap name is empty")
 	}
 
 	// Default key if not specified
@@ -528,4 +486,200 @@ func (r *DashboardReconciler) getExternalHomerConfig(ctx context.Context, dashbo
 
 	log.Info("Successfully loaded external Homer configuration", "configMap", dashboard.Spec.ConfigMap.Name, "key", key)
 	return &homerConfig, nil
+}
+
+// cleanupDashboardResources removes all resources created by this Dashboard
+func (r *DashboardReconciler) cleanupResources(ctx context.Context, dashboard *homerv1alpha1.Dashboard) error {
+	log := log.FromContext(ctx)
+	dashboardName := dashboard.Name
+	namespace := dashboard.Namespace
+
+	// List of resource types to clean up
+	resourcesToCleanup := []struct {
+		name         string
+		resourceType client.Object
+	}{
+		{"ConfigMap", &corev1.ConfigMap{}},
+		{"Deployment", &appsv1.Deployment{}},
+		{"Service", &corev1.Service{}},
+	}
+
+	// Clean up each resource type
+	for _, resource := range resourcesToCleanup {
+		resourceName := dashboardName + "-homer"
+		if err := r.Get(ctx, client.ObjectKey{
+			Name:      resourceName,
+			Namespace: namespace,
+		}, resource.resourceType); err != nil {
+			if apierrors.IsNotFound(err) {
+				// Resource doesn't exist, which is fine
+				log.V(1).Info("Resource already deleted", "type", resource.name, "name", resourceName)
+				continue
+			}
+			log.Error(err, "failed to get resource for cleanup", "type", resource.name, "name", resourceName)
+			continue // Continue cleaning up other resources
+		}
+
+		// Check if this resource is owned by our Dashboard
+		if isOwnedByDashboard(resource.resourceType, dashboard) {
+			if err := r.Delete(ctx, resource.resourceType); err != nil {
+				if !apierrors.IsNotFound(err) {
+					log.Error(err, "failed to delete resource", "type", resource.name, "name", resourceName)
+					return fmt.Errorf("failed to delete %s %s: %w", resource.name, resourceName, err)
+				}
+			} else {
+				log.Info("Successfully deleted resource", "type", resource.name, "name", resourceName)
+			}
+		} else {
+			log.V(1).Info("Skipping resource not owned by this Dashboard", "type", resource.name, "name", resourceName)
+		}
+	}
+
+	// Clean up any custom assets ConfigMap if it exists
+	if dashboard.Spec.Assets != nil && dashboard.Spec.Assets.ConfigMapRef != nil {
+		assetsConfigMapName := dashboard.Spec.Assets.ConfigMapRef.Name
+		assetsConfigMap := &corev1.ConfigMap{}
+		if err := r.Get(ctx, client.ObjectKey{
+			Name:      assetsConfigMapName,
+			Namespace: namespace,
+		}, assetsConfigMap); err == nil {
+			if isOwnedByDashboard(assetsConfigMap, dashboard) {
+				if err := r.Delete(ctx, assetsConfigMap); err != nil && !apierrors.IsNotFound(err) {
+					log.Error(err, "failed to delete assets ConfigMap", "name", assetsConfigMapName)
+					return fmt.Errorf("failed to delete assets ConfigMap %s: %w", assetsConfigMapName, err)
+				} else {
+					log.Info("Successfully deleted assets ConfigMap", "name", assetsConfigMapName)
+				}
+			}
+		}
+	}
+
+	log.Info("Successfully cleaned up all Dashboard resources", "dashboard", dashboardName)
+	return nil
+}
+
+// isOwnedByDashboard checks if a resource is owned by the given Dashboard
+func isOwnedByDashboard(resource client.Object, dashboard *homerv1alpha1.Dashboard) bool {
+	for _, ownerRef := range resource.GetOwnerReferences() {
+		if ownerRef.Kind == "Dashboard" &&
+			ownerRef.APIVersion == "homer.rajsingh.info/v1alpha1" &&
+			ownerRef.Name == dashboard.Name &&
+			ownerRef.UID == dashboard.UID {
+			return true
+		}
+	}
+	return false
+}
+
+// checkLabelSelector checks if the resource labels match the given label selector
+func validateLabelSelector(selector *metav1.LabelSelector, resourceLabels map[string]string, resourceName, resourceType string, log logr.Logger) (bool, error) {
+	if selector == nil {
+		return true, nil // No selector means include all
+	}
+
+	labelSelector, err := metav1.LabelSelectorAsSelector(selector)
+	if err != nil {
+		return false, err
+	}
+
+	if !labelSelector.Matches(labels.Set(resourceLabels)) {
+		log.V(1).Info(fmt.Sprintf("%s excluded by label selector", resourceType), resourceType, resourceName)
+		return false, nil
+	}
+
+	return true, nil
+}
+
+// checkDomainFilters checks if domain filters match for the given resource
+func validateIngressDomainFilters(ingress *networkingv1.Ingress, domainFilters []string, log logr.Logger) bool {
+	if len(domainFilters) == 0 {
+		return true // No filters means include all
+	}
+
+	if !utils.MatchesIngressDomainFilters(ingress, domainFilters) {
+		log.V(1).Info("Ingress excluded by domain filters", "ingress", ingress.Name)
+		return false
+	}
+
+	return true
+}
+
+func validateHTTPRouteDomainFilters(httproute *gatewayv1.HTTPRoute, domainFilters []string, log logr.Logger) bool {
+	if len(domainFilters) == 0 {
+		return true // No filters means include all
+	}
+
+	if !utils.MatchesHTTPRouteDomainFilters(httproute.Spec.Hostnames, domainFilters) {
+		log.V(1).Info("HTTPRoute excluded by domain filters", "httproute", httproute.Name, "hostnames", httproute.Spec.Hostnames, "domainFilters", domainFilters)
+		return false
+	}
+	log.V(2).Info("HTTPRoute included by domain filters", "httproute", httproute.Name, "hostnames", httproute.Spec.Hostnames, "domainFilters", domainFilters)
+
+	return true
+}
+
+// updateDashboardStatusComplete updates both deployment and service discovery status in one call
+func (r *DashboardReconciler) updateStatus(ctx context.Context, dashboard *homerv1alpha1.Dashboard) error {
+	log := log.FromContext(ctx)
+
+	// Check if Dashboard is being deleted
+	if !dashboard.DeletionTimestamp.IsZero() {
+		log.V(2).Info("Skipping status update for Dashboard being deleted")
+		return nil
+	}
+
+	// Get the current deployment to check if it's available
+	deployment := &appsv1.Deployment{}
+	err := r.Get(ctx, client.ObjectKey{
+		Name:      dashboard.Name + "-homer",
+		Namespace: dashboard.Namespace,
+	}, deployment)
+
+	// Simplified status logic: Ready = deployment exists and Available condition is true
+	ready := false
+	availableReplicas := int32(0)
+
+	if err == nil {
+		// Deployment exists, check if it's available
+		availableReplicas = deployment.Status.AvailableReplicas
+
+		// Check for Available condition (standard Kubernetes pattern)
+		for _, condition := range deployment.Status.Conditions {
+			if condition.Type == appsv1.DeploymentAvailable && condition.Status == corev1.ConditionTrue {
+				ready = true
+				break
+			}
+		}
+
+		log.V(2).Info("Deployment status check",
+			"deploymentName", deployment.Name,
+			"availableReplicas", availableReplicas,
+			"ready", ready)
+	} else if apierrors.IsNotFound(err) {
+		// Deployment doesn't exist yet - not ready
+		log.V(2).Info("Deployment not found, status not ready")
+	} else {
+		// Error getting deployment - not ready
+		log.V(1).Info("Error getting deployment for status check", "error", err)
+	}
+
+	// Update status using patch to avoid conflicts
+	patch := client.MergeFrom(dashboard.DeepCopy())
+	dashboard.Status.Ready = ready
+	dashboard.Status.AvailableReplicas = availableReplicas
+
+	if err := r.Status().Patch(ctx, dashboard, patch); err != nil {
+		if apierrors.IsNotFound(err) {
+			log.V(2).Info("Dashboard was deleted during status update")
+			return nil // Don't return error if Dashboard was deleted
+		}
+		log.V(1).Info("Failed to update Dashboard status", "error", err)
+		return err
+	}
+
+	log.V(2).Info("Status updated successfully",
+		"ready", dashboard.Status.Ready,
+		"availableReplicas", dashboard.Status.AvailableReplicas)
+
+	return nil
 }

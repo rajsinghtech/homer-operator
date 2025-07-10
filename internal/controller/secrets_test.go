@@ -31,6 +31,142 @@ import (
 	"github.com/rajsinghtech/homer-operator/pkg/homer"
 )
 
+// Helper functions for secrets tests
+func createDashboardWithSecrets(name, namespace, secretName string) *homerv1alpha1.Dashboard {
+	return &homerv1alpha1.Dashboard{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: homerv1alpha1.DashboardSpec{
+			HomerConfig: homer.HomerConfig{
+				Title:    "Smart Card Dashboard",
+				Subtitle: "Dashboard with Secret Integration",
+				Services: []homer.Service{
+					{
+						Parameters: map[string]string{
+							"name": "Media Services",
+							"icon": "fas fa-film",
+						},
+						Items: []homer.Item{
+							{
+								Parameters: map[string]string{
+									"name":     "Plex Server",
+									"subtitle": "Media Streaming",
+									"type":     "Emby",
+									"url":      "https://plex.example.com",
+									"endpoint": "/api/v1",
+								},
+							},
+							{
+								Parameters: map[string]string{
+									"name":     "Sonarr",
+									"subtitle": "TV Show Management",
+									"type":     "Sonarr",
+									"url":      "https://sonarr.example.com",
+								},
+							},
+						},
+					},
+					{
+						Parameters: map[string]string{
+							"name": "Monitoring",
+							"icon": "fas fa-chart-line",
+						},
+						Items: []homer.Item{
+							{
+								Parameters: map[string]string{
+									"name":     "Prometheus",
+									"subtitle": "Metrics Collection",
+									"type":     "Prometheus",
+									"url":      "https://prometheus.example.com",
+									"endpoint": "/metrics",
+								},
+							},
+							{
+								Parameters: map[string]string{
+									"name":     "Grafana",
+									"subtitle": "Dashboards",
+									"type":     "Grafana",
+									"url":      "https://grafana.example.com",
+								},
+							},
+						},
+					},
+				},
+			},
+			Secrets: &homerv1alpha1.SmartCardSecrets{
+				APIKey: &homerv1alpha1.SecretKeyRef{
+					Name: secretName,
+					Key:  "plex-api-key",
+				},
+				Token: &homerv1alpha1.SecretKeyRef{
+					Name: secretName,
+					Key:  "prometheus-token",
+				},
+				Username: &homerv1alpha1.SecretKeyRef{
+					Name: secretName,
+					Key:  "grafana-username",
+				},
+				Password: &homerv1alpha1.SecretKeyRef{
+					Name: secretName,
+					Key:  "grafana-password",
+				},
+				Headers: map[string]*homerv1alpha1.SecretKeyRef{
+					"Authorization": {
+						Name: secretName,
+						Key:  "custom-auth-header",
+					},
+				},
+			},
+		},
+	}
+}
+
+func createTestSecret(name, namespace string) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{
+			"plex-api-key":       []byte("plex-secret-api-key-12345"),
+			"sonarr-api-key":     []byte("sonarr-secret-api-key-67890"),
+			"prometheus-token":   []byte("prometheus-bearer-token-abcdef"),
+			"grafana-username":   []byte("admin"),
+			"grafana-password":   []byte("supersecret"),
+			"custom-auth-header": []byte("Bearer custom-token-xyz"),
+		},
+	}
+}
+
+func reconcileDashboardTwice(ctx context.Context, reconciler *DashboardReconciler, namespacedName types.NamespacedName) {
+	// First reconcile: adds finalizer
+	_, err := reconciler.Reconcile(ctx, reconcile.Request{
+		NamespacedName: namespacedName,
+	})
+	Expect(err).NotTo(HaveOccurred())
+
+	// Second reconcile: processes the Dashboard
+	_, err = reconciler.Reconcile(ctx, reconcile.Request{
+		NamespacedName: namespacedName,
+	})
+	Expect(err).NotTo(HaveOccurred())
+}
+
+func waitForConfigMapCreation(ctx context.Context, name string) *corev1.ConfigMap {
+	configMap := &corev1.ConfigMap{}
+	Eventually(func() bool {
+		err := k8sClient.Get(ctx, types.NamespacedName{
+			Name:      name + "-homer",
+			Namespace: "default",
+		}, configMap)
+		return err == nil
+	}, time.Second*10, time.Millisecond*250).Should(BeTrue())
+	return configMap
+}
+
 var _ = Describe("Secret Integration Tests", func() {
 	Context("When creating Dashboard with secret for smart card API key", func() {
 		const dashboardName = "test-dashboard-secrets"
@@ -48,112 +184,11 @@ var _ = Describe("Secret Integration Tests", func() {
 
 		BeforeEach(func() {
 			// Create Secret with API keys for smart cards
-			secret = &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      secretName,
-					Namespace: namespaceName,
-				},
-				Type: corev1.SecretTypeOpaque,
-				Data: map[string][]byte{
-					"plex-api-key":       []byte("plex-secret-api-key-12345"),
-					"sonarr-api-key":     []byte("sonarr-secret-api-key-67890"),
-					"prometheus-token":   []byte("prometheus-bearer-token-abcdef"),
-					"grafana-username":   []byte("admin"),
-					"grafana-password":   []byte("supersecret"),
-					"custom-auth-header": []byte("Bearer custom-token-xyz"),
-				},
-			}
+			secret = createTestSecret(secretName, namespaceName)
 			Expect(k8sClient.Create(ctx, secret)).To(Succeed())
 
 			// Create Dashboard with smart card services that use secrets
-			dashboard = &homerv1alpha1.Dashboard{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      dashboardName,
-					Namespace: namespaceName,
-				},
-				Spec: homerv1alpha1.DashboardSpec{
-					HomerConfig: homer.HomerConfig{
-						Title:    "Smart Card Dashboard",
-						Subtitle: "Dashboard with Secret Integration",
-						Services: []homer.Service{
-							{
-								Parameters: map[string]string{
-									"name": "Media Services",
-									"icon": "fas fa-film",
-								},
-								Items: []homer.Item{
-									{
-										Parameters: map[string]string{
-											"name":     "Plex Server",
-											"subtitle": "Media Streaming",
-											"type":     "Emby", // Smart card type that uses API key
-											"url":      "https://plex.example.com",
-											"endpoint": "/api/v1",
-										},
-									},
-									{
-										Parameters: map[string]string{
-											"name":     "Sonarr",
-											"subtitle": "TV Show Management",
-											"type":     "Sonarr", // Smart card type that uses API key
-											"url":      "https://sonarr.example.com",
-										},
-									},
-								},
-							},
-							{
-								Parameters: map[string]string{
-									"name": "Monitoring",
-									"icon": "fas fa-chart-line",
-								},
-								Items: []homer.Item{
-									{
-										Parameters: map[string]string{
-											"name":     "Prometheus",
-											"subtitle": "Metrics Collection",
-											"type":     "Prometheus", // Smart card type that uses token
-											"url":      "https://prometheus.example.com",
-											"endpoint": "/metrics",
-										},
-									},
-									{
-										Parameters: map[string]string{
-											"name":     "Grafana",
-											"subtitle": "Dashboards",
-											"type":     "Grafana", // Smart card type that uses username/password
-											"url":      "https://grafana.example.com",
-										},
-									},
-								},
-							},
-						},
-					},
-					Secrets: &homerv1alpha1.SmartCardSecrets{
-						APIKey: &homerv1alpha1.SecretKeyRef{
-							Name: secretName,
-							Key:  "plex-api-key",
-						},
-						Token: &homerv1alpha1.SecretKeyRef{
-							Name: secretName,
-							Key:  "prometheus-token",
-						},
-						Username: &homerv1alpha1.SecretKeyRef{
-							Name: secretName,
-							Key:  "grafana-username",
-						},
-						Password: &homerv1alpha1.SecretKeyRef{
-							Name: secretName,
-							Key:  "grafana-password",
-						},
-						Headers: map[string]*homerv1alpha1.SecretKeyRef{
-							"Authorization": {
-								Name: secretName,
-								Key:  "custom-auth-header",
-							},
-						},
-					},
-				},
-			}
+			dashboard = createDashboardWithSecrets(dashboardName, namespaceName, secretName)
 			Expect(k8sClient.Create(ctx, dashboard)).To(Succeed())
 		})
 
@@ -179,20 +214,10 @@ var _ = Describe("Secret Integration Tests", func() {
 				Scheme: k8sClient.Scheme(),
 			}
 
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
+			reconcileDashboardTwice(ctx, controllerReconciler, typeNamespacedName)
 
 			By("Checking that ConfigMap contains resolved API keys")
-			configMap := &corev1.ConfigMap{}
-			Eventually(func() bool {
-				err := k8sClient.Get(ctx, types.NamespacedName{
-					Name:      dashboardName + "-homer",
-					Namespace: namespaceName,
-				}, configMap)
-				return err == nil
-			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
+			configMap := waitForConfigMapCreation(ctx, dashboardName)
 
 			configYaml := configMap.Data["config.yml"]
 
@@ -231,37 +256,28 @@ var _ = Describe("Secret Integration Tests", func() {
 
 		BeforeEach(func() {
 			// Create Dashboard that references a non-existent secret
-			dashboard = &homerv1alpha1.Dashboard{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      dashboardName,
-					Namespace: namespaceName,
-				},
-				Spec: homerv1alpha1.DashboardSpec{
-					HomerConfig: homer.HomerConfig{
-						Title: "Missing Secret Dashboard",
-						Services: []homer.Service{
-							{
-								Parameters: map[string]string{
-									"name": "Test Services",
-								},
-								Items: []homer.Item{
-									{
-										Parameters: map[string]string{
-											"name": "Test Smart Card",
-											"type": "Prometheus",
-											"url":  "https://test.example.com",
-										},
-									},
-								},
+			dashboard = createDashboardWithSecrets(dashboardName, namespaceName, missingSecretName)
+			dashboard.Spec.HomerConfig.Title = "Missing Secret Dashboard"
+			dashboard.Spec.HomerConfig.Services = []homer.Service{
+				{
+					Parameters: map[string]string{
+						"name": "Test Services",
+					},
+					Items: []homer.Item{
+						{
+							Parameters: map[string]string{
+								"name": "Test Smart Card",
+								"type": "Prometheus",
+								"url":  "https://test.example.com",
 							},
 						},
 					},
-					Secrets: &homerv1alpha1.SmartCardSecrets{
-						APIKey: &homerv1alpha1.SecretKeyRef{
-							Name: missingSecretName,
-							Key:  "api-key",
-						},
-					},
+				},
+			}
+			dashboard.Spec.Secrets = &homerv1alpha1.SmartCardSecrets{
+				APIKey: &homerv1alpha1.SecretKeyRef{
+					Name: missingSecretName,
+					Key:  "api-key",
 				},
 			}
 			Expect(k8sClient.Create(ctx, dashboard)).To(Succeed())
@@ -283,7 +299,14 @@ var _ = Describe("Secret Integration Tests", func() {
 				Scheme: k8sClient.Scheme(),
 			}
 
+			// First reconcile: adds finalizer
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile: should fail
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).To(HaveOccurred())
@@ -322,37 +345,28 @@ var _ = Describe("Secret Integration Tests", func() {
 			Expect(k8sClient.Create(ctx, secret)).To(Succeed())
 
 			// Create Dashboard that references a key that doesn't exist in the secret
-			dashboard = &homerv1alpha1.Dashboard{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      dashboardName,
-					Namespace: namespaceName,
-				},
-				Spec: homerv1alpha1.DashboardSpec{
-					HomerConfig: homer.HomerConfig{
-						Title: "Missing Key Dashboard",
-						Services: []homer.Service{
-							{
-								Parameters: map[string]string{
-									"name": "Test Services",
-								},
-								Items: []homer.Item{
-									{
-										Parameters: map[string]string{
-											"name": "Test Smart Card",
-											"type": "Prometheus",
-											"url":  "https://test.example.com",
-										},
-									},
-								},
+			dashboard = createDashboardWithSecrets(dashboardName, namespaceName, secretName)
+			dashboard.Spec.HomerConfig.Title = "Missing Key Dashboard"
+			dashboard.Spec.HomerConfig.Services = []homer.Service{
+				{
+					Parameters: map[string]string{
+						"name": "Test Services",
+					},
+					Items: []homer.Item{
+						{
+							Parameters: map[string]string{
+								"name": "Test Smart Card",
+								"type": "Prometheus",
+								"url":  "https://test.example.com",
 							},
 						},
 					},
-					Secrets: &homerv1alpha1.SmartCardSecrets{
-						APIKey: &homerv1alpha1.SecretKeyRef{
-							Name: secretName,
-							Key:  "api-key", // This key doesn't exist in the secret
-						},
-					},
+				},
+			}
+			dashboard.Spec.Secrets = &homerv1alpha1.SmartCardSecrets{
+				APIKey: &homerv1alpha1.SecretKeyRef{
+					Name: secretName,
+					Key:  "api-key", // This key doesn't exist in the secret
 				},
 			}
 			Expect(k8sClient.Create(ctx, dashboard)).To(Succeed())
@@ -380,7 +394,14 @@ var _ = Describe("Secret Integration Tests", func() {
 				Scheme: k8sClient.Scheme(),
 			}
 
+			// First reconcile: adds finalizer
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile: should fail with missing key
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).To(HaveOccurred())
@@ -503,20 +524,19 @@ var _ = Describe("Secret Integration Tests", func() {
 				Scheme: k8sClient.Scheme(),
 			}
 
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Name:      dashboardName,
-					Namespace: dashboardNs.Name, // Use generated namespace name
-				},
-			})
-			Expect(err).NotTo(HaveOccurred())
+			namespacedName := types.NamespacedName{
+				Name:      dashboardName,
+				Namespace: dashboardNs.Name, // Use generated namespace name
+			}
+
+			reconcileDashboardTwice(ctx, controllerReconciler, namespacedName)
 
 			By("Checking that ConfigMap contains resolved cross-namespace secret")
 			configMap := &corev1.ConfigMap{}
 			Eventually(func() bool {
 				err := k8sClient.Get(ctx, types.NamespacedName{
 					Name:      dashboardName + "-homer",
-					Namespace: dashboardNs.Name, // Use generated namespace name
+					Namespace: dashboardNs.Name,
 				}, configMap)
 				return err == nil
 			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
@@ -615,20 +635,10 @@ var _ = Describe("Secret Integration Tests", func() {
 				Scheme: k8sClient.Scheme(),
 			}
 
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
+			reconcileDashboardTwice(ctx, controllerReconciler, typeNamespacedName)
 
 			By("Checking that ConfigMap is created without secret injection")
-			configMap := &corev1.ConfigMap{}
-			Eventually(func() bool {
-				err := k8sClient.Get(ctx, types.NamespacedName{
-					Name:      dashboardName + "-homer",
-					Namespace: namespaceName,
-				}, configMap)
-				return err == nil
-			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
+			configMap := waitForConfigMapCreation(ctx, dashboardName)
 
 			configYaml := configMap.Data["config.yml"]
 			// Should contain the regular service but not inject secret values
@@ -636,6 +646,258 @@ var _ = Describe("Secret Integration Tests", func() {
 			Expect(configYaml).To(ContainSubstring("https://regular.example.com"))
 			// Should NOT contain the secret value since there are no smart cards
 			Expect(configYaml).NotTo(ContainSubstring("unused-secret-value"))
+		})
+	})
+
+	Context("When creating Dashboard with empty secret values", func() {
+		const dashboardName = "test-dashboard-empty-secret-values"
+		const secretName = "empty-secret-values"
+		const namespaceName = "default"
+
+		ctx := context.Background()
+		typeNamespacedName := types.NamespacedName{
+			Name:      dashboardName,
+			Namespace: namespaceName,
+		}
+
+		var dashboard *homerv1alpha1.Dashboard
+		var secret *corev1.Secret
+
+		BeforeEach(func() {
+			// Create Secret with empty values
+			secret = &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      secretName,
+					Namespace: namespaceName,
+				},
+				Type: corev1.SecretTypeOpaque,
+				Data: map[string][]byte{
+					"empty-api-key":  []byte(""),    // Empty value
+					"whitespace-key": []byte("   "), // Whitespace only
+				},
+			}
+			Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+
+			// Create Dashboard with smart card that references empty secret values
+			dashboard = &homerv1alpha1.Dashboard{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      dashboardName,
+					Namespace: namespaceName,
+				},
+				Spec: homerv1alpha1.DashboardSpec{
+					HomerConfig: homer.HomerConfig{
+						Title: "Empty Secret Values Dashboard",
+						Services: []homer.Service{
+							{
+								Parameters: map[string]string{
+									"name": "Test Services",
+								},
+								Items: []homer.Item{
+									{
+										Parameters: map[string]string{
+											"name": "Empty API Key Service",
+											"type": "Prometheus",
+											"url":  "https://empty.example.com",
+										},
+									},
+								},
+							},
+						},
+					},
+					Secrets: &homerv1alpha1.SmartCardSecrets{
+						APIKey: &homerv1alpha1.SecretKeyRef{
+							Name: secretName,
+							Key:  "empty-api-key",
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, dashboard)).To(Succeed())
+		})
+
+		AfterEach(func() {
+			if dashboard != nil {
+				err := k8sClient.Delete(ctx, dashboard)
+				if err != nil {
+					GinkgoT().Logf("Warning: failed to delete dashboard: %v", err)
+				}
+			}
+			if secret != nil {
+				err := k8sClient.Delete(ctx, secret)
+				if err != nil {
+					GinkgoT().Logf("Warning: failed to delete secret: %v", err)
+				}
+			}
+		})
+
+		It("should handle empty secret values gracefully", func() {
+			By("Reconciling the Dashboard with empty secret values")
+			controllerReconciler := &DashboardReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			reconcileDashboardTwice(ctx, controllerReconciler, typeNamespacedName)
+
+			By("Checking that ConfigMap is created with empty API key handling")
+			configMap := waitForConfigMapCreation(ctx, dashboardName)
+
+			configYaml := configMap.Data["config.yml"]
+			Expect(configYaml).To(ContainSubstring("Empty API Key Service"))
+			Expect(configYaml).To(ContainSubstring("type: Prometheus"))
+			// Configuration should be valid even with empty secret values
+		})
+	})
+
+	Context("When creating Dashboard with multiple secret types", func() {
+		const dashboardName = "test-dashboard-multiple-secrets"
+		const secretName = "multi-type-secrets"
+		const namespaceName = "default"
+
+		ctx := context.Background()
+		typeNamespacedName := types.NamespacedName{
+			Name:      dashboardName,
+			Namespace: namespaceName,
+		}
+
+		var dashboard *homerv1alpha1.Dashboard
+		var secret *corev1.Secret
+
+		BeforeEach(func() {
+			// Create Secret with multiple types of credentials
+			secret = &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      secretName,
+					Namespace: namespaceName,
+				},
+				Type: corev1.SecretTypeOpaque,
+				Data: map[string][]byte{
+					"api-key":        []byte("multi-type-api-key-123"),
+					"bearer-token":   []byte("Bearer multi-type-token-456"),
+					"basic-username": []byte("admin"),
+					"basic-password": []byte("password123"),
+					"custom-header":  []byte("Custom-Value-789"),
+				},
+			}
+			Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+
+			// Create Dashboard with multiple smart card types using different secret fields
+			dashboard = &homerv1alpha1.Dashboard{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      dashboardName,
+					Namespace: namespaceName,
+				},
+				Spec: homerv1alpha1.DashboardSpec{
+					HomerConfig: homer.HomerConfig{
+						Title: "Multiple Secret Types Dashboard",
+						Services: []homer.Service{
+							{
+								Parameters: map[string]string{
+									"name": "Multi-Auth Services",
+								},
+								Items: []homer.Item{
+									{
+										Parameters: map[string]string{
+											"name": "API Key Service",
+											"type": "Sonarr",
+											"url":  "https://apikey.example.com",
+										},
+									},
+									{
+										Parameters: map[string]string{
+											"name": "Token Service",
+											"type": "Prometheus",
+											"url":  "https://token.example.com",
+										},
+									},
+									{
+										Parameters: map[string]string{
+											"name": "Basic Auth Service",
+											"type": "Grafana",
+											"url":  "https://basic.example.com",
+										},
+									},
+									{
+										Parameters: map[string]string{
+											"name": "Custom Header Service",
+											"type": "GenericWebhook",
+											"url":  "https://custom.example.com",
+										},
+									},
+								},
+							},
+						},
+					},
+					Secrets: &homerv1alpha1.SmartCardSecrets{
+						APIKey: &homerv1alpha1.SecretKeyRef{
+							Name: secretName,
+							Key:  "api-key",
+						},
+						Token: &homerv1alpha1.SecretKeyRef{
+							Name: secretName,
+							Key:  "bearer-token",
+						},
+						Username: &homerv1alpha1.SecretKeyRef{
+							Name: secretName,
+							Key:  "basic-username",
+						},
+						Password: &homerv1alpha1.SecretKeyRef{
+							Name: secretName,
+							Key:  "basic-password",
+						},
+						Headers: map[string]*homerv1alpha1.SecretKeyRef{
+							"X-Custom-Auth": {
+								Name: secretName,
+								Key:  "custom-header",
+							},
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, dashboard)).To(Succeed())
+		})
+
+		AfterEach(func() {
+			if dashboard != nil {
+				err := k8sClient.Delete(ctx, dashboard)
+				if err != nil {
+					GinkgoT().Logf("Warning: failed to delete dashboard: %v", err)
+				}
+			}
+			if secret != nil {
+				err := k8sClient.Delete(ctx, secret)
+				if err != nil {
+					GinkgoT().Logf("Warning: failed to delete secret: %v", err)
+				}
+			}
+		})
+
+		It("should resolve all secret types correctly", func() {
+			By("Reconciling the Dashboard with multiple secret types")
+			controllerReconciler := &DashboardReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			reconcileDashboardTwice(ctx, controllerReconciler, typeNamespacedName)
+
+			By("Checking that ConfigMap contains all resolved secret values")
+			configMap := waitForConfigMapCreation(ctx, dashboardName)
+
+			configYaml := configMap.Data["config.yml"]
+
+			// Check that all secret values are properly injected
+			Expect(configYaml).To(ContainSubstring("multi-type-api-key-123"))
+			Expect(configYaml).To(ContainSubstring("Bearer multi-type-token-456"))
+			Expect(configYaml).To(ContainSubstring("admin"))
+			Expect(configYaml).To(ContainSubstring("password123"))
+			Expect(configYaml).To(ContainSubstring("Custom-Value-789"))
+
+			// Check that all service types are preserved
+			Expect(configYaml).To(ContainSubstring("type: Sonarr"))
+			Expect(configYaml).To(ContainSubstring("type: Prometheus"))
+			Expect(configYaml).To(ContainSubstring("type: Grafana"))
+			Expect(configYaml).To(ContainSubstring("type: GenericWebhook"))
 		})
 	})
 })

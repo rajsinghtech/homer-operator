@@ -20,7 +20,17 @@ spec:
     singular: dashboard
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .status.ready
+      name: Ready
+      type: boolean
+    - jsonPath: .status.availableReplicas
+      name: Replicas
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: Dashboard is the Schema for the dashboards API
@@ -112,14 +122,19 @@ spec:
                     properties:
                       backgroundColor:
                         description: BackgroundColor defines the background color
-                          for the PWA
                         type: string
                       description:
                         description: Description describes the PWA
                         type: string
                       display:
+                        default: standalone
                         description: Display mode for the PWA (standalone, fullscreen,
                           minimal-ui, browser)
+                        enum:
+                        - standalone
+                        - fullscreen
+                        - minimal-ui
+                        - browser
                         type: string
                       enabled:
                         description: Enabled controls whether PWA manifest should
@@ -136,7 +151,7 @@ spec:
                         description: StartURL is the start URL for the PWA
                         type: string
                       themeColor:
-                        description: ThemeColor defines the theme color for the PWA
+                        description: ThemeColor defines the theme color
                         type: string
                     type: object
                 type: object
@@ -231,10 +246,7 @@ spec:
                     type: boolean
                   expectedCode:
                     default: 200
-                    description: ExpectedCode is the HTTP status code expected for
-                      healthy services
-                    maximum: 599
-                    minimum: 100
+                    description: ExpectedCode is the expected HTTP status code
                     type: integer
                   headers:
                     additionalProperties:
@@ -243,16 +255,15 @@ spec:
                     type: object
                   healthPath:
                     default: /health
-                    description: HealthPath is the path to append to service URLs
-                      for health checks
+                    description: HealthPath is the path for health checks
                     type: string
                   interval:
                     default: 30s
-                    description: Interval between health checks (e.g., "30s", "5m")
+                    description: Interval between health checks
                     type: string
                   timeout:
                     default: 10s
-                    description: Timeout for health check requests (e.g., "10s")
+                    description: Timeout for health check requests
                     type: string
                 type: object
               homerConfig:
@@ -329,15 +340,10 @@ spec:
                   connectivityCheck:
                     type: boolean
                   defaults:
-                    description: DefaultConfig contains default settings for the Homer
-                      dashboard.
                     properties:
                       colorTheme:
-                        description: ColorTheme is the name of the color theme to
-                          be used.
                         type: string
                       layout:
-                        description: Layout is the layout of the dashboard.
                         type: string
                     type: object
                   documentTitle:
@@ -349,7 +355,6 @@ spec:
                   header:
                     type: boolean
                   hotkey:
-                    description: HotkeyConfig contains hotkey configuration
                     properties:
                       search:
                         type: string
@@ -372,7 +377,6 @@ spec:
                   logo:
                     type: string
                   message:
-                    description: MessageConfig contains dynamic message configuration
                     properties:
                       content:
                         type: string
@@ -403,73 +407,31 @@ spec:
                     type: object
                   services:
                     items:
-                      description: Service represents a Homer service group configuration
                       properties:
-                        icon:
-                          type: string
                         items:
-                          description: Items in this service group
                           items:
-                            description: Item represents a Homer dashboard item configuration
                             properties:
-                              endpoint:
-                                type: string
-                              icon:
-                                type: string
-                              keywords:
-                                type: string
-                              logo:
-                                type: string
-                              name:
-                                description: Common item fields (for CRD compatibility
-                                  and user convenience)
-                                type: string
                               nestedObjects:
                                 additionalProperties:
                                   additionalProperties:
                                     type: string
                                   type: object
-                                description: Nested objects for complex configuration
-                                  (e.g., customHeaders)
                                 type: object
                               parameters:
                                 additionalProperties:
                                   type: string
-                                description: Dynamic parameters for annotation-driven
-                                  configuration
                                 type: object
-                              subtitle:
-                                type: string
-                              tag:
-                                type: string
-                              tagstyle:
-                                type: string
-                              target:
-                                type: string
-                              type:
-                                type: string
-                              url:
-                                type: string
                             type: object
                           type: array
-                        logo:
-                          type: string
-                        name:
-                          description: Common service fields (for CRD compatibility
-                            and user convenience)
-                          type: string
                         nestedObjects:
                           additionalProperties:
                             additionalProperties:
                               type: string
                             type: object
-                          description: Nested objects for complex configuration (e.g.,
-                            headers)
                           type: object
                         parameters:
                           additionalProperties:
                             type: string
-                          description: Dynamic parameters for annotation-driven configuration
                           type: object
                       type: object
                     type: array
@@ -759,6 +721,17 @@ spec:
             type: object
           status:
             description: DashboardStatus defines the observed state of Dashboard
+            properties:
+              availableReplicas:
+                description: AvailableReplicas is the number of available replicas
+                format: int32
+                type: integer
+              ready:
+                description: Ready indicates if the Homer dashboard deployment is
+                  ready
+                type: boolean
+            required:
+            - ready
             type: object
         type: object
     served: true

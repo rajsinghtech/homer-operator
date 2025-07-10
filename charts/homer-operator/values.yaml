@@ -5,7 +5,6 @@ replicaCount: 1
 image:
   repository: ghcr.io/rajsinghtech/homer-operator
   pullPolicy: Always
-  # Overrides the image tag whose default is the chart appVersion.
   tag: ""
 
 imagePullSecrets: []
@@ -14,9 +13,7 @@ fullnameOverride: ""
 
 # Operator configuration
 operator:
-  # Enable Gateway API support (requires Gateway API CRDs to be installed)
   enableGatewayAPI: false
-  # Leader election configuration
   leaderElection:
     enabled: true
     leaseDuration: "15s"
@@ -42,13 +39,10 @@ operator:
         requests:
           cpu: 5m
           memory: 64Mi
-  # Health probe configuration
   healthProbe:
-    # Bind address for health probe
     bindAddress: ":8081"
 
 serviceAccount:
-  # Specifies whether a service account should be created
   create: true
   automount: true
   annotations: {}
@@ -80,9 +74,9 @@ podLabels: {}
 
 podSecurityContext:
   runAsNonRoot: true
-  runAsUser: 65532
-  runAsGroup: 65532
-  fsGroup: 65532
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
 
 securityContext:
   allowPrivilegeEscalation: false
@@ -93,40 +87,34 @@ securityContext:
     drop:
       - ALL
 
-service:
-  type: ClusterIP
-  port: 8443
-  # Annotations to add to the service
-  annotations: {}
-
-# Metrics service configuration
-metricsService:
-  # Specifies whether a metrics service should be created
-  create: true
-  type: ClusterIP
-  port: 8443
-  # Annotations to add to the metrics service
-  annotations: {}
+# Service configurations
+services:
+  # Webhook service (main service)
+  webhook:
+    type: ClusterIP
+    port: 8443
+    annotations: {}
+  # Metrics service
+  metrics:
+    enabled: true
+    type: ClusterIP
+    port: 8443
+    annotations: {}
 
 # ServiceMonitor configuration for Prometheus Operator
 serviceMonitor:
-  # Specifies whether a ServiceMonitor should be created
-  create: false
-  # Interval at which metrics should be scraped
+  enabled: true
   interval: 30s
-  # Timeout for scraping
   scrapeTimeout: 10s
-  # Additional labels for the ServiceMonitor
   labels: {}
-  # Annotations to add to the ServiceMonitor
   annotations: {}
 
 resources:
   limits:
-    cpu: 500m
+    cpu: 200m
     memory: 128Mi
   requests:
-    cpu: 10m
+    cpu: 50m
     memory: 64Mi
 
 livenessProbe:
@@ -143,58 +131,35 @@ readinessProbe:
   initialDelaySeconds: 5
   periodSeconds: 10
 
-# Additional volumes on the output Deployment definition.
+# Scheduling and placement
+scheduling:
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  priorityClassName: ""
+
+# Additional volumes and mounts
 volumes: []
-# - name: foo
-#   secret:
-#     secretName: mysecret
-#     optional: false
-
-# Additional volumeMounts on the output Deployment definition.
 volumeMounts: []
-# - name: foo
-#   mountPath: "/etc/foo"
-#   readOnly: true
 
-nodeSelector: {}
-
-tolerations: []
-
-affinity: {}
-
-# Priority class for the operator pod
-priorityClassName: ""
-
-# Pod disruption budget
-podDisruptionBudget:
-  enabled: false
-  minAvailable: 1
-  # maxUnavailable: 1
-
-# Horizontal Pod Autoscaler
-autoscaling:
-  enabled: false
-  minReplicas: 1
-  maxReplicas: 3
-  targetCPUUtilizationPercentage: 80
-  targetMemoryUtilizationPercentage: 80
+# High availability and scaling
+highAvailability:
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: 80
 
 # Network policy
 networkPolicy:
-  enabled: false
-  # Additional ingress rules
+  enabled: true
   ingress: []
-  # Additional egress rules
   egress: []
 
-# Additional environment variables
+# Environment variables
 env: []
-# - name: FOO
-#   value: "bar"
-
-# Additional environment variables from secrets or configmaps
 envFrom: []
-# - secretRef:
-#     name: mySecret
-# - configMapRef:
-#     name: myConfigMap

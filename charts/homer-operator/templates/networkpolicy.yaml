@@ -20,12 +20,12 @@ spec:
   - from: []
     ports:
     - protocol: TCP
-      port: 8443
+      port: {{ .Values.services.metrics.port }}
   {{- end }}
   - from: []
     ports:
     - protocol: TCP
-      port: 8081
+      port: {{ .Values.operator.healthProbe.bindAddress | replace ":" "" }}
   {{- with .Values.networkPolicy.ingress }}
   {{- toYaml . | nindent 2 }}
   {{- end }}
@@ -33,13 +33,13 @@ spec:
   - to: []
     ports:
     - protocol: TCP
-      port: 443
+      port: 443  # HTTPS
     - protocol: TCP
-      port: 6443
+      port: 6443  # Kubernetes API
   - to: []
     ports:
     - protocol: UDP
-      port: 53
+      port: 53  # DNS
   {{- with .Values.networkPolicy.egress }}
   {{- toYaml . | nindent 2 }}
   {{- end }}

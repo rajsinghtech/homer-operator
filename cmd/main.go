@@ -61,24 +61,20 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var enableGatewayAPI bool
+	var leaderElectionID string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
-	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
-		"Enable leader election for controller manager. "+
-			"Enabling this will ensure there is only one active controller manager.")
-	flag.BoolVar(&secureMetrics, "metrics-secure", false,
-		"If set the metrics endpoint is served securely")
-	flag.BoolVar(&enableHTTP2, "enable-http2", false,
-		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
-	flag.BoolVar(&enableGatewayAPI, "enable-gateway-api", false,
-		"Enable Gateway API support for HTTPRoute resources")
+	flag.BoolVar(&enableLeaderElection, "leader-elect", false, "Enable leader election")
+	flag.StringVar(&leaderElectionID, "leader-election-id", "3f6c65b5.rajsingh.info", "Leader election ID")
+	flag.BoolVar(&secureMetrics, "metrics-secure", false, "Serve metrics securely")
+	flag.BoolVar(&enableHTTP2, "enable-http2", false, "Enable HTTP/2")
+	flag.BoolVar(&enableGatewayAPI, "enable-gateway-api", false, "Enable Gateway API support")
 	opts := zap.Options{
 		Development: true,
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
-	// Override enableGatewayAPI from environment variable if set
 	if envGateway := os.Getenv("ENABLE_GATEWAY_API"); envGateway != "" {
 		if parsed, err := strconv.ParseBool(envGateway); err == nil {
 			enableGatewayAPI = parsed
@@ -87,15 +83,11 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	// Disable HTTP/2 by default for security (can be enabled via --enable-http2)
-	disableHTTP2 := func(c *tls.Config) {
-		setupLog.Info("disabling http/2")
-		c.NextProtos = []string{"http/1.1"}
-	}
-
-	tlsOpts := []func(*tls.Config){}
+	var tlsOpts []func(*tls.Config)
 	if !enableHTTP2 {
-		tlsOpts = append(tlsOpts, disableHTTP2)
+		tlsOpts = append(tlsOpts, func(c *tls.Config) {
+			c.NextProtos = []string{"http/1.1"}
+		})
 	}
 
 	webhookServer := webhook.NewServer(webhook.Options{
@@ -112,8 +104,7 @@ func main() {
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "3f6c65b5.rajsingh.info",
-		// LeaderElectionReleaseOnCancel: true, // Enable for faster leader transitions
+		LeaderElectionID:       leaderElectionID,
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -128,24 +119,24 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "Dashboard")
 		os.Exit(1)
 	}
-	if err = (&controller.IngressReconciler{
+	ingressController := &controller.GenericResourceReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
+	}
+	if err = ingressController.SetupIngressController(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Ingress")
 		os.Exit(1)
 	}
+
 	if enableGatewayAPI {
-		setupLog.Info("Gateway API support enabled, setting up HTTPRoute controller")
-		if err = (&controller.HTTPRouteReconciler{
+		httpRouteController := &controller.GenericResourceReconciler{
 			Client: mgr.GetClient(),
 			Scheme: mgr.GetScheme(),
-		}).SetupWithManager(mgr); err != nil {
+		}
+		if err = httpRouteController.SetupHTTPRouteController(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "HTTPRoute")
 			os.Exit(1)
 		}
-	} else {
-		setupLog.Info("Gateway API support disabled")
 	}
 	//+kubebuilder:scaffold:builder
 
@@ -158,7 +149,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	setupLog.Info("starting manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)

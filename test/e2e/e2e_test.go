@@ -26,9 +26,9 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -37,61 +37,57 @@ import (
 	"github.com/rajsinghtech/homer-operator/pkg/homer"
 )
 
+// E2E test helper functions
+func setupE2ETest() (client.Client, context.Context, string) {
+	ctx := context.Background()
+	testNs := fmt.Sprintf("homer-e2e-%d", time.Now().Unix())
+
+	cfg, err := config.GetConfig()
+	Expect(err).NotTo(HaveOccurred())
+
+	k8sClient, err := client.New(cfg, client.Options{})
+	Expect(err).NotTo(HaveOccurred())
+
+	err = homerv1alpha1.AddToScheme(k8sClient.Scheme())
+	Expect(err).NotTo(HaveOccurred())
+	err = networkingv1.AddToScheme(k8sClient.Scheme())
+	Expect(err).NotTo(HaveOccurred())
+	err = gatewayv1.Install(k8sClient.Scheme())
+	Expect(err).NotTo(HaveOccurred())
+
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   testNs,
+			Labels: map[string]string{"test": "homer-e2e"},
+		},
+	}
+	err = k8sClient.Create(ctx, ns)
+	Expect(err).NotTo(HaveOccurred())
+
+	return k8sClient, ctx, testNs
+}
+
+func cleanupE2ETest(k8sClient client.Client, ctx context.Context, testNs string) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNs}}
+	err := k8sClient.Delete(ctx, ns)
+	if err != nil {
+		GinkgoT().Logf("Warning: failed to delete test namespace %s: %v", testNs, err)
+	}
+}
+
 var _ = Describe("Homer Operator E2E Tests", func() {
 	var (
 		k8sClient client.Client
-		cfg       *rest.Config
 		ctx       context.Context
 		testNs    string
 	)
 
 	BeforeEach(func() {
-		ctx = context.Background()
-		testNs = fmt.Sprintf("homer-e2e-%d", time.Now().Unix())
-
-		// Get the Kubernetes config
-		var err error
-		cfg, err = config.GetConfig()
-		Expect(err).NotTo(HaveOccurred())
-
-		// Create the Kubernetes client
-		k8sClient, err = client.New(cfg, client.Options{})
-		Expect(err).NotTo(HaveOccurred())
-
-		// Add scheme for Homer resources
-		err = homerv1alpha1.AddToScheme(k8sClient.Scheme())
-		Expect(err).NotTo(HaveOccurred())
-
-		err = networkingv1.AddToScheme(k8sClient.Scheme())
-		Expect(err).NotTo(HaveOccurred())
-
-		err = gatewayv1.Install(k8sClient.Scheme())
-		Expect(err).NotTo(HaveOccurred())
-
-		// Create test namespace
-		ns := &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: testNs,
-				Labels: map[string]string{
-					"test": "homer-e2e",
-				},
-			},
-		}
-		err = k8sClient.Create(ctx, ns)
-		Expect(err).NotTo(HaveOccurred())
+		k8sClient, ctx, testNs = setupE2ETest()
 	})
 
 	AfterEach(func() {
-		// Cleanup test namespace
-		ns := &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: testNs,
-			},
-		}
-		err := k8sClient.Delete(ctx, ns)
-		if err != nil {
-			GinkgoT().Logf("Warning: failed to delete test namespace %s: %v", testNs, err)
-		}
+		cleanupE2ETest(k8sClient, ctx, testNs)
 	})
 
 	Context("When deploying Homer Operator", func() {
@@ -285,7 +281,7 @@ var _ = Describe("Homer Operator E2E Tests", func() {
 					Name:      "e2e-cleanup-dashboard-homer",
 					Namespace: testNs,
 				}, deployment)
-				return client.IgnoreNotFound(err) == nil && err != nil
+				return apierrors.IsNotFound(err)
 			}, time.Minute*2, time.Second*5).Should(BeTrue())
 
 			By("Waiting for Service to be deleted")
@@ -295,7 +291,7 @@ var _ = Describe("Homer Operator E2E Tests", func() {
 					Name:      "e2e-cleanup-dashboard-homer",
 					Namespace: testNs,
 				}, service)
-				return client.IgnoreNotFound(err) == nil && err != nil
+				return apierrors.IsNotFound(err)
 			}, time.Minute*2, time.Second*5).Should(BeTrue())
 
 			By("Waiting for ConfigMap to be deleted")
@@ -305,7 +301,7 @@ var _ = Describe("Homer Operator E2E Tests", func() {
 					Name:      "e2e-cleanup-dashboard-homer",
 					Namespace: testNs,
 				}, configMap)
-				return client.IgnoreNotFound(err) == nil && err != nil
+				return apierrors.IsNotFound(err)
 			}, time.Minute*2, time.Second*5).Should(BeTrue())
 		})
 	})

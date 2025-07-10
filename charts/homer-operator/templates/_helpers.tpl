@@ -147,8 +147,8 @@ Create environment variables for the operator
 - name: ENABLE_GATEWAY_API
   value: "true"
 {{- end }}
-{{- if .Values.env }}
-{{- toYaml .Values.env }}
+{{- with .Values.env }}
+{{- toYaml . }}
 {{- end }}
 {{- end }}
 
@@ -156,7 +156,18 @@ Create environment variables for the operator
 Create environment variables from secrets/configmaps
 */}}
 {{- define "homer-operator.envFrom" -}}
-{{- if .Values.envFrom }}
-{{- toYaml .Values.envFrom }}
+{{- with .Values.envFrom }}
+{{- toYaml . }}
+{{- end }}
+{{- end }}
+
+{{/*
+Standardized annotations helper
+*/}}
+{{- define "homer-operator.annotations" -}}
+{{- $annotations := . -}}
+{{- if $annotations }}
+annotations:
+  {{- toYaml $annotations | nindent 2 }}
 {{- end }}
 {{- end }}

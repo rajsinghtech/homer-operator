@@ -119,12 +119,14 @@ spec:
   homerConfig:
     title: "Media Center"
     services:
-      - name: "Media Services"
+      - parameters:
+          name: "Media Services"
         items:
-          - name: "Plex Server"
-            type: "Emby"  # Smart card type
-            url: "https://plex.example.com"
-            # Note: Configure API key reference in smart card configuration
+          - parameters:
+              name: "Plex Server"
+              type: "Emby"  # Smart card type
+              url: "https://plex.example.com"
+              # Note: Configure API key reference in smart card configuration
 ```
 
 ### Custom Assets & Styling

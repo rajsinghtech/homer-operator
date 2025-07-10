@@ -86,10 +86,18 @@ type DashboardSpec struct {
 
 // DashboardStatus defines the observed state of Dashboard
 type DashboardStatus struct {
+	// Ready indicates if the Homer dashboard deployment is ready
+	Ready bool `json:"ready"`
+
+	// AvailableReplicas is the number of available replicas
+	AvailableReplicas int32 `json:"availableReplicas,omitempty"`
 }
 
 //+kubebuilder:object:root=true
 //+kubebuilder:subresource:status
+//+kubebuilder:printcolumn:name="Ready",type=boolean,JSONPath=`.status.ready`
+//+kubebuilder:printcolumn:name="Replicas",type=string,JSONPath=`.status.availableReplicas`
+//+kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Dashboard is the Schema for the dashboards API
 type Dashboard struct {
@@ -160,11 +168,13 @@ type PWAConfig struct {
 	ShortName string `json:"shortName,omitempty"`
 	// Description describes the PWA
 	Description string `json:"description,omitempty"`
-	// ThemeColor defines the theme color for the PWA
+	// ThemeColor defines the theme color
 	ThemeColor string `json:"themeColor,omitempty"`
-	// BackgroundColor defines the background color for the PWA
+	// BackgroundColor defines the background color
 	BackgroundColor string `json:"backgroundColor,omitempty"`
 	// Display mode for the PWA (standalone, fullscreen, minimal-ui, browser)
+	// +kubebuilder:validation:Enum=standalone;fullscreen;minimal-ui;browser
+	// +kubebuilder:default="standalone"
 	Display string `json:"display,omitempty"`
 	// StartURL is the start URL for the PWA
 	StartURL string `json:"startUrl,omitempty"`
@@ -238,21 +248,19 @@ type ServiceHealthConfig struct {
 	// Enabled controls whether health checking is enabled
 	Enabled bool `json:"enabled,omitempty"`
 
-	// Interval between health checks (e.g., "30s", "5m")
+	// Interval between health checks
 	// +kubebuilder:default="30s"
 	Interval string `json:"interval,omitempty"`
 
-	// Timeout for health check requests (e.g., "10s")
+	// Timeout for health check requests
 	// +kubebuilder:default="10s"
 	Timeout string `json:"timeout,omitempty"`
 
-	// HealthPath is the path to append to service URLs for health checks
+	// HealthPath is the path for health checks
 	// +kubebuilder:default="/health"
 	HealthPath string `json:"healthPath,omitempty"`
 
-	// ExpectedCode is the HTTP status code expected for healthy services
-	// +kubebuilder:validation:Minimum=100
-	// +kubebuilder:validation:Maximum=599
+	// ExpectedCode is the expected HTTP status code
 	// +kubebuilder:default=200
 	ExpectedCode int `json:"expectedCode,omitempty"`
 
