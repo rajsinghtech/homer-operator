@@ -64,17 +64,6 @@ crd:
   create: true
   annotations: {}
 
-# Namespace configuration
-namespace:
-  # Specifies whether a namespace should be created
-  create: true
-  # Name of the namespace (defaults to homer-operator if not specified)
-  name: ""
-  # Annotations to add to the namespace
-  annotations: {}
-  # Labels to add to the namespace
-  labels: {}
-
 podAnnotations: {}
 podLabels: {}
 

@@ -21,18 +21,22 @@
 - `kubectl` configured
 - Helm 3.x (recommended)
 
-### 1. Install with Helm (Recommended)
+### Install with Helm (Recommended)
 
 ```bash
-# Install latest stable release
-helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator
+# Create namespace and install latest stable release
+kubectl create namespace homer-operator
+helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator \
+  --namespace homer-operator
 
 # Install with Gateway API support
+kubectl create namespace homer-operator
 helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator \
+  --namespace homer-operator \
   --set operator.enableGatewayAPI=true
 ```
 
-### 2. Create Your First Dashboard
+### Create Your First Dashboard
 
 ```yaml
 apiVersion: homer.rajsingh.info/v1alpha1
@@ -53,15 +57,6 @@ spec:
 
 ```bash
 kubectl apply -f dashboard.yaml
-```
-
-### 3. Access Your Dashboard
-
-```bash
-# Port-forward to access locally
-kubectl port-forward svc/my-dashboard-homer 8080:80
-
-# Open http://localhost:8080
 ```
 
 ---

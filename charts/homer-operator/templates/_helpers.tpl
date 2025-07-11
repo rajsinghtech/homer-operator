@@ -66,11 +66,7 @@ Create the name of the service account to use
 Create the name of the namespace to use
 */}}
 {{- define "homer-operator.namespace" -}}
-{{- if .Values.namespace.name }}
-{{- .Values.namespace.name }}
-{{- else }}
-{{- "homer-operator" }}
-{{- end }}
+{{- .Release.Namespace }}
 {{- end }}
 
 {{/*
