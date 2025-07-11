@@ -712,7 +712,7 @@ func ValidateTheme(theme string) error {
 	if slices.Contains(validThemes, theme) {
 		return nil
 	}
-	return fmt.Errorf("theme: %s", theme)
+	return fmt.Errorf("unsupported theme: %s", theme)
 }
 
 // SecretKeyRef represents a reference to a key in a Secret (local type to avoid circular imports)
@@ -1969,10 +1969,21 @@ func normalizeHomerConfig(config *HomerConfig) {
 
 // marshalHomerConfigToYAML creates properly formatted YAML for Homer
 func marshalHomerConfigToYAML(config *HomerConfig) ([]byte, error) {
-	// Create a flat map to avoid nested structure
 	configMap := make(map[string]interface{})
 
-	// Add all HomerConfig fields to the map
+	addBasicFields(configMap, config)
+	addHotkeyConfig(configMap, config)
+	addColorsConfig(configMap, config)
+	addDefaultsConfig(configMap, config)
+	addProxyConfig(configMap, config)
+	addMessageConfig(configMap, config)
+	addLinksAndServices(configMap, config)
+
+	return yaml.Marshal(configMap)
+}
+
+// addBasicFields adds basic configuration fields
+func addBasicFields(configMap map[string]interface{}, config *HomerConfig) {
 	if config.Title != "" {
 		configMap["title"] = config.Title
 	}
@@ -2007,15 +2018,19 @@ func marshalHomerConfigToYAML(config *HomerConfig) ([]byte, error) {
 	if config.ExternalConfig != "" {
 		configMap["externalConfig"] = config.ExternalConfig
 	}
+}
 
-	// Add hotkey config if present
+// addHotkeyConfig adds hotkey configuration
+func addHotkeyConfig(configMap map[string]interface{}, config *HomerConfig) {
 	if config.Hotkey.Search != "" {
 		configMap["hotkey"] = map[string]interface{}{
 			"search": config.Hotkey.Search,
 		}
 	}
+}
 
-	// Add colors config if present
+// addColorsConfig adds colors configuration
+func addColorsConfig(configMap map[string]interface{}, config *HomerConfig) {
 	if config.Colors.Light != (ThemeColors{}) || config.Colors.Dark != (ThemeColors{}) {
 		colorsMap := make(map[string]interface{})
 		if config.Colors.Light != (ThemeColors{}) {
@@ -2036,8 +2051,10 @@ func marshalHomerConfigToYAML(config *HomerConfig) ([]byte, error) {
 			configMap["colors"] = colorsMap
 		}
 	}
+}
 
-	// Add defaults config if present
+// addDefaultsConfig adds defaults configuration
+func addDefaultsConfig(configMap map[string]interface{}, config *HomerConfig) {
 	if config.Defaults.ColorTheme != "" || config.Defaults.Layout != "" {
 		defaultsMap := make(map[string]interface{})
 		if config.Defaults.Layout != "" {
@@ -2048,8 +2065,10 @@ func marshalHomerConfigToYAML(config *HomerConfig) ([]byte, error) {
 		}
 		configMap["defaults"] = defaultsMap
 	}
+}
 
-	// Add proxy config if present
+// addProxyConfig adds proxy configuration
+func addProxyConfig(configMap map[string]interface{}, config *HomerConfig) {
 	if config.Proxy.UseCredentials || len(config.Proxy.Headers) > 0 {
 		proxyMap := make(map[string]interface{})
 		if config.Proxy.UseCredentials {
@@ -2060,8 +2079,10 @@ func marshalHomerConfigToYAML(config *HomerConfig) ([]byte, error) {
 		}
 		configMap["proxy"] = proxyMap
 	}
+}
 
-	// Add message config if present
+// addMessageConfig adds message configuration
+func addMessageConfig(configMap map[string]interface{}, config *HomerConfig) {
 	if config.Message.Title != "" || config.Message.Content != "" || config.Message.Url != "" {
 		messageMap := make(map[string]interface{})
 		if config.Message.Title != "" {
@@ -2087,18 +2108,16 @@ func marshalHomerConfigToYAML(config *HomerConfig) ([]byte, error) {
 		}
 		configMap["message"] = messageMap
 	}
+}
 
-	// Add links if present
+// addLinksAndServices adds links and services configuration
+func addLinksAndServices(configMap map[string]interface{}, config *HomerConfig) {
 	if len(config.Links) > 0 {
 		configMap["links"] = config.Links
 	}
-
-	// Add services with dynamic parameters
 	if len(config.Services) > 0 {
 		configMap["services"] = flattenServicesForYAML(config.Services)
 	}
-
-	return yaml.Marshal(configMap)
 }
 
 // addThemeColors adds theme color fields to a map
