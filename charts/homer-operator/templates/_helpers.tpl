@@ -77,35 +77,35 @@ Create the name of the namespace to use
 Create the name of the manager deployment
 */}}
 {{- define "homer-operator.managerName" -}}
-{{- printf "%s-controller-manager" (include "homer-operator.fullname" .) }}
+{{- include "homer-operator.fullname" . }}
 {{- end }}
 
 {{/*
 Create the name of the metrics service
 */}}
 {{- define "homer-operator.metricsServiceName" -}}
-{{- printf "%s-metrics-service" (include "homer-operator.fullname" .) }}
+{{- printf "%s-metrics" (include "homer-operator.fullname" .) }}
 {{- end }}
 
 {{/*
 Create the name of the webhook service
 */}}
 {{- define "homer-operator.webhookServiceName" -}}
-{{- printf "%s-webhook-service" (include "homer-operator.fullname" .) }}
+{{- printf "%s-webhook" (include "homer-operator.fullname" .) }}
 {{- end }}
 
 {{/*
 Create leader election role name
 */}}
 {{- define "homer-operator.leaderElectionRoleName" -}}
-{{- printf "%s-leader-election-role" (include "homer-operator.fullname" .) }}
+{{- printf "%s-leader-election" (include "homer-operator.fullname" .) }}
 {{- end }}
 
 {{/*
 Create manager role name
 */}}
 {{- define "homer-operator.managerRoleName" -}}
-{{- printf "%s-manager-role" (include "homer-operator.fullname" .) }}
+{{- printf "%s-manager" (include "homer-operator.fullname" .) }}
 {{- end }}
 
 {{/*
@@ -119,14 +119,14 @@ Create metrics reader role name
 Create proxy role name
 */}}
 {{- define "homer-operator.proxyRoleName" -}}
-{{- printf "%s-proxy-role" (include "homer-operator.fullname" .) }}
+{{- printf "%s-proxy" (include "homer-operator.fullname" .) }}
 {{- end }}
 
 {{/*
 Create proxy role binding name
 */}}
 {{- define "homer-operator.proxyRoleBindingName" -}}
-{{- printf "%s-proxy-rolebinding" (include "homer-operator.fullname" .) }}
+{{- printf "%s-proxy" (include "homer-operator.fullname" .) }}
 {{- end }}
 
 {{/*

@@ -5,6 +5,7 @@ type: application
 version: 0.1.0
 appVersion: "latest"
 home: https://github.com/rajsinghtech/homer-operator
+icon: https://raw.githubusercontent.com/rajsinghtech/homer-operator/main/homer/Homer-Operator.png
 sources:
   - https://github.com/rajsinghtech/homer-operator
 maintainers:
