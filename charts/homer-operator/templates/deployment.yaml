@@ -9,6 +9,13 @@ metadata:
     app.kubernetes.io/component: manager
 spec:
   replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: {{ .Values.deploymentStrategy.type }}
+    {{- if eq .Values.deploymentStrategy.type "RollingUpdate" }}
+    rollingUpdate:
+      maxUnavailable: {{ .Values.deploymentStrategy.rollingUpdate.maxUnavailable }}
+      maxSurge: {{ .Values.deploymentStrategy.rollingUpdate.maxSurge }}
+    {{- end }}
   selector:
     matchLabels:
       {{- include "homer-operator.selectorLabels" . | nindent 6 }}
@@ -33,7 +40,7 @@ spec:
       serviceAccountName: {{ include "homer-operator.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      terminationGracePeriodSeconds: 10
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       containers:
       - name: manager
         image: {{ include "homer-operator.image" . }}
@@ -77,6 +84,10 @@ spec:
           {{- toYaml .Values.livenessProbe | nindent 10 }}
         readinessProbe:
           {{- toYaml .Values.readinessProbe | nindent 10 }}
+        {{- if .Values.startupProbe.enabled }}
+        startupProbe:
+          {{- toYaml .Values.startupProbe | nindent 10 }}
+        {{- end }}
         resources:
           {{- toYaml .Values.resources | nindent 10 }}
         securityContext:
@@ -121,5 +132,9 @@ spec:
       {{- end }}
       {{- with .priorityClassName }}
       priorityClassName: {{ . }}
+      {{- end }}
+      {{- with $.Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- end }}

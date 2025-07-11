@@ -14,6 +14,12 @@ fullnameOverride: ""
 # Operator configuration
 operator:
   enableGatewayAPI: false
+  # Operator behavior configuration
+  reconcileInterval: "30s"
+  maxConcurrentReconciles: 1
+  # Logging configuration
+  logLevel: "info"
+  logFormat: "json"
   leaderElection:
     enabled: true
     leaseDuration: "15s"
@@ -131,6 +137,16 @@ readinessProbe:
   initialDelaySeconds: 5
   periodSeconds: 10
 
+# Startup probe configuration
+startupProbe:
+  enabled: false
+  httpGet:
+    path: /readyz
+    port: 8081
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  failureThreshold: 30
+
 # Scheduling and placement
 scheduling:
   nodeSelector: {}
@@ -154,12 +170,67 @@ highAvailability:
     targetCPUUtilizationPercentage: 80
     targetMemoryUtilizationPercentage: 80
 
-# Network policy
-networkPolicy:
-  enabled: true
-  ingress: []
-  egress: []
+# VerticalPodAutoscaler configuration
+vpa:
+  enabled: false
+  updateMode: "Auto"
+  controlledResources: ["cpu", "memory"]
+  maxAllowed:
+    cpu: 1
+    memory: 512Mi
+  minAllowed:
+    cpu: 10m
+    memory: 32Mi
+  labels: {}
+  annotations: {}
+
+# Topology spread constraints
+topologySpreadConstraints: []
+# Example:
+# - maxSkew: 1
+#   topologyKey: topology.kubernetes.io/zone
+#   whenUnsatisfiable: DoNotSchedule
+#   labelSelector:
+#     matchLabels:
+#       app.kubernetes.io/name: homer-operator
+
+# PrometheusRule configuration
+prometheusRule:
+  enabled: false
+  additionalRules: []
+  labels: {}
+  annotations: {}
+
+# Grafana Dashboard configuration
+grafanaDashboard:
+  enabled: false
+  labels: {}
+  annotations: {}
+
+# Deployment strategy configuration
+deploymentStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+    maxSurge: 1
+
+# Termination grace period
+terminationGracePeriodSeconds: 10
 
 # Environment variables
 env: []
+# Example:
+# - name: LOG_LEVEL
+#   value: "debug"
+# - name: SECRET_VALUE
+#   valueFrom:
+#     secretKeyRef:
+#       name: my-secret
+#       key: password
+
 envFrom: []
+# Example:
+# - configMapRef:
+#     name: my-config
+# - secretRef:
+#     name: my-secret

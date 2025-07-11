@@ -1,0 +1,40 @@
+Thank you for installing {{ .Chart.Name }}.
+
+Your release is named {{ .Release.Name }}.
+
+To learn more about the release, try:
+
+  $ helm status {{ .Release.Name }}
+  $ helm get values {{ .Release.Name }}
+
+The Homer Operator is now running in namespace {{ include "homer-operator.namespace" . }}.
+
+{{- if .Values.operator.metrics.enabled }}
+Metrics are enabled and can be scraped from the metrics service.
+{{- if .Values.serviceMonitor.enabled }}
+ServiceMonitor is enabled for Prometheus integration.
+{{- end }}
+{{- end }}
+
+{{- if .Values.operator.enableGatewayAPI }}
+Gateway API support is enabled. The operator will discover services from HTTPRoute resources.
+{{- end }}
+
+To create a Dashboard resource, apply:
+
+  kubectl apply -f - <<EOF
+  apiVersion: homer.rajsingh.info/v1alpha1
+  kind: Dashboard
+  metadata:
+    name: my-dashboard
+    namespace: {{ include "homer-operator.namespace" . }}
+  spec:
+    title: "My Homer Dashboard"
+    theme: "default"
+    # Service discovery from Ingress resources
+    ingressSelector:
+      matchLabels:
+        app: my-app
+  EOF
+
+For more information, visit: {{ .Chart.Home }}

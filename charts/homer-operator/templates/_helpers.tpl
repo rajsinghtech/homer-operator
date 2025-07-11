@@ -40,6 +40,7 @@ helm.sh/chart: {{ include "homer-operator.chart" . }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
+app.kubernetes.io/part-of: homer-operator
 {{- end }}
 
 {{/*
@@ -169,5 +170,15 @@ Standardized annotations helper
 {{- if $annotations }}
 annotations:
   {{- toYaml $annotations | nindent 2 }}
+{{- end }}
+{{- end }}
+
+{{/*
+Component labels helper
+*/}}
+{{- define "homer-operator.componentLabels" -}}
+{{- $component := . -}}
+{{- if $component }}
+app.kubernetes.io/component: {{ $component }}
 {{- end }}
 {{- end }}

@@ -289,6 +289,6 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: {{ include "homer-operator.serviceAccountName" . }}
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ include "homer-operator.namespace" . }}
 {{- end }}
 {{- end }}

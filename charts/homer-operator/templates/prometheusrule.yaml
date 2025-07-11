@@ -1,0 +1,60 @@
+{{- if .Values.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "homer-operator.fullname" . }}
+  namespace: {{ include "homer-operator.namespace" . }}
+  labels:
+    {{- include "homer-operator.labels" . | nindent 4 }}
+    {{- include "homer-operator.componentLabels" "prometheusrule" | nindent 4 }}
+    {{- with .Values.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.prometheusRule.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  groups:
+  - name: homer-operator.rules
+    rules:
+    - alert: HomerOperatorDown
+      expr: up{job="{{ include "homer-operator.fullname" . }}"} == 0
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Homer Operator is down"
+        description: "Homer Operator has been down for more than 5 minutes."
+    
+    - alert: HomerOperatorHighMemoryUsage
+      expr: (container_memory_working_set_bytes{container="manager",pod=~"{{ include "homer-operator.fullname" . }}.*"} / container_spec_memory_limit_bytes{container="manager",pod=~"{{ include "homer-operator.fullname" . }}.*"}) > 0.8
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Homer Operator high memory usage"
+        description: "Homer Operator memory usage is above 80% for more than 10 minutes."
+    
+    - alert: HomerOperatorHighCPUUsage
+      expr: (rate(container_cpu_usage_seconds_total{container="manager",pod=~"{{ include "homer-operator.fullname" . }}.*"}[5m]) / container_spec_cpu_quota{container="manager",pod=~"{{ include "homer-operator.fullname" . }}.*"} * container_spec_cpu_period{container="manager",pod=~"{{ include "homer-operator.fullname" . }}.*"}) > 0.8
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Homer Operator high CPU usage"
+        description: "Homer Operator CPU usage is above 80% for more than 10 minutes."
+    
+    - alert: HomerOperatorReconcileErrors
+      expr: rate(controller_runtime_reconcile_errors_total{controller="dashboard"}[5m]) > 0.1
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Homer Operator reconciliation errors"
+        description: "Homer Operator is experiencing reconciliation errors at a rate of {{ "{{ $value }}" }} errors per second."
+    
+    {{- with .Values.prometheusRule.additionalRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

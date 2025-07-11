@@ -1,0 +1,38 @@
+{{- if .Values.vpa.enabled }}
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: {{ include "homer-operator.fullname" . }}
+  namespace: {{ include "homer-operator.namespace" . }}
+  labels:
+    {{- include "homer-operator.labels" . | nindent 4 }}
+    {{- include "homer-operator.componentLabels" "vpa" | nindent 4 }}
+    {{- with .Values.vpa.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.vpa.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "homer-operator.managerName" . }}
+  updatePolicy:
+    updateMode: {{ .Values.vpa.updateMode }}
+  resourcePolicy:
+    containerPolicies:
+    - containerName: manager
+      {{- if .Values.vpa.controlledResources }}
+      controlledResources: {{ .Values.vpa.controlledResources }}
+      {{- end }}
+      {{- if .Values.vpa.maxAllowed }}
+      maxAllowed:
+        {{- toYaml .Values.vpa.maxAllowed | nindent 8 }}
+      {{- end }}
+      {{- if .Values.vpa.minAllowed }}
+      minAllowed:
+        {{- toYaml .Values.vpa.minAllowed | nindent 8 }}
+      {{- end }}
+{{- end }}
