@@ -118,7 +118,14 @@ var _ = Describe("Asset Management Tests", func() {
 				Scheme: k8sClient.Scheme(),
 			}
 
+			// First reconcile: adds finalizer and returns early
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile: actually processes the Dashboard and creates resources
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
@@ -231,7 +238,14 @@ var _ = Describe("Asset Management Tests", func() {
 				Scheme: k8sClient.Scheme(),
 			}
 
+			// First reconcile: adds finalizer and returns early
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile: actually processes the Dashboard and creates resources
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
@@ -321,7 +335,14 @@ var _ = Describe("Asset Management Tests", func() {
 				Scheme: k8sClient.Scheme(),
 			}
 
+			// First reconcile: adds finalizer and returns early
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile: actually processes the Dashboard and creates resources
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
@@ -407,7 +428,14 @@ var _ = Describe("Asset Management Tests", func() {
 				Scheme: k8sClient.Scheme(),
 			}
 
+			// First reconcile: adds finalizer and returns early
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile: actually processes the Dashboard and creates resources
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
@@ -547,7 +575,17 @@ var _ = Describe("Asset Management Tests", func() {
 				Scheme: k8sClient.Scheme(),
 			}
 
+			// First reconcile: adds finalizer and returns early
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      dashboardName,
+					Namespace: dashboardNs.Name, // Use generated namespace name
+				},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile: actually processes the Dashboard and creates resources
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name:      dashboardName,
 					Namespace: dashboardNs.Name, // Use generated namespace name

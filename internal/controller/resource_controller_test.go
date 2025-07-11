@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -37,7 +38,6 @@ import (
 var _ = Describe("Generic Resource Controller", func() {
 
 	Context("When reconciling Ingress resources", func() {
-		const dashboardName = "test-dashboard-ingress"
 		const ingressName = "test-ingress"
 		const namespaceName = "default"
 
@@ -45,8 +45,12 @@ var _ = Describe("Generic Resource Controller", func() {
 
 		var dashboard *homerv1alpha1.Dashboard
 		var ingress *networkingv1.Ingress
+		var dashboardName string
 
 		BeforeEach(func() {
+			// Generate unique dashboard name for each test to avoid conflicts
+			dashboardName = fmt.Sprintf("test-dashboard-ingress-%d-%d", GinkgoRandomSeed(), time.Now().UnixNano())
+
 			// Create Dashboard with annotations that will match the Ingress
 			dashboard = &homerv1alpha1.Dashboard{
 				ObjectMeta: metav1.ObjectMeta{
@@ -323,7 +327,6 @@ var _ = Describe("Generic Resource Controller", func() {
 	})
 
 	Context("When reconciling HTTPRoute resources", func() {
-		const dashboardName = "test-dashboard-httproute"
 		const httprouteName = "test-httproute"
 		const namespaceName = "default"
 
@@ -331,11 +334,15 @@ var _ = Describe("Generic Resource Controller", func() {
 
 		var dashboard *homerv1alpha1.Dashboard
 		var httproute *gatewayv1.HTTPRoute
+		var dashboardName string
 
 		BeforeEach(func() {
 			if !isGatewayAPIAvailable() {
 				Skip("Gateway API CRDs not available in test environment")
 			}
+
+			// Generate unique dashboard name for each test to avoid conflicts
+			dashboardName = fmt.Sprintf("test-dashboard-httproute-%d-%d", GinkgoRandomSeed(), time.Now().UnixNano())
 
 			// Create Dashboard with annotations that will match the HTTPRoute
 			dashboard = &homerv1alpha1.Dashboard{
@@ -757,14 +764,17 @@ var _ = Describe("Generic Resource Controller", func() {
 	})
 
 	Context("When testing resource filtering", func() {
-		const dashboardName = "test-dashboard-filtering"
 		const namespaceName = "default"
 
 		ctx := context.Background()
 
 		var dashboard *homerv1alpha1.Dashboard
+		var dashboardName string
 
 		BeforeEach(func() {
+			// Generate unique dashboard name for each test to avoid conflicts
+			dashboardName = fmt.Sprintf("test-dashboard-filtering-%d-%d", GinkgoRandomSeed(), time.Now().UnixNano())
+
 			// Create Dashboard with selectors
 			dashboard = &homerv1alpha1.Dashboard{
 				ObjectMeta: metav1.ObjectMeta{
@@ -804,6 +814,17 @@ var _ = Describe("Generic Resource Controller", func() {
 
 		AfterEach(func() {
 			if dashboard != nil {
+				// Remove finalizers to force deletion if stuck
+				current := &homerv1alpha1.Dashboard{}
+				if err := k8sClient.Get(ctx, types.NamespacedName{
+					Name:      dashboard.Name,
+					Namespace: dashboard.Namespace,
+				}, current); err == nil {
+					// Remove all finalizers
+					current.Finalizers = []string{}
+					_ = k8sClient.Update(ctx, current)
+				}
+
 				err := k8sClient.Delete(ctx, dashboard)
 				if err != nil && !apierrors.IsNotFound(err) {
 					GinkgoT().Logf("Warning: failed to delete dashboard: %v", err)
