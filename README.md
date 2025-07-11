@@ -165,7 +165,9 @@ Enable HTTPRoute processing for modern Kubernetes networking:
 kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/standard-install.yaml
 
 # Install operator with Gateway API support
+kubectl create namespace homer-operator
 helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator \
+  --namespace homer-operator \
   --set operator.enableGatewayAPI=true
 ```
 
@@ -388,7 +390,9 @@ podDisruptionBudget:
 ```
 
 ```bash
+kubectl create namespace homer-operator
 helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator \
+  --namespace homer-operator \
   --version 0.1.0 -f values.yaml
 ```
 
@@ -402,7 +406,9 @@ The operator exposes comprehensive metrics:
 
 ```bash
 # Enable metrics and ServiceMonitor
+kubectl create namespace homer-operator
 helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator \
+  --namespace homer-operator \
   --set operator.metrics.enabled=true \
   --set serviceMonitor.create=true
 ```
