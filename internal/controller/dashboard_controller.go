@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"time"
 
 	"github.com/go-logr/logr"
 	homerv1alpha1 "github.com/rajsinghtech/homer-operator/api/v1alpha1"
@@ -35,7 +36,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
@@ -92,6 +95,13 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, err
 	}
 
+	// Check if resources need updating to avoid unnecessary API calls
+	if !r.resourcesNeedUpdate(ctx, resources) {
+		log := log.FromContext(ctx)
+		log.V(1).Info("Resources are up to date, skipping update")
+		return ctrl.Result{RequeueAfter: time.Minute * 5}, nil
+	}
+
 	if err := r.createOrUpdateResources(ctx, resources, dashboard.Name); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -106,7 +116,52 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		}
 	}
 
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: time.Minute * 5}, nil
+}
+
+// resourcesNeedUpdate checks if resources actually need updating to avoid unnecessary API calls
+func (r *DashboardReconciler) resourcesNeedUpdate(ctx context.Context, resources []client.Object) bool {
+	log := log.FromContext(ctx)
+
+	for _, resource := range resources {
+		existing := reflect.New(reflect.TypeOf(resource).Elem()).Interface().(client.Object)
+		err := r.Get(ctx, client.ObjectKey{
+			Namespace: resource.GetNamespace(),
+			Name:      resource.GetName(),
+		}, existing)
+
+		if apierrors.IsNotFound(err) {
+			log.V(1).Info("Resource not found, needs creation", "type", resource.GetObjectKind().GroupVersionKind().Kind, "name", resource.GetName())
+			return true
+		}
+
+		if err != nil {
+			log.V(1).Info("Error getting resource, assuming update needed", "error", err)
+			return true
+		}
+
+		// For ConfigMaps, check if the data has changed
+		if configMap, ok := resource.(*corev1.ConfigMap); ok {
+			if existingCM, ok := existing.(*corev1.ConfigMap); ok {
+				if !reflect.DeepEqual(configMap.Data, existingCM.Data) {
+					log.V(1).Info("ConfigMap data changed, needs update")
+					return true
+				}
+			}
+		}
+
+		// For Deployments, check if the spec has changed
+		if deployment, ok := resource.(*appsv1.Deployment); ok {
+			if existingDep, ok := existing.(*appsv1.Deployment); ok {
+				if !reflect.DeepEqual(deployment.Spec, existingDep.Spec) {
+					log.V(1).Info("Deployment spec changed, needs update")
+					return true
+				}
+			}
+		}
+	}
+
+	return false
 }
 
 func (r *DashboardReconciler) handleFinalization(ctx context.Context, dashboard *homerv1alpha1.Dashboard) (bool, error) {
@@ -324,10 +379,115 @@ func (r *DashboardReconciler) buildHomerConfig(ctx context.Context, dashboard *h
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *DashboardReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	builder := ctrl.NewControllerManagedBy(mgr).
 		For(&homerv1alpha1.Dashboard{}).
 		Owns(&appsv1.Deployment{}).
-		Complete(r)
+		Owns(&corev1.ConfigMap{}).
+		Owns(&corev1.Service{}).
+		WithOptions(controller.Options{
+			MaxConcurrentReconciles: 1,
+		})
+
+	// Watch ingresses - they trigger reconciliation of all dashboards
+	builder = builder.Watches(&networkingv1.Ingress{},
+		handler.EnqueueRequestsFromMapFunc(r.findDashboardsForIngress))
+
+	// Add HTTPRoute watching if Gateway API is enabled
+	if r.EnableGatewayAPI {
+		builder = builder.Watches(&gatewayv1.HTTPRoute{},
+			handler.EnqueueRequestsFromMapFunc(r.findDashboardsForHTTPRoute)).
+			Watches(&gatewayv1.Gateway{},
+				handler.EnqueueRequestsFromMapFunc(r.findDashboardsForGateway))
+	}
+
+	return builder.Complete(r)
+}
+
+// findDashboardsForIngress finds all dashboards that should be reconciled when an ingress changes
+func (r *DashboardReconciler) findDashboardsForIngress(ctx context.Context, obj client.Object) []ctrl.Request {
+	ingress, ok := obj.(*networkingv1.Ingress)
+	if !ok {
+		return nil
+	}
+
+	dashboards := &homerv1alpha1.DashboardList{}
+	if err := r.List(ctx, dashboards); err != nil {
+		return nil
+	}
+
+	var requests []ctrl.Request
+	for _, dashboard := range dashboards.Items {
+		if shouldInclude, err := r.shouldIncludeIngress(ctx, ingress, &dashboard); err == nil && shouldInclude {
+			requests = append(requests, ctrl.Request{
+				NamespacedName: client.ObjectKey{
+					Namespace: dashboard.Namespace,
+					Name:      dashboard.Name,
+				},
+			})
+		}
+	}
+
+	return requests
+}
+
+// findDashboardsForHTTPRoute finds all dashboards that should be reconciled when an HTTPRoute changes
+func (r *DashboardReconciler) findDashboardsForHTTPRoute(ctx context.Context, obj client.Object) []ctrl.Request {
+	httpRoute, ok := obj.(*gatewayv1.HTTPRoute)
+	if !ok {
+		return nil
+	}
+
+	dashboards := &homerv1alpha1.DashboardList{}
+	if err := r.List(ctx, dashboards); err != nil {
+		return nil
+	}
+
+	var requests []ctrl.Request
+	for _, dashboard := range dashboards.Items {
+		if shouldInclude, err := r.shouldIncludeHTTPRoute(ctx, httpRoute, &dashboard); err == nil && shouldInclude {
+			requests = append(requests, ctrl.Request{
+				NamespacedName: client.ObjectKey{
+					Namespace: dashboard.Namespace,
+					Name:      dashboard.Name,
+				},
+			})
+		}
+	}
+
+	return requests
+}
+
+// findDashboardsForGateway finds all dashboards that should be reconciled when a Gateway changes
+func (r *DashboardReconciler) findDashboardsForGateway(ctx context.Context, obj client.Object) []ctrl.Request {
+	gateway, ok := obj.(*gatewayv1.Gateway)
+	if !ok {
+		return nil
+	}
+
+	dashboards := &homerv1alpha1.DashboardList{}
+	if err := r.List(ctx, dashboards); err != nil {
+		return nil
+	}
+
+	var requests []ctrl.Request
+	for _, dashboard := range dashboards.Items {
+		if dashboard.Spec.GatewaySelector != nil {
+			selector, err := metav1.LabelSelectorAsSelector(dashboard.Spec.GatewaySelector)
+			if err != nil {
+				continue
+			}
+			if selector.Matches(labels.Set(gateway.Labels)) {
+				requests = append(requests, ctrl.Request{
+					NamespacedName: client.ObjectKey{
+						Namespace: dashboard.Namespace,
+						Name:      dashboard.Name,
+					},
+				})
+			}
+		}
+	}
+
+	return requests
 }
 
 func (r *DashboardReconciler) shouldIncludeIngress(ctx context.Context, ingress *networkingv1.Ingress, dashboard *homerv1alpha1.Dashboard) (bool, error) {
