@@ -722,18 +722,18 @@ type SecretKeyRef struct {
 	Namespace string
 }
 
-// ResolveAPIKeyFromSecret resolves an API key from a Kubernetes Secret and updates the item
-func ResolveAPIKeyFromSecret(
+// resolveSecretValue is a helper function to resolve a secret value
+func resolveSecretValue(
 	ctx context.Context,
 	k8sClient client.Client,
 	item *Item,
 	secretRef *SecretKeyRef,
 	defaultNamespace string,
-) error {
+) (string, error) {
 	// Check if item has a type in Parameters (smart card indicator)
 	itemType := getItemType(item)
 	if secretRef == nil || itemType == "" {
-		return nil // No secret to resolve or not a smart card
+		return "", nil // No secret to resolve or not a smart card
 	}
 
 	secretNamespace := defaultNamespace
@@ -746,23 +746,39 @@ func ResolveAPIKeyFromSecret(
 		Name:      secretRef.Name,
 		Namespace: secretNamespace,
 	}, secret); err != nil {
-		return fmt.Errorf("secret %s/%s: %w", secretNamespace, secretRef.Name, err)
+		return "", fmt.Errorf("secret %s/%s: %w", secretNamespace, secretRef.Name, err)
 	}
 
 	if secret.Data == nil {
-		return fmt.Errorf("secret %s/%s: no data", secretNamespace, secretRef.Name)
+		return "", fmt.Errorf("secret %s/%s: no data", secretNamespace, secretRef.Name)
 	}
 
 	value, exists := secret.Data[secretRef.Key]
 	if !exists {
-		return fmt.Errorf("secret %s/%s: key %s not found", secretNamespace, secretRef.Name, secretRef.Key)
+		return "", fmt.Errorf("secret %s/%s: key %s not found", secretNamespace, secretRef.Name, secretRef.Key)
+	}
+
+	return string(value), nil
+}
+
+// ResolveAPIKeyFromSecret resolves an API key from a Kubernetes Secret and updates the item
+func ResolveAPIKeyFromSecret(
+	ctx context.Context,
+	k8sClient client.Client,
+	item *Item,
+	secretRef *SecretKeyRef,
+	defaultNamespace string,
+) error {
+	value, err := resolveSecretValue(ctx, k8sClient, item, secretRef, defaultNamespace)
+	if err != nil || value == "" {
+		return err
 	}
 
 	// Set the API key in the item Parameters
 	if item.Parameters == nil {
 		item.Parameters = make(map[string]string)
 	}
-	item.Parameters["apikey"] = string(value)
+	item.Parameters["apikey"] = value
 	return nil
 }
 
@@ -774,32 +790,9 @@ func ResolveTokenFromSecret(
 	secretRef *SecretKeyRef,
 	defaultNamespace string,
 ) error {
-	// Check if item has a type in Parameters (smart card indicator)
-	itemType := getItemType(item)
-	if secretRef == nil || itemType == "" {
-		return nil // No secret to resolve or not a smart card
-	}
-
-	secretNamespace := defaultNamespace
-	if secretRef.Namespace != "" {
-		secretNamespace = secretRef.Namespace
-	}
-
-	secret := &corev1.Secret{}
-	if err := k8sClient.Get(ctx, client.ObjectKey{
-		Name:      secretRef.Name,
-		Namespace: secretNamespace,
-	}, secret); err != nil {
-		return fmt.Errorf("secret %s/%s: %w", secretNamespace, secretRef.Name, err)
-	}
-
-	if secret.Data == nil {
-		return fmt.Errorf("secret %s/%s: no data", secretNamespace, secretRef.Name)
-	}
-
-	value, exists := secret.Data[secretRef.Key]
-	if !exists {
-		return fmt.Errorf("secret %s/%s: key %s not found", secretNamespace, secretRef.Name, secretRef.Key)
+	value, err := resolveSecretValue(ctx, k8sClient, item, secretRef, defaultNamespace)
+	if err != nil || value == "" {
+		return err
 	}
 
 	// Set the token in NestedObjects under customHeaders/Authorization
@@ -809,7 +802,7 @@ func ResolveTokenFromSecret(
 	if item.NestedObjects["customHeaders"] == nil {
 		item.NestedObjects["customHeaders"] = make(map[string]string)
 	}
-	item.NestedObjects["customHeaders"]["Authorization"] = fmt.Sprintf("Bearer %s", string(value))
+	item.NestedObjects["customHeaders"]["Authorization"] = fmt.Sprintf("Bearer %s", value)
 	return nil
 }
 
@@ -821,39 +814,16 @@ func ResolveUsernameFromSecret(
 	secretRef *SecretKeyRef,
 	defaultNamespace string,
 ) error {
-	// Check if item has a type in Parameters (smart card indicator)
-	itemType := getItemType(item)
-	if secretRef == nil || itemType == "" {
-		return nil // No secret to resolve or not a smart card
-	}
-
-	secretNamespace := defaultNamespace
-	if secretRef.Namespace != "" {
-		secretNamespace = secretRef.Namespace
-	}
-
-	secret := &corev1.Secret{}
-	if err := k8sClient.Get(ctx, client.ObjectKey{
-		Name:      secretRef.Name,
-		Namespace: secretNamespace,
-	}, secret); err != nil {
-		return fmt.Errorf("secret %s/%s: %w", secretNamespace, secretRef.Name, err)
-	}
-
-	if secret.Data == nil {
-		return fmt.Errorf("secret %s/%s: no data", secretNamespace, secretRef.Name)
-	}
-
-	value, exists := secret.Data[secretRef.Key]
-	if !exists {
-		return fmt.Errorf("secret %s/%s: key %s not found", secretNamespace, secretRef.Name, secretRef.Key)
+	value, err := resolveSecretValue(ctx, k8sClient, item, secretRef, defaultNamespace)
+	if err != nil || value == "" {
+		return err
 	}
 
 	// Set the username in the item Parameters
 	if item.Parameters == nil {
 		item.Parameters = make(map[string]string)
 	}
-	item.Parameters["username"] = string(value)
+	item.Parameters["username"] = value
 	return nil
 }
 
@@ -865,39 +835,16 @@ func ResolvePasswordFromSecret(
 	secretRef *SecretKeyRef,
 	defaultNamespace string,
 ) error {
-	// Check if item has a type in Parameters (smart card indicator)
-	itemType := getItemType(item)
-	if secretRef == nil || itemType == "" {
-		return nil // No secret to resolve or not a smart card
-	}
-
-	secretNamespace := defaultNamespace
-	if secretRef.Namespace != "" {
-		secretNamespace = secretRef.Namespace
-	}
-
-	secret := &corev1.Secret{}
-	if err := k8sClient.Get(ctx, client.ObjectKey{
-		Name:      secretRef.Name,
-		Namespace: secretNamespace,
-	}, secret); err != nil {
-		return fmt.Errorf("secret %s/%s: %w", secretNamespace, secretRef.Name, err)
-	}
-
-	if secret.Data == nil {
-		return fmt.Errorf("secret %s/%s: no data", secretNamespace, secretRef.Name)
-	}
-
-	value, exists := secret.Data[secretRef.Key]
-	if !exists {
-		return fmt.Errorf("secret %s/%s: key %s not found", secretNamespace, secretRef.Name, secretRef.Key)
+	value, err := resolveSecretValue(ctx, k8sClient, item, secretRef, defaultNamespace)
+	if err != nil || value == "" {
+		return err
 	}
 
 	// Set the password in the item Parameters
 	if item.Parameters == nil {
 		item.Parameters = make(map[string]string)
 	}
-	item.Parameters["password"] = string(value)
+	item.Parameters["password"] = value
 	return nil
 }
 
@@ -910,32 +857,9 @@ func ResolveHeaderFromSecret(
 	secretRef *SecretKeyRef,
 	defaultNamespace string,
 ) error {
-	// Check if item has a type in Parameters (smart card indicator)
-	itemType := getItemType(item)
-	if secretRef == nil || itemType == "" {
-		return nil // No secret to resolve or not a smart card
-	}
-
-	secretNamespace := defaultNamespace
-	if secretRef.Namespace != "" {
-		secretNamespace = secretRef.Namespace
-	}
-
-	secret := &corev1.Secret{}
-	if err := k8sClient.Get(ctx, client.ObjectKey{
-		Name:      secretRef.Name,
-		Namespace: secretNamespace,
-	}, secret); err != nil {
-		return fmt.Errorf("secret %s/%s: %w", secretNamespace, secretRef.Name, err)
-	}
-
-	if secret.Data == nil {
-		return fmt.Errorf("secret %s/%s: no data", secretNamespace, secretRef.Name)
-	}
-
-	value, exists := secret.Data[secretRef.Key]
-	if !exists {
-		return fmt.Errorf("secret %s/%s: key %s not found", secretNamespace, secretRef.Name, secretRef.Key)
+	value, err := resolveSecretValue(ctx, k8sClient, item, secretRef, defaultNamespace)
+	if err != nil || value == "" {
+		return err
 	}
 
 	// Set the custom header in NestedObjects under customHeaders
@@ -945,7 +869,7 @@ func ResolveHeaderFromSecret(
 	if item.NestedObjects["customHeaders"] == nil {
 		item.NestedObjects["customHeaders"] = make(map[string]string)
 	}
-	item.NestedObjects["customHeaders"][headerName] = string(value)
+	item.NestedObjects["customHeaders"][headerName] = value
 	return nil
 }
 
