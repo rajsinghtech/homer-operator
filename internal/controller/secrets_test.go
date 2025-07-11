@@ -310,8 +310,8 @@ var _ = Describe("Secret Integration Tests", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("failed to get secret"))
-			Expect(err.Error()).To(ContainSubstring(missingSecretName))
+			Expect(err.Error()).To(ContainSubstring("secret default/non-existent-secret"))
+			Expect(err.Error()).To(ContainSubstring("not found"))
 		})
 	})
 
@@ -405,8 +405,8 @@ var _ = Describe("Secret Integration Tests", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("key api-key not found in secret"))
-			Expect(err.Error()).To(ContainSubstring(secretName))
+			Expect(err.Error()).To(ContainSubstring("secret default/incomplete-secret"))
+			Expect(err.Error()).To(ContainSubstring("key api-key not found"))
 		})
 	})
 

@@ -217,18 +217,95 @@ func (r *DashboardReconciler) buildDeploymentConfig(dashboard *homerv1alpha1.Das
 func (r *DashboardReconciler) buildHomerConfig(ctx context.Context, dashboard *homerv1alpha1.Dashboard) (*homer.HomerConfig, error) {
 	homerConfig := dashboard.Spec.HomerConfig.DeepCopy()
 
-	if dashboard.Spec.Secrets != nil && dashboard.Spec.Secrets.APIKey != nil {
-		secretRef := &homer.SecretKeyRef{
-			Name:      dashboard.Spec.Secrets.APIKey.Name,
-			Key:       dashboard.Spec.Secrets.APIKey.Key,
-			Namespace: dashboard.Spec.Secrets.APIKey.Namespace,
+	if dashboard.Spec.Secrets != nil {
+		// Handle APIKey secrets
+		if dashboard.Spec.Secrets.APIKey != nil {
+			secretRef := &homer.SecretKeyRef{
+				Name:      dashboard.Spec.Secrets.APIKey.Name,
+				Key:       dashboard.Spec.Secrets.APIKey.Key,
+				Namespace: dashboard.Spec.Secrets.APIKey.Namespace,
+			}
+
+			for serviceIdx := range homerConfig.Services {
+				for itemIdx := range homerConfig.Services[serviceIdx].Items {
+					item := &homerConfig.Services[serviceIdx].Items[itemIdx]
+					if err := homer.ResolveAPIKeyFromSecret(ctx, r.Client, item, secretRef, dashboard.Namespace); err != nil {
+						return nil, err
+					}
+				}
+			}
 		}
 
-		for serviceIdx := range homerConfig.Services {
-			for itemIdx := range homerConfig.Services[serviceIdx].Items {
-				item := &homerConfig.Services[serviceIdx].Items[itemIdx]
-				if err := homer.ResolveAPIKeyFromSecret(ctx, r.Client, item, secretRef, dashboard.Namespace); err != nil {
-					return nil, err
+		// Handle Token secrets (Bearer tokens)
+		if dashboard.Spec.Secrets.Token != nil {
+			secretRef := &homer.SecretKeyRef{
+				Name:      dashboard.Spec.Secrets.Token.Name,
+				Key:       dashboard.Spec.Secrets.Token.Key,
+				Namespace: dashboard.Spec.Secrets.Token.Namespace,
+			}
+
+			for serviceIdx := range homerConfig.Services {
+				for itemIdx := range homerConfig.Services[serviceIdx].Items {
+					item := &homerConfig.Services[serviceIdx].Items[itemIdx]
+					if err := homer.ResolveTokenFromSecret(ctx, r.Client, item, secretRef, dashboard.Namespace); err != nil {
+						return nil, err
+					}
+				}
+			}
+		}
+
+		// Handle Username secrets
+		if dashboard.Spec.Secrets.Username != nil {
+			secretRef := &homer.SecretKeyRef{
+				Name:      dashboard.Spec.Secrets.Username.Name,
+				Key:       dashboard.Spec.Secrets.Username.Key,
+				Namespace: dashboard.Spec.Secrets.Username.Namespace,
+			}
+
+			for serviceIdx := range homerConfig.Services {
+				for itemIdx := range homerConfig.Services[serviceIdx].Items {
+					item := &homerConfig.Services[serviceIdx].Items[itemIdx]
+					if err := homer.ResolveUsernameFromSecret(ctx, r.Client, item, secretRef, dashboard.Namespace); err != nil {
+						return nil, err
+					}
+				}
+			}
+		}
+
+		// Handle Password secrets
+		if dashboard.Spec.Secrets.Password != nil {
+			secretRef := &homer.SecretKeyRef{
+				Name:      dashboard.Spec.Secrets.Password.Name,
+				Key:       dashboard.Spec.Secrets.Password.Key,
+				Namespace: dashboard.Spec.Secrets.Password.Namespace,
+			}
+
+			for serviceIdx := range homerConfig.Services {
+				for itemIdx := range homerConfig.Services[serviceIdx].Items {
+					item := &homerConfig.Services[serviceIdx].Items[itemIdx]
+					if err := homer.ResolvePasswordFromSecret(ctx, r.Client, item, secretRef, dashboard.Namespace); err != nil {
+						return nil, err
+					}
+				}
+			}
+		}
+
+		// Handle custom Headers secrets
+		if dashboard.Spec.Secrets.Headers != nil {
+			for headerName, secretRef := range dashboard.Spec.Secrets.Headers {
+				ref := &homer.SecretKeyRef{
+					Name:      secretRef.Name,
+					Key:       secretRef.Key,
+					Namespace: secretRef.Namespace,
+				}
+
+				for serviceIdx := range homerConfig.Services {
+					for itemIdx := range homerConfig.Services[serviceIdx].Items {
+						item := &homerConfig.Services[serviceIdx].Items[itemIdx]
+						if err := homer.ResolveHeaderFromSecret(ctx, r.Client, item, headerName, ref, dashboard.Namespace); err != nil {
+							return nil, err
+						}
+					}
 				}
 			}
 		}
