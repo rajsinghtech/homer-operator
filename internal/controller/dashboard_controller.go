@@ -150,10 +150,10 @@ func (r *DashboardReconciler) resourcesNeedUpdate(ctx context.Context, resources
 			}
 		}
 
-		// For Deployments, check if the spec has changed
+		// For Deployments, check if meaningful spec fields have changed
 		if deployment, ok := resource.(*appsv1.Deployment); ok {
 			if existingDep, ok := existing.(*appsv1.Deployment); ok {
-				if !reflect.DeepEqual(deployment.Spec, existingDep.Spec) {
+				if r.deploymentSpecsDiffer(deployment, existingDep) {
 					log.V(1).Info("Deployment spec changed, needs update")
 					return true
 				}
@@ -162,6 +162,97 @@ func (r *DashboardReconciler) resourcesNeedUpdate(ctx context.Context, resources
 	}
 
 	return false
+}
+
+// deploymentSpecsDiffer compares deployment specs semantically, ignoring metadata changes
+func (r *DashboardReconciler) deploymentSpecsDiffer(desired, existing *appsv1.Deployment) bool {
+	// Compare only meaningful fields that should trigger updates
+
+	// Check replicas
+	if *desired.Spec.Replicas != *existing.Spec.Replicas {
+		fmt.Printf("DEBUG: Replicas differ - desired: %d, existing: %d\n", *desired.Spec.Replicas, *existing.Spec.Replicas)
+		return true
+	}
+
+	// Check image changes in containers
+	if len(desired.Spec.Template.Spec.Containers) != len(existing.Spec.Template.Spec.Containers) {
+		fmt.Printf("DEBUG: Container count differs - desired: %d, existing: %d\n", len(desired.Spec.Template.Spec.Containers), len(existing.Spec.Template.Spec.Containers))
+		return true
+	}
+
+	for i, container := range desired.Spec.Template.Spec.Containers {
+		if i >= len(existing.Spec.Template.Spec.Containers) {
+			return true
+		}
+		existingContainer := existing.Spec.Template.Spec.Containers[i]
+
+		// Compare container image
+		if container.Image != existingContainer.Image {
+			fmt.Printf("DEBUG: Container %d image differs - desired: %s, existing: %s\n", i, container.Image, existingContainer.Image)
+			return true
+		}
+
+		// Compare container resources
+		if !reflect.DeepEqual(container.Resources, existingContainer.Resources) {
+			fmt.Printf("DEBUG: Container %d resources differ\n", i)
+			return true
+		}
+
+		// Compare environment variables (ignoring order)
+		if !r.envVarsEqual(container.Env, existingContainer.Env) {
+			fmt.Printf("DEBUG: Container %d env vars differ\n", i)
+			return true
+		}
+	}
+
+	// Check volume changes (comparing names and sources)
+	if !r.volumesEqual(desired.Spec.Template.Spec.Volumes, existing.Spec.Template.Spec.Volumes) {
+		fmt.Printf("DEBUG: Volumes differ\n")
+		return true
+	}
+
+	fmt.Printf("DEBUG: No differences found, deployment specs are equal\n")
+	return false
+}
+
+// envVarsEqual compares environment variables ignoring order
+func (r *DashboardReconciler) envVarsEqual(desired, existing []corev1.EnvVar) bool {
+	if len(desired) != len(existing) {
+		return false
+	}
+
+	desiredMap := make(map[string]string)
+	for _, env := range desired {
+		desiredMap[env.Name] = env.Value
+	}
+
+	for _, env := range existing {
+		if val, exists := desiredMap[env.Name]; !exists || val != env.Value {
+			return false
+		}
+	}
+
+	return true
+}
+
+// volumesEqual compares volumes by name and source, ignoring metadata
+func (r *DashboardReconciler) volumesEqual(desired, existing []corev1.Volume) bool {
+	if len(desired) != len(existing) {
+		return false
+	}
+
+	desiredMap := make(map[string]corev1.VolumeSource)
+	for _, vol := range desired {
+		desiredMap[vol.Name] = vol.VolumeSource
+	}
+
+	for _, vol := range existing {
+		if src, exists := desiredMap[vol.Name]; !exists || !reflect.DeepEqual(src, vol.VolumeSource) {
+			return false
+		}
+	}
+
+	return true
 }
 
 func (r *DashboardReconciler) handleFinalization(ctx context.Context, dashboard *homerv1alpha1.Dashboard) (bool, error) {
