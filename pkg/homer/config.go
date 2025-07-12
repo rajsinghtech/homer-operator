@@ -1639,7 +1639,7 @@ func determineServiceGroupWithCRDRespect(
 	}
 
 	// Try to find a suitable existing CRD service group
-	if existingGroup := findBestMatchingCRDServiceGroup(homerConfig, namespace, labels, annotations); existingGroup != "" {
+	if existingGroup := findBestMatchingCRDServiceGroup(homerConfig, namespace, annotations); existingGroup != "" {
 		return existingGroup
 	}
 
@@ -1651,11 +1651,13 @@ func determineServiceGroupWithCRDRespect(
 func findBestMatchingCRDServiceGroup(
 	homerConfig *HomerConfig,
 	namespace string,
-	labels map[string]string,
 	annotations map[string]string,
 ) string {
 	bestMatch := ""
 	bestScore := 0
+
+	// Minimum score threshold to avoid weak matches
+	const minScoreThreshold = 30
 
 	for _, service := range homerConfig.Services {
 		// Only consider CRD services (services with CRD items)
@@ -1669,8 +1671,8 @@ func findBestMatchingCRDServiceGroup(
 		}
 
 		// Score the match based on various criteria
-		score := scoreCRDServiceGroupMatch(serviceName, namespace, labels, annotations)
-		if score > bestScore {
+		score := scoreCRDServiceGroupMatch(serviceName, namespace, annotations)
+		if score > bestScore && score >= minScoreThreshold {
 			bestScore = score
 			bestMatch = serviceName
 		}
@@ -1693,68 +1695,32 @@ func hasCRDItems(service Service) bool {
 func scoreCRDServiceGroupMatch(
 	crdServiceName string,
 	discoveredNamespace string,
-	discoveredLabels map[string]string,
 	discoveredAnnotations map[string]string,
 ) int {
 	score := 0
 
-	// Normalize service name for comparison
+	// Check for explicit service name annotation first (highest priority)
+	if serviceNameAnnotation, exists := discoveredAnnotations["service.homer.rajsingh.info/name"]; exists {
+		if strings.EqualFold(serviceNameAnnotation, crdServiceName) {
+			score += 200 // Highest priority for explicit service name annotation
+		}
+		return score // If annotation exists, only consider annotation-based matching
+	}
+
+	// Fall back to namespace-based matching
 	normalizedCRDName := strings.ToLower(crdServiceName)
 	normalizedNamespace := strings.ToLower(discoveredNamespace)
 
 	// Direct name match with namespace
 	if normalizedCRDName == normalizedNamespace {
 		score += 100
-	}
-
-	// Partial name match with namespace
-	if strings.Contains(normalizedCRDName, normalizedNamespace) ||
+	} else if strings.Contains(normalizedCRDName, normalizedNamespace) ||
 		strings.Contains(normalizedNamespace, normalizedCRDName) {
+		// Partial name match with namespace (for namespace variations like "kube-system")
 		score += 50
 	}
 
-	// Check for common service group patterns
-	serviceGroupPatterns := map[string][]string{
-		"media":          {"media", "plex", "sonarr", "radarr", "lidarr", "readarr", "jellyfin", "transmission"},
-		"development":    {"dev", "development", "tools", "git", "code", "ci", "cd", "argocd", "jenkins"},
-		"infrastructure": {"infra", "infrastructure", "system", "monitoring", "logging", "metrics", "prometheus", "grafana"},
-		"security":       {"security", "auth", "authentication", "vault", "keycloak", "oauth"},
-		"home":           {"home", "automation", "iot", "smart", "homeassistant", "camera", "frigate"},
-		"storage":        {"storage", "backup", "sync", "nextcloud", "nas", "minio"},
-		"network":        {"network", "networking", "dns", "proxy", "vpn", "tailscale", "wireguard"},
-	}
-
-	for category, patterns := range serviceGroupPatterns {
-		if strings.Contains(normalizedCRDName, category) {
-			for _, pattern := range patterns {
-				if strings.Contains(normalizedNamespace, pattern) ||
-					containsPattern(discoveredLabels, pattern) ||
-					containsPattern(discoveredAnnotations, pattern) {
-					score += 30
-					break
-				}
-			}
-		}
-	}
-
-	// Check for explicit grouping annotations
-	if groupAnnotation, exists := discoveredAnnotations["service.homer.rajsingh.info/group"]; exists {
-		if strings.EqualFold(groupAnnotation, crdServiceName) {
-			score += 200 // Highest priority for explicit annotation
-		}
-	}
-
 	return score
-}
-
-// containsPattern checks if any value in a map contains the given pattern
-func containsPattern(m map[string]string, pattern string) bool {
-	for _, value := range m {
-		if strings.Contains(strings.ToLower(value), pattern) {
-			return true
-		}
-	}
-	return false
 }
 
 // validateCRDServicePreservation validates that CRD services are preserved after discovery
