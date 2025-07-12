@@ -341,3 +341,158 @@ func TestNumericAnnotationProcessing(t *testing.T) {
 		})
 	}
 }
+
+func TestIsItemHidden(t *testing.T) {
+	tests := []struct {
+		name     string
+		item     Item
+		expected bool
+	}{
+		{
+			name: "item with hide=true",
+			item: Item{
+				Parameters: map[string]string{
+					"hide": "true",
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "item with hide=false",
+			item: Item{
+				Parameters: map[string]string{
+					"hide": "false",
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "item with hide=1",
+			item: Item{
+				Parameters: map[string]string{
+					"hide": "1",
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "item with hide=0",
+			item: Item{
+				Parameters: map[string]string{
+					"hide": "0",
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "item with hide=yes",
+			item: Item{
+				Parameters: map[string]string{
+					"hide": "yes",
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "item with hide=no",
+			item: Item{
+				Parameters: map[string]string{
+					"hide": "no",
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "item with hide=non-empty string",
+			item: Item{
+				Parameters: map[string]string{
+					"hide": "anything",
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "item with hide=empty string",
+			item: Item{
+				Parameters: map[string]string{
+					"hide": "",
+				},
+			},
+			expected: false,
+		},
+		{
+			name:     "item without hide parameter",
+			item:     Item{},
+			expected: false,
+		},
+		{
+			name: "item with no parameters",
+			item: Item{
+				Parameters: nil,
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isItemHidden(&tt.item)
+			if result != tt.expected {
+				t.Errorf("isItemHidden() = %v, expected %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestHideAnnotationIntegration(t *testing.T) {
+	tests := []struct {
+		name        string
+		annotations map[string]string
+		expected    bool
+	}{
+		{
+			name: "hide annotation with true",
+			annotations: map[string]string{
+				"item.homer.rajsingh.info/hide": "true",
+			},
+			expected: true,
+		},
+		{
+			name: "hide annotation with false",
+			annotations: map[string]string{
+				"item.homer.rajsingh.info/hide": "false",
+			},
+			expected: false,
+		},
+		{
+			name: "hide annotation with 1",
+			annotations: map[string]string{
+				"item.homer.rajsingh.info/hide": "1",
+			},
+			expected: true,
+		},
+		{
+			name: "hide annotation case insensitive",
+			annotations: map[string]string{
+				"item.homer.rajsingh.info/hide": "TRUE",
+			},
+			expected: true,
+		},
+		{
+			name:        "no hide annotation",
+			annotations: map[string]string{},
+			expected:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			item := Item{}
+			processItemAnnotations(&item, tt.annotations)
+			result := isItemHidden(&item)
+			if result != tt.expected {
+				t.Errorf("isItemHidden() after processItemAnnotations() = %v, expected %v", result, tt.expected)
+			}
+		})
+	}
+}

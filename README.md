@@ -344,15 +344,74 @@ metadata:
     item.homer.rajsingh.info/environment: "production"   # User-defined fields
 ```
 
+#### Hide Items from Dashboard
+
+Control item visibility using the `hide` annotation:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: maintenance-app
+  annotations:
+    item.homer.rajsingh.info/name: "Maintenance Service"
+    item.homer.rajsingh.info/subtitle: "Currently under maintenance"
+    
+    # Hide this item from the dashboard
+    # Supports flexible boolean values (case-insensitive)
+    item.homer.rajsingh.info/hide: "true"     # true, yes, 1, on
+    # item.homer.rajsingh.info/hide: "false"  # false, no, 0, off
+    # item.homer.rajsingh.info/hide: "maintenance-mode"  # Any non-empty string = true
+spec:
+  rules:
+  - host: maintenance.example.com
+    # ... rest of spec
+
+---
+# HTTPRoute example
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: beta-api
+  annotations:
+    item.homer.rajsingh.info/name: "Beta API"
+    item.homer.rajsingh.info/hide: "yes"  # Hide during beta testing
+spec:
+  hostnames:
+  - beta-api.example.com
+  # ... rest of spec
+```
+
+**Hide Annotation Values:**
+- **Hidden**: `true`, `yes`, `1`, `on`, or any non-empty string
+- **Visible**: `false`, `no`, `0`, `off`, or empty string (default)
+- Case-insensitive and works with both Ingress and HTTPRoute resources
+
 #### Convention-Based Intelligence
 
 The system automatically detects parameter types using intelligent patterns:
 
-- **Booleans**: Parameters ending in `_enabled`, `_flag` or named `usecredentials`, `legacyapi`
+- **Booleans**: Parameters ending in `_enabled`, `_flag` or named `usecredentials`, `legacyapi`, `hide`
 - **Integers**: Parameters ending in `Interval`, `_value`, `Value` or named `timeout`, `limit`
 - **Objects**: Parameters named `headers`, `mapping`, `customHeaders`
 - **Arrays**: Comma-separated values (automatically cleaned and trimmed)
 - **Validation**: Built-in validation for `url`, `target`, numeric values
+
+#### Common Annotation Parameters
+
+| Annotation | Type | Description | Example Values |
+|------------|------|-------------|----------------|
+| `item.homer.rajsingh.info/name` | String | Display name for the item | `"My Application"` |
+| `item.homer.rajsingh.info/subtitle` | String | Subtitle/description | `"Production API"` |
+| `item.homer.rajsingh.info/logo` | String | URL to logo/icon | `"https://example.com/logo.png"` |
+| `item.homer.rajsingh.info/tag` | String | Tag label | `"production"`, `"api"` |
+| `item.homer.rajsingh.info/tagstyle` | String | Tag color style | `"is-primary"`, `"is-info"` |
+| `item.homer.rajsingh.info/keywords` | Array | Search keywords | `"api, service, web"` |
+| `item.homer.rajsingh.info/hide` | Boolean | Hide item from dashboard | `"true"`, `"false"`, `"yes"`, `"no"` |
+| `item.homer.rajsingh.info/target` | String | Link target | `"_blank"`, `"_self"` |
+| `item.homer.rajsingh.info/type` | String | Smart card type | `"Ping"`, `"Emby"`, `"AdGuard"` |
+| `service.homer.rajsingh.info/name` | String | Service group name | `"Production Services"` |
+| `service.homer.rajsingh.info/icon` | String | Service group icon | `"fas fa-server"` |
 
 ### Production Deployment
 

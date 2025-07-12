@@ -1067,6 +1067,12 @@ func createIngressItems(ingress networkingv1.Ingress, domainFilters []string) []
 
 		item := createIngressItem(ingress, host, validRuleCount)
 		processItemAnnotations(&item, ingress.ObjectMeta.Annotations)
+
+		// Skip items that are marked as hidden
+		if isItemHidden(&item) {
+			continue
+		}
+
 		items = append(items, item)
 	}
 
@@ -1203,6 +1209,12 @@ func updateHomerConfigWithHTTPRoutes(
 			item.LastUpdate = httproute.ObjectMeta.CreationTimestamp.Time.Format("2006-01-02T15:04:05Z")
 
 			processItemAnnotations(&item, httproute.ObjectMeta.Annotations)
+
+			// Skip items that are marked as hidden
+			if isItemHidden(&item) {
+				continue
+			}
+
 			items = append(items, item)
 		}
 	}
@@ -1536,6 +1548,26 @@ func validateAnnotationValue(fieldName, value string, level ValidationLevel) err
 		}
 	}
 	return nil
+}
+
+// isItemHidden checks if an item should be hidden based on annotation
+func isItemHidden(item *Item) bool {
+	if item.Parameters == nil {
+		return false
+	}
+
+	// Check for hide parameter
+	if hideValue, exists := item.Parameters["hide"]; exists {
+		// Use smart type inference to handle boolean values
+		hideInterface := smartInferType(hideValue)
+		if hideBool, ok := hideInterface.(bool); ok {
+			return hideBool
+		}
+		// If not a boolean, treat non-empty string as true
+		return hideValue != ""
+	}
+
+	return false
 }
 
 // ServiceGroupingConfig defines how services should be grouped
