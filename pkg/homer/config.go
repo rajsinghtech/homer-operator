@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -2103,6 +2104,28 @@ func normalizeHomerConfig(config *HomerConfig) {
 	// Set header to true by default if not explicitly set
 	if !config.Header {
 		config.Header = true
+	}
+
+	// Sort services and items alphabetically for consistent ordering
+	sortServicesAndItems(config)
+}
+
+// sortServicesAndItems sorts services and their items alphabetically by name
+func sortServicesAndItems(config *HomerConfig) {
+	// Sort services alphabetically by name
+	sort.Slice(config.Services, func(i, j int) bool {
+		nameI := getServiceName(&config.Services[i])
+		nameJ := getServiceName(&config.Services[j])
+		return strings.ToLower(nameI) < strings.ToLower(nameJ)
+	})
+
+	// Sort items within each service alphabetically by name
+	for i := range config.Services {
+		sort.Slice(config.Services[i].Items, func(x, y int) bool {
+			nameX := getItemName(&config.Services[i].Items[x])
+			nameY := getItemName(&config.Services[i].Items[y])
+			return strings.ToLower(nameX) < strings.ToLower(nameY)
+		})
 	}
 }
 
