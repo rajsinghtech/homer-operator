@@ -153,7 +153,7 @@ func (r *DashboardReconciler) resourcesNeedUpdate(ctx context.Context, resources
 		// For Deployments, check if meaningful spec fields have changed
 		if deployment, ok := resource.(*appsv1.Deployment); ok {
 			if existingDep, ok := existing.(*appsv1.Deployment); ok {
-				if r.deploymentSpecsDiffer(deployment, existingDep) {
+				if r.deploymentSpecsDiffer(ctx, deployment, existingDep) {
 					log.V(1).Info("Deployment spec changed, needs update")
 					return true
 				}
@@ -165,18 +165,19 @@ func (r *DashboardReconciler) resourcesNeedUpdate(ctx context.Context, resources
 }
 
 // deploymentSpecsDiffer compares deployment specs semantically, ignoring metadata changes
-func (r *DashboardReconciler) deploymentSpecsDiffer(desired, existing *appsv1.Deployment) bool {
+func (r *DashboardReconciler) deploymentSpecsDiffer(ctx context.Context, desired, existing *appsv1.Deployment) bool {
+	log := log.FromContext(ctx)
 	// Compare only meaningful fields that should trigger updates
 
 	// Check replicas
 	if *desired.Spec.Replicas != *existing.Spec.Replicas {
-		fmt.Printf("DEBUG: Replicas differ - desired: %d, existing: %d\n", *desired.Spec.Replicas, *existing.Spec.Replicas)
+		log.V(1).Info("Replicas differ", "desired", *desired.Spec.Replicas, "existing", *existing.Spec.Replicas)
 		return true
 	}
 
 	// Check image changes in containers
 	if len(desired.Spec.Template.Spec.Containers) != len(existing.Spec.Template.Spec.Containers) {
-		fmt.Printf("DEBUG: Container count differs - desired: %d, existing: %d\n", len(desired.Spec.Template.Spec.Containers), len(existing.Spec.Template.Spec.Containers))
+		log.V(1).Info("Container count differs", "desired", len(desired.Spec.Template.Spec.Containers), "existing", len(existing.Spec.Template.Spec.Containers))
 		return true
 	}
 
@@ -188,30 +189,36 @@ func (r *DashboardReconciler) deploymentSpecsDiffer(desired, existing *appsv1.De
 
 		// Compare container image
 		if container.Image != existingContainer.Image {
-			fmt.Printf("DEBUG: Container %d image differs - desired: %s, existing: %s\n", i, container.Image, existingContainer.Image)
+			log.V(1).Info("Container image differs", "index", i, "desired", container.Image, "existing", existingContainer.Image)
 			return true
 		}
 
 		// Compare container resources
 		if !reflect.DeepEqual(container.Resources, existingContainer.Resources) {
-			fmt.Printf("DEBUG: Container %d resources differ\n", i)
+			log.V(1).Info("Container resources differ", "index", i)
+			return true
+		}
+
+		// Check volume mounts
+		if !reflect.DeepEqual(container.VolumeMounts, existingContainer.VolumeMounts) {
+			log.V(1).Info("Container volume mounts differ", "index", i)
 			return true
 		}
 
 		// Compare environment variables (ignoring order)
 		if !r.envVarsEqual(container.Env, existingContainer.Env) {
-			fmt.Printf("DEBUG: Container %d env vars differ\n", i)
+			log.V(1).Info("Container env vars differ", "index", i)
 			return true
 		}
 	}
 
 	// Check volume changes (comparing names and sources)
 	if !r.volumesEqual(desired.Spec.Template.Spec.Volumes, existing.Spec.Template.Spec.Volumes) {
-		fmt.Printf("DEBUG: Volumes differ\n")
+		log.V(1).Info("Volumes differ")
 		return true
 	}
 
-	fmt.Printf("DEBUG: No differences found, deployment specs are equal\n")
+	log.V(1).Info("No differences found, deployment specs are equal")
 	return false
 }
 
