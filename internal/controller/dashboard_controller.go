@@ -235,24 +235,50 @@ func (r *DashboardReconciler) envVarsEqual(desired, existing []corev1.EnvVar) bo
 	return true
 }
 
-// volumesEqual compares volumes by name and source, ignoring metadata
+// volumesEqual compares volumes by name and source, ignoring metadata and Kubernetes defaults
 func (r *DashboardReconciler) volumesEqual(desired, existing []corev1.Volume) bool {
 	if len(desired) != len(existing) {
 		return false
 	}
 
-	desiredMap := make(map[string]corev1.VolumeSource)
+	desiredMap := make(map[string]corev1.Volume)
 	for _, vol := range desired {
-		desiredMap[vol.Name] = vol.VolumeSource
+		desiredMap[vol.Name] = vol
 	}
 
 	for _, vol := range existing {
-		if src, exists := desiredMap[vol.Name]; !exists || !reflect.DeepEqual(src, vol.VolumeSource) {
+		desiredVol, exists := desiredMap[vol.Name]
+		if !exists {
+			return false
+		}
+
+		if !r.volumeSourcesEqual(desiredVol.VolumeSource, vol.VolumeSource) {
 			return false
 		}
 	}
 
 	return true
+}
+
+// volumeSourcesEqual compares volume sources with tolerance for Kubernetes defaults
+func (r *DashboardReconciler) volumeSourcesEqual(desired, existing corev1.VolumeSource) bool {
+	// Compare ConfigMap volumes
+	if desired.ConfigMap != nil && existing.ConfigMap != nil {
+		return desired.ConfigMap.Name == existing.ConfigMap.Name
+	}
+
+	// Compare EmptyDir volumes (always considered equal if both are EmptyDir)
+	if desired.EmptyDir != nil && existing.EmptyDir != nil {
+		return true
+	}
+
+	// Compare Secret volumes
+	if desired.Secret != nil && existing.Secret != nil {
+		return desired.Secret.SecretName == existing.Secret.SecretName
+	}
+
+	// For other volume types, fall back to deep equal
+	return reflect.DeepEqual(desired, existing)
 }
 
 func (r *DashboardReconciler) handleFinalization(ctx context.Context, dashboard *homerv1alpha1.Dashboard) (bool, error) {
