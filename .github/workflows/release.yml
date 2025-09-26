@@ -116,7 +116,7 @@ jobs:
           done
 
       - name: Generate SBOM
-        uses: anchore/sbom-action@v0.17.7
+        uses: anchore/sbom-action@v0.20.6
         with:
           image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
           format: spdx-json
