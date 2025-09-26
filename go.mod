@@ -1,6 +1,6 @@
 module github.com/rajsinghtech/homer-operator
 
-go 1.24.4
+go 1.24.7
 
 require (
 	github.com/onsi/ginkgo/v2 v2.23.4
