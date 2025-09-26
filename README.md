@@ -6,6 +6,7 @@
   [![Go Report Card](https://goreportcard.com/badge/github.com/rajsinghtech/homer-operator)](https://goreportcard.com/report/github.com/rajsinghtech/homer-operator)
   [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
   [![Kubernetes](https://img.shields.io/badge/Kubernetes-v1.20+-blue.svg)](https://kubernetes.io/)
+  [![Star History Chart](https://api.star-history.com/svg?repos=rajsinghtech/homer-operator)](https://star-history.com/#rajsinghtech/homer-operator)
 
   **Kubernetes operator for automated Homer dashboard deployment and management**
   
