@@ -99,6 +99,12 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if !r.resourcesNeedUpdate(ctx, resources) {
 		log := log.FromContext(ctx)
 		log.V(1).Info("Resources are up to date, skipping update")
+		// Still update status even when resources don't need updating
+		if err := r.updateStatus(ctx, &dashboard); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, err
+			}
+		}
 		return ctrl.Result{RequeueAfter: time.Minute * 5}, nil
 	}
 
@@ -999,10 +1005,23 @@ func (r *DashboardReconciler) updateStatus(ctx context.Context, dashboard *homer
 	// Simplified status logic: Ready = deployment exists and Available condition is true
 	ready := false
 	availableReplicas := int32(0)
+	readyReplicas := int32(0)
+	replicas := int32(1) // Default value
+
+	// Get desired replicas from dashboard spec
+	if dashboard.Spec.Replicas != nil {
+		replicas = *dashboard.Spec.Replicas
+	}
 
 	if err == nil {
 		// Deployment exists, check if it's available
 		availableReplicas = deployment.Status.AvailableReplicas
+		readyReplicas = deployment.Status.ReadyReplicas
+
+		// Update replicas from deployment spec if it differs
+		if deployment.Spec.Replicas != nil {
+			replicas = *deployment.Spec.Replicas
+		}
 
 		// Check for Available condition (standard Kubernetes pattern)
 		for _, condition := range deployment.Status.Conditions {
@@ -1014,6 +1033,8 @@ func (r *DashboardReconciler) updateStatus(ctx context.Context, dashboard *homer
 
 		log.V(2).Info("Deployment status check",
 			"deploymentName", deployment.Name,
+			"replicas", replicas,
+			"readyReplicas", readyReplicas,
 			"availableReplicas", availableReplicas,
 			"ready", ready)
 	} else if apierrors.IsNotFound(err) {
@@ -1027,7 +1048,10 @@ func (r *DashboardReconciler) updateStatus(ctx context.Context, dashboard *homer
 	// Update status using patch to avoid conflicts
 	patch := client.MergeFrom(dashboard.DeepCopy())
 	dashboard.Status.Ready = ready
+	dashboard.Status.Replicas = replicas
+	dashboard.Status.ReadyReplicas = readyReplicas
 	dashboard.Status.AvailableReplicas = availableReplicas
+	dashboard.Status.ObservedGeneration = dashboard.Generation
 
 	if err := r.Status().Patch(ctx, dashboard, patch); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -1040,6 +1064,8 @@ func (r *DashboardReconciler) updateStatus(ctx context.Context, dashboard *homer
 
 	log.V(2).Info("Status updated successfully",
 		"ready", dashboard.Status.Ready,
+		"replicas", dashboard.Status.Replicas,
+		"readyReplicas", dashboard.Status.ReadyReplicas,
 		"availableReplicas", dashboard.Status.AvailableReplicas)
 
 	return nil

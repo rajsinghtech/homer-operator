@@ -89,14 +89,27 @@ type DashboardStatus struct {
 	// Ready indicates if the Homer dashboard deployment is ready
 	Ready bool `json:"ready"`
 
+	// Replicas is the desired number of replicas
+	Replicas int32 `json:"replicas,omitempty"`
+
+	// ReadyReplicas is the number of ready replicas
+	ReadyReplicas int32 `json:"readyReplicas,omitempty"`
+
 	// AvailableReplicas is the number of available replicas
 	AvailableReplicas int32 `json:"availableReplicas,omitempty"`
+
+	// Conditions represent the latest available observations of the Dashboard's current state
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// ObservedGeneration is the generation observed by the controller
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
 //+kubebuilder:object:root=true
 //+kubebuilder:subresource:status
-//+kubebuilder:printcolumn:name="Ready",type=boolean,JSONPath=`.status.ready`
-//+kubebuilder:printcolumn:name="Replicas",type=string,JSONPath=`.status.availableReplicas`
+//+kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.readyReplicas`,description="Ready replicas"
+//+kubebuilder:printcolumn:name="Replicas",type=string,JSONPath=`.status.replicas`,description="Desired replicas"
+//+kubebuilder:printcolumn:name="Available",type=string,JSONPath=`.status.availableReplicas`,description="Available replicas"
 //+kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Dashboard is the Schema for the dashboards API
