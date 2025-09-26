@@ -172,7 +172,7 @@ var _ = Describe("Asset Management Tests", func() {
 			// Check that sidecar command includes custom assets staging
 			sidecarCommand := sidecarContainer.Command[2] // sh -c "command"
 			Expect(sidecarCommand).To(ContainSubstring("echo 'Setting up custom assets...'"))
-			Expect(sidecarCommand).To(ContainSubstring("[ -f /custom-assets/$file ] && cp /custom-assets/$file /www/assets/ || true"))
+			Expect(sidecarCommand).To(ContainSubstring("cp \"$file\" /www/assets/"))
 		})
 	})
 

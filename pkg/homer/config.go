@@ -611,8 +611,13 @@ func buildSidecarCommand(config *DeploymentConfig) string {
 	// Copy custom assets if ConfigMap is provided
 	if config != nil && config.AssetsConfigMapName != "" {
 		cmd += "echo 'Setting up custom assets...' && "
-		cmd += "for file in favicon.ico apple-touch-icon.png pwa-192x192.png pwa-512x512.png; do " +
-			"[ -f /custom-assets/$file ] && cp /custom-assets/$file /www/assets/ || true; done && "
+		// Dynamically copy all files from custom-assets directory
+		cmd += "if [ -d /custom-assets ] && [ \"$(ls -A /custom-assets 2>/dev/null)\" ]; then " +
+			"cd /custom-assets && " +
+			"for file in *; do " +
+			"[ -f \"$file\" ] && cp \"$file\" /www/assets/ && echo \"Copied $file\" || true; " +
+			"done; " +
+			"cd /; fi && "
 	}
 
 	// Add PWA manifest if provided
