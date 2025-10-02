@@ -45,6 +45,7 @@ const (
 	DangerValueField    = "danger_value"
 	BooleanTrue         = "true"
 	BooleanFalse        = "false"
+	FooterHidden        = "__FOOTER_HIDDEN__"
 	NamespaceIconURL    = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/" +
 		"resources/labeled/ns-128.png"
 	IngressIconURL = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/" +
@@ -91,6 +92,52 @@ type HomerConfig struct {
 	Links             []Link        `json:"links,omitempty" yaml:"links,omitempty"`
 	Services          []Service     `json:"services,omitempty" yaml:"services,omitempty"`
 	ExternalConfig    string        `json:"externalConfig,omitempty" yaml:"externalConfig,omitempty"`
+}
+
+// UnmarshalYAML custom unmarshaler to handle footer: false
+func (c *HomerConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	type Alias HomerConfig
+	aux := &struct {
+		Footer interface{} `yaml:"footer,omitempty"`
+		*Alias
+	}{
+		Alias: (*Alias)(c),
+	}
+	if err := unmarshal(aux); err != nil {
+		return err
+	}
+	switch v := aux.Footer.(type) {
+	case bool:
+		if !v {
+			c.Footer = FooterHidden
+		}
+	case string:
+		c.Footer = v
+	}
+	return nil
+}
+
+// UnmarshalJSON custom unmarshaler to handle footer: false
+func (c *HomerConfig) UnmarshalJSON(data []byte) error {
+	type Alias HomerConfig
+	aux := &struct {
+		Footer interface{} `json:"footer,omitempty"`
+		*Alias
+	}{
+		Alias: (*Alias)(c),
+	}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	switch v := aux.Footer.(type) {
+	case bool:
+		if !v {
+			c.Footer = FooterHidden
+		}
+	case string:
+		c.Footer = v
+	}
+	return nil
 }
 
 // ProxyConfig contains configuration for proxy settings.
@@ -2134,7 +2181,11 @@ func addBasicFields(configMap map[string]interface{}, config *HomerConfig) {
 	}
 	configMap["header"] = config.Header
 	if config.Footer != "" {
-		configMap["footer"] = config.Footer
+		if config.Footer == FooterHidden {
+			configMap["footer"] = false
+		} else {
+			configMap["footer"] = config.Footer
+		}
 	}
 	if config.Columns != "" {
 		configMap["columns"] = config.Columns

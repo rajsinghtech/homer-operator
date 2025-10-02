@@ -244,6 +244,39 @@ var _ = Describe("Homer Operator E2E Tests", func() {
 			Expect(configMap.Data["config.yml"]).To(ContainSubstring("footer: Updated Footer"))
 		})
 
+		It("should support footer: false to hide footer", func() {
+			By("Creating Dashboard with footer: false")
+			dashboard := &homerv1alpha1.Dashboard{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "e2e-footer-false-dashboard",
+					Namespace: testNs,
+				},
+				Spec: homerv1alpha1.DashboardSpec{
+					HomerConfig: homer.HomerConfig{
+						Title:    "Footer False Test",
+						Subtitle: "Testing footer opt-out",
+						Footer:   homer.FooterHidden,
+					},
+				},
+			}
+			err := k8sClient.Create(ctx, dashboard)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Waiting for ConfigMap to be created")
+			configMap := &corev1.ConfigMap{}
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, types.NamespacedName{
+					Name:      "e2e-footer-false-dashboard-homer",
+					Namespace: testNs,
+				}, configMap)
+				return err == nil
+			}, time.Minute*2, time.Second*5).Should(BeTrue())
+
+			By("Verifying footer: false is in configuration")
+			Expect(configMap.Data["config.yml"]).To(ContainSubstring("title: Footer False Test"))
+			Expect(configMap.Data["config.yml"]).To(ContainSubstring("footer: false"))
+		})
+
 		It("should clean up resources when Dashboard is deleted", func() {
 			By("Creating Dashboard")
 			dashboard := &homerv1alpha1.Dashboard{

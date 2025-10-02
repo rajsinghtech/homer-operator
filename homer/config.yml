@@ -17,7 +17,7 @@ header: true # Set to false to hide the header
 # Optional: Different hotkey for search, defaults to "/"
 # hotkey:
 #   search: "Shift"
-footer: '<p>Homer-Operator</p>' # set false if you want to hide it.
+footer: '<p>Homer-Operator</p>' # Set to false to hide the footer: footer: false
 
 columns: "3" # "auto" or number (must be a factor of 12: 1, 2, 3, 4, 6, 12)
 connectivityCheck:
