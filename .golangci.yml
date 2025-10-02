@@ -1,40 +1,86 @@
-version: 2
+version: "2"
 
 run:
+  go: "1.25.1"
   timeout: 10m
   allow-parallel-runners: true
 
-issues:
-  # don't skip warning about doc comments
-  # don't exclude the default set of lint
-  exclude-use-default: false
-  # restore some of the defaults
-  # (fill in the rest as needed)
-  exclude-rules:
-    - path: "api/*"
-      linters:
-        - lll
-    - path: "internal/*"
-      linters:
-        - dupl
-        - lll
 linters:
-  disable-all: true
-  disable:
-    - staticcheck  # Disabled due to style-only suggestions
+  default: none
   enable:
-    - errcheck
-    - copyloopvar
-    - goconst
-    - gocyclo
-    - govet
-    - ineffassign
-    - misspell
-    - nakedret
-    - prealloc
-    - unused
+    # Error detection
+    - errcheck          # Check for unchecked errors
+    - govet             # Vet examines Go source code
+    - ineffassign       # Detect ineffectual assignments
+    - unused            # Check for unused code
+
+    # Code quality
+    - copyloopvar       # Detect loop variable copying issues
+    - errorlint         # Error wrapping issues
+    - ginkgolinter      # Enforce ginkgo/gomega best practices
+    - goconst           # Repeated strings that could be constants
+    - gocyclo           # Cyclomatic complexity
+    - misspell          # Spell checker
+    - nakedret          # Naked returns in long functions
+    - nilerr            # Check error handling patterns
+    - prealloc          # Find slice preallocation opportunities
+
+    # Security & reliability
+    - bodyclose         # Check HTTP response body closure
+    - errchkjson        # Check JSON encoding errors
+    - makezero          # Find slice declarations with non-zero length
+
+    # Style (selective)
+    - unconvert         # Remove unnecessary type conversions
+    - unparam           # Unused function parameters
+    - whitespace        # Unnecessary whitespace
+
+    # Staticcheck (enabled with exclusions)
+    - staticcheck
+
+  settings:
+    govet:
+      disable:
+        - fieldalignment  # Don't enforce struct field alignment
+        - shadow          # Variable shadowing is sometimes acceptable
+      enable-all: true
+
+    staticcheck:
+      checks:
+        - "all"
+        - "-QF1001"  # De Morgan's law (style preference)
+        - "-QF1008"  # Embedded field usage (style preference)
+        - "-ST1000"  # Package comments (not always needed)
+        - "-ST1001"  # Dot imports acceptable in tests
+        - "-ST1003"  # Naming conventions (allow Url instead of URL for JSON compat)
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  exclude-use-default: false
+
+  exclusions:
+    generated: strict
+    paths:
+      - "zz_generated.*\\.go$"
+
+    rules:
+      # Allow dupl in test files
+      - linters:
+          - dupl
+        path: "_test\\.go$"
+
+      # Long lines acceptable in API definitions
+      - linters:
+          - lll
+        path: "api/.*\\.go$"
 
 formatters:
   enable:
     - gofmt
     - goimports
+
+  exclusions:
+    generated: strict
+    paths:
+      - "zz_generated.*\\.go$"

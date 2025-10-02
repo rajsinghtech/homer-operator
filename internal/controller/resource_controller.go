@@ -54,7 +54,6 @@ type GenericResourceReconciler struct {
 }
 
 func (r *GenericResourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-
 	resourceInfo, err := r.getResourceInfo(ctx, req)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -94,7 +93,6 @@ func (r *GenericResourceReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			if err := utils.UpdateConfigMapWithRetry(ctx, r.Client, &configMap, dashboard.Name); err != nil {
 				return ctrl.Result{}, err
 			}
-
 		}
 	}
 
