@@ -19,4 +19,5 @@ package controller
 const (
 	dashboardFinalizer = "homer.rajsingh.info/finalizer"
 	gatewayKind        = "Gateway"
+	localClusterName   = "local"
 )

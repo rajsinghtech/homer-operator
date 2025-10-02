@@ -143,7 +143,7 @@ func (m *ClusterManager) UpdateClusters(ctx context.Context, dashboard *homerv1a
 
 	// Remove clusters that are no longer in the configuration
 	for name := range m.clients {
-		if name == "local" {
+		if name == localClusterName {
 			continue // Never remove local cluster
 		}
 		if !activeClusters[name] {
@@ -153,9 +153,9 @@ func (m *ClusterManager) UpdateClusters(ctx context.Context, dashboard *homerv1a
 	}
 
 	// Ensure local cluster is always present
-	if _, ok := m.clients["local"]; !ok {
-		m.clients["local"] = &ClusterClient{
-			Name:      "local",
+	if _, ok := m.clients[localClusterName]; !ok {
+		m.clients[localClusterName] = &ClusterClient{
+			Name:      localClusterName,
 			Client:    m.localClient,
 			Connected: true,
 			LastCheck: time.Now(),
@@ -236,7 +236,7 @@ func (m *ClusterManager) GetClusterStatuses() []homerv1alpha1.ClusterConnectionS
 
 	statuses := []homerv1alpha1.ClusterConnectionStatus{}
 	for name, cluster := range m.clients {
-		if name == "local" {
+		if name == localClusterName {
 			continue // Don't report local cluster status
 		}
 
@@ -269,7 +269,7 @@ func (m *ClusterManager) DiscoverIngresses(ctx context.Context, dashboard *homer
 	log := log.FromContext(ctx)
 
 	for name, cluster := range m.clients {
-		if !cluster.Connected && name != "local" {
+		if !cluster.Connected && name != localClusterName {
 			log.V(1).Info("Skipping disconnected cluster", "cluster", name)
 			continue
 		}
@@ -278,7 +278,7 @@ func (m *ClusterManager) DiscoverIngresses(ctx context.Context, dashboard *homer
 		if err != nil {
 			log.Error(err, "Failed to discover ingresses", "cluster", name)
 			// Mark cluster as disconnected on error
-			if name != "local" {
+			if name != localClusterName {
 				cluster.Connected = false
 				cluster.LastError = err
 				cluster.LastCheck = time.Now()
@@ -287,7 +287,7 @@ func (m *ClusterManager) DiscoverIngresses(ctx context.Context, dashboard *homer
 		}
 
 		// Update connection status on success
-		if name != "local" {
+		if name != localClusterName {
 			cluster.Connected = true
 			cluster.LastError = nil
 			cluster.LastCheck = time.Now()
@@ -331,7 +331,7 @@ func (m *ClusterManager) discoverClusterIngresses(ctx context.Context, cluster *
 	var selector *metav1.LabelSelector
 	if cluster.ClusterCfg != nil && cluster.ClusterCfg.IngressSelector != nil {
 		selector = cluster.ClusterCfg.IngressSelector
-	} else if cluster.Name == "local" && dashboard.Spec.IngressSelector != nil {
+	} else if cluster.Name == localClusterName && dashboard.Spec.IngressSelector != nil {
 		selector = dashboard.Spec.IngressSelector
 	}
 
@@ -395,7 +395,7 @@ func (m *ClusterManager) DiscoverHTTPRoutes(ctx context.Context, dashboard *home
 	log := log.FromContext(ctx)
 
 	for name, cluster := range m.clients {
-		if !cluster.Connected && name != "local" {
+		if !cluster.Connected && name != localClusterName {
 			log.V(1).Info("Skipping disconnected cluster", "cluster", name)
 			continue
 		}
@@ -404,7 +404,7 @@ func (m *ClusterManager) DiscoverHTTPRoutes(ctx context.Context, dashboard *home
 		if err != nil {
 			log.Error(err, "Failed to discover HTTPRoutes", "cluster", name)
 			// Mark cluster as disconnected on error
-			if name != "local" {
+			if name != localClusterName {
 				cluster.Connected = false
 				cluster.LastError = err
 				cluster.LastCheck = time.Now()
@@ -413,7 +413,7 @@ func (m *ClusterManager) DiscoverHTTPRoutes(ctx context.Context, dashboard *home
 		}
 
 		// Update connection status on success
-		if name != "local" {
+		if name != localClusterName {
 			cluster.Connected = true
 			cluster.LastError = nil
 			cluster.LastCheck = time.Now()
@@ -490,7 +490,7 @@ func (m *ClusterManager) shouldIncludeHTTPRoute(ctx context.Context, cluster *Cl
 	var httpRouteSelector *metav1.LabelSelector
 	if cluster.ClusterCfg != nil && cluster.ClusterCfg.HTTPRouteSelector != nil {
 		httpRouteSelector = cluster.ClusterCfg.HTTPRouteSelector
-	} else if cluster.Name == "local" && dashboard.Spec.HTTPRouteSelector != nil {
+	} else if cluster.Name == localClusterName && dashboard.Spec.HTTPRouteSelector != nil {
 		httpRouteSelector = dashboard.Spec.HTTPRouteSelector
 	}
 
@@ -508,7 +508,7 @@ func (m *ClusterManager) shouldIncludeHTTPRoute(ctx context.Context, cluster *Cl
 	var gatewaySelector *metav1.LabelSelector
 	if cluster.ClusterCfg != nil && cluster.ClusterCfg.GatewaySelector != nil {
 		gatewaySelector = cluster.ClusterCfg.GatewaySelector
-	} else if cluster.Name == "local" && dashboard.Spec.GatewaySelector != nil {
+	} else if cluster.Name == localClusterName && dashboard.Spec.GatewaySelector != nil {
 		gatewaySelector = dashboard.Spec.GatewaySelector
 	}
 
@@ -556,7 +556,7 @@ func (m *ClusterManager) UpdateClusterStatuses(statuses []homerv1alpha1.ClusterC
 
 	// Update counts
 	for clusterName, ingresses := range clusterIngresses {
-		if clusterName == "local" {
+		if clusterName == localClusterName {
 			continue
 		}
 		if status, ok := statusMap[clusterName]; ok {
@@ -565,7 +565,7 @@ func (m *ClusterManager) UpdateClusterStatuses(statuses []homerv1alpha1.ClusterC
 	}
 
 	for clusterName, httproutes := range clusterHTTPRoutes {
-		if clusterName == "local" {
+		if clusterName == localClusterName {
 			continue
 		}
 		if status, ok := statusMap[clusterName]; ok {
