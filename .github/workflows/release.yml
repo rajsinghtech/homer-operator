@@ -10,7 +10,7 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  GO_VERSION: '1.24'
+  GO_VERSION: '1.25.1'
 
 jobs:
   release:
