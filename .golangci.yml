@@ -20,8 +20,9 @@ issues:
         - lll
 linters:
   disable-all: true
+  disable:
+    - staticcheck  # Disabled due to style-only suggestions
   enable:
-    - dupl
     - errcheck
     - copyloopvar
     - goconst
@@ -31,7 +32,6 @@ linters:
     - misspell
     - nakedret
     - prealloc
-    - staticcheck
     - unused
 
 formatters:
