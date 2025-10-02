@@ -82,6 +82,67 @@ type DashboardSpec struct {
 
 	// Advanced configures advanced aggregation and analysis features.
 	Advanced *AdvancedConfig `json:"advanced,omitempty"`
+
+	// RemoteClusters configures discovery from additional Kubernetes clusters.
+	// When specified, the operator will connect to these clusters and discover
+	// Ingress/HTTPRoute resources from them in addition to the local cluster.
+	RemoteClusters []RemoteCluster `json:"remoteClusters,omitempty"`
+}
+
+// RemoteCluster defines configuration for connecting to and discovering resources
+// from a remote Kubernetes cluster
+type RemoteCluster struct {
+	// Name is a unique identifier for this cluster connection.
+	// This name will be used in logs and can be used to identify resources from this cluster.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Name string `json:"name"`
+
+	// SecretRef references a Secret containing the kubeconfig for this cluster.
+	// The Secret must contain a 'kubeconfig' key with a complete kubeconfig file.
+	// +kubebuilder:validation:Required
+	SecretRef KubeconfigSecretRef `json:"secretRef"`
+
+	// Enabled controls whether this cluster connection is active.
+	// Set to false to temporarily disable discovery from this cluster without removing the configuration.
+	// +kubebuilder:default=true
+	Enabled bool `json:"enabled,omitempty"`
+
+	// NamespaceFilter optionally limits discovery to specific namespaces in the remote cluster.
+	// If empty, resources from all namespaces will be discovered (subject to RBAC permissions).
+	NamespaceFilter []string `json:"namespaceFilter,omitempty"`
+
+	// ClusterLabels are additional labels to add to all resources discovered from this cluster.
+	// This can be used to identify or group resources by their source cluster in the Homer dashboard.
+	ClusterLabels map[string]string `json:"clusterLabels,omitempty"`
+
+	// IngressSelector optionally filters Ingresses by labels in this cluster.
+	// Works the same as the main ingressSelector but only applies to this cluster.
+	IngressSelector *metav1.LabelSelector `json:"ingressSelector,omitempty"`
+
+	// HTTPRouteSelector optionally filters HTTPRoutes by labels in this cluster.
+	// Works the same as the main httpRouteSelector but only applies to this cluster.
+	HTTPRouteSelector *metav1.LabelSelector `json:"httpRouteSelector,omitempty"`
+
+	// GatewaySelector optionally filters HTTPRoutes by Gateway labels in this cluster.
+	// Works the same as the main gatewaySelector but only applies to this cluster.
+	GatewaySelector *metav1.LabelSelector `json:"gatewaySelector,omitempty"`
+}
+
+// KubeconfigSecretRef references a Secret containing kubeconfig data
+type KubeconfigSecretRef struct {
+	// Name of the Secret containing the kubeconfig
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+
+	// Key in the Secret containing the kubeconfig data.
+	// +kubebuilder:default="kubeconfig"
+	Key string `json:"key,omitempty"`
+
+	// Namespace of the Secret. If not specified, defaults to the Dashboard's namespace.
+	Namespace string `json:"namespace,omitempty"`
 }
 
 // DashboardStatus defines the observed state of Dashboard
@@ -103,6 +164,30 @@ type DashboardStatus struct {
 
 	// ObservedGeneration is the generation observed by the controller
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// ClusterStatuses contains the connection status for each configured remote cluster
+	ClusterStatuses []ClusterConnectionStatus `json:"clusterStatuses,omitempty"`
+}
+
+// ClusterConnectionStatus represents the connection status of a remote cluster
+type ClusterConnectionStatus struct {
+	// Name of the cluster (matches RemoteCluster.Name)
+	Name string `json:"name"`
+
+	// Connected indicates if the cluster is currently reachable
+	Connected bool `json:"connected"`
+
+	// LastConnectionTime is the last time the cluster was successfully connected
+	LastConnectionTime *metav1.Time `json:"lastConnectionTime,omitempty"`
+
+	// LastError contains the last error message if connection failed
+	LastError string `json:"lastError,omitempty"`
+
+	// DiscoveredIngresses is the count of Ingresses discovered from this cluster
+	DiscoveredIngresses int `json:"discoveredIngresses,omitempty"`
+
+	// DiscoveredHTTPRoutes is the count of HTTPRoutes discovered from this cluster
+	DiscoveredHTTPRoutes int `json:"discoveredHTTPRoutes,omitempty"`
 }
 
 //+kubebuilder:object:root=true

@@ -548,6 +548,213 @@ spec:
                     type: object
                 type: object
                 x-kubernetes-map-type: atomic
+              remoteClusters:
+                description: |-
+                  RemoteClusters configures discovery from additional Kubernetes clusters.
+                  When specified, the operator will connect to these clusters and discover
+                  Ingress/HTTPRoute resources from them in addition to the local cluster.
+                items:
+                  description: |-
+                    RemoteCluster defines configuration for connecting to and discovering resources
+                    from a remote Kubernetes cluster
+                  properties:
+                    clusterLabels:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        ClusterLabels are additional labels to add to all resources discovered from this cluster.
+                        This can be used to identify or group resources by their source cluster in the Homer dashboard.
+                      type: object
+                    enabled:
+                      default: true
+                      description: |-
+                        Enabled controls whether this cluster connection is active.
+                        Set to false to temporarily disable discovery from this cluster without removing the configuration.
+                      type: boolean
+                    gatewaySelector:
+                      description: |-
+                        GatewaySelector optionally filters HTTPRoutes by Gateway labels in this cluster.
+                        Works the same as the main gatewaySelector but only applies to this cluster.
+                      properties:
+                        matchExpressions:
+                          description: matchExpressions is a list of label selector
+                            requirements. The requirements are ANDed.
+                          items:
+                            description: |-
+                              A label selector requirement is a selector that contains values, a key, and an operator that
+                              relates the key and values.
+                            properties:
+                              key:
+                                description: key is the label key that the selector
+                                  applies to.
+                                type: string
+                              operator:
+                                description: |-
+                                  operator represents a key's relationship to a set of values.
+                                  Valid operators are In, NotIn, Exists and DoesNotExist.
+                                type: string
+                              values:
+                                description: |-
+                                  values is an array of string values. If the operator is In or NotIn,
+                                  the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                  the values array must be empty. This array is replaced during a strategic
+                                  merge patch.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            required:
+                            - key
+                            - operator
+                            type: object
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        matchLabels:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                            map is equivalent to an element of matchExpressions, whose key field is "key", the
+                            operator is "In", and the values array contains only "value". The requirements are ANDed.
+                          type: object
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    httpRouteSelector:
+                      description: |-
+                        HTTPRouteSelector optionally filters HTTPRoutes by labels in this cluster.
+                        Works the same as the main httpRouteSelector but only applies to this cluster.
+                      properties:
+                        matchExpressions:
+                          description: matchExpressions is a list of label selector
+                            requirements. The requirements are ANDed.
+                          items:
+                            description: |-
+                              A label selector requirement is a selector that contains values, a key, and an operator that
+                              relates the key and values.
+                            properties:
+                              key:
+                                description: key is the label key that the selector
+                                  applies to.
+                                type: string
+                              operator:
+                                description: |-
+                                  operator represents a key's relationship to a set of values.
+                                  Valid operators are In, NotIn, Exists and DoesNotExist.
+                                type: string
+                              values:
+                                description: |-
+                                  values is an array of string values. If the operator is In or NotIn,
+                                  the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                  the values array must be empty. This array is replaced during a strategic
+                                  merge patch.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            required:
+                            - key
+                            - operator
+                            type: object
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        matchLabels:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                            map is equivalent to an element of matchExpressions, whose key field is "key", the
+                            operator is "In", and the values array contains only "value". The requirements are ANDed.
+                          type: object
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    ingressSelector:
+                      description: |-
+                        IngressSelector optionally filters Ingresses by labels in this cluster.
+                        Works the same as the main ingressSelector but only applies to this cluster.
+                      properties:
+                        matchExpressions:
+                          description: matchExpressions is a list of label selector
+                            requirements. The requirements are ANDed.
+                          items:
+                            description: |-
+                              A label selector requirement is a selector that contains values, a key, and an operator that
+                              relates the key and values.
+                            properties:
+                              key:
+                                description: key is the label key that the selector
+                                  applies to.
+                                type: string
+                              operator:
+                                description: |-
+                                  operator represents a key's relationship to a set of values.
+                                  Valid operators are In, NotIn, Exists and DoesNotExist.
+                                type: string
+                              values:
+                                description: |-
+                                  values is an array of string values. If the operator is In or NotIn,
+                                  the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                  the values array must be empty. This array is replaced during a strategic
+                                  merge patch.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            required:
+                            - key
+                            - operator
+                            type: object
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        matchLabels:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                            map is equivalent to an element of matchExpressions, whose key field is "key", the
+                            operator is "In", and the values array contains only "value". The requirements are ANDed.
+                          type: object
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    name:
+                      description: |-
+                        Name is a unique identifier for this cluster connection.
+                        This name will be used in logs and can be used to identify resources from this cluster.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                    namespaceFilter:
+                      description: |-
+                        NamespaceFilter optionally limits discovery to specific namespaces in the remote cluster.
+                        If empty, resources from all namespaces will be discovered (subject to RBAC permissions).
+                      items:
+                        type: string
+                      type: array
+                    secretRef:
+                      description: |-
+                        SecretRef references a Secret containing the kubeconfig for this cluster.
+                        The Secret must contain a 'kubeconfig' key with a complete kubeconfig file.
+                      properties:
+                        key:
+                          default: kubeconfig
+                          description: Key in the Secret containing the kubeconfig
+                            data.
+                          type: string
+                        name:
+                          description: Name of the Secret containing the kubeconfig
+                          type: string
+                        namespace:
+                          description: Namespace of the Secret. If not specified,
+                            defaults to the Dashboard's namespace.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                  required:
+                  - name
+                  - secretRef
+                  type: object
+                type: array
               replicas:
                 default: 1
                 description: Replicas is the number of desired pods for the Homer
@@ -732,6 +939,42 @@ spec:
                 description: AvailableReplicas is the number of available replicas
                 format: int32
                 type: integer
+              clusterStatuses:
+                description: ClusterStatuses contains the connection status for each
+                  configured remote cluster
+                items:
+                  description: ClusterConnectionStatus represents the connection status
+                    of a remote cluster
+                  properties:
+                    connected:
+                      description: Connected indicates if the cluster is currently
+                        reachable
+                      type: boolean
+                    discoveredHTTPRoutes:
+                      description: DiscoveredHTTPRoutes is the count of HTTPRoutes
+                        discovered from this cluster
+                      type: integer
+                    discoveredIngresses:
+                      description: DiscoveredIngresses is the count of Ingresses discovered
+                        from this cluster
+                      type: integer
+                    lastConnectionTime:
+                      description: LastConnectionTime is the last time the cluster
+                        was successfully connected
+                      format: date-time
+                      type: string
+                    lastError:
+                      description: LastError contains the last error message if connection
+                        failed
+                      type: string
+                    name:
+                      description: Name of the cluster (matches RemoteCluster.Name)
+                      type: string
+                  required:
+                  - connected
+                  - name
+                  type: object
+                type: array
               conditions:
                 description: Conditions represent the latest available observations
                   of the Dashboard's current state

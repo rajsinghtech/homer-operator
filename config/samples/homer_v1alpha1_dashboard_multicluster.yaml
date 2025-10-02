@@ -1,0 +1,266 @@
+---
+# Example: Multi-cluster Dashboard Configuration
+# This sample demonstrates how to configure homer-operator to discover
+# services from multiple Kubernetes clusters
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cluster-staging-kubeconfig
+  namespace: public
+type: Opaque
+data:
+  # Base64 encoded kubeconfig for staging cluster
+  # kubectl create secret generic cluster-staging-kubeconfig \
+  #   --from-file=kubeconfig=/path/to/staging/kubeconfig \
+  #   -n public
+  kubeconfig: <base64-encoded-kubeconfig-here>
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cluster-production-kubeconfig
+  namespace: public
+type: Opaque
+data:
+  # Base64 encoded kubeconfig for production cluster
+  kubeconfig: <base64-encoded-kubeconfig-here>
+---
+apiVersion: homer.rajsingh.info/v1alpha1
+kind: Dashboard
+metadata:
+  name: multicluster-dashboard
+  namespace: public
+spec:
+  replicas: 2
+
+  # Homer configuration
+  homerConfig:
+    title: "Multi-Cluster Dashboard"
+    subtitle: "Aggregated view across all clusters"
+    logo: "https://raw.githubusercontent.com/rajsinghtech/homer-operator/main/homer/Homer-Operator.png"
+    header: true
+    footer: '<p>Multi-Cluster Dashboard powered by <strong>Homer-Operator</strong></p>'
+
+    colors:
+      light:
+        highlight-primary: "#3367d6"
+        highlight-secondary: "#4285f4"
+        highlight-hover: "#5a95f5"
+        background: "#f5f5f5"
+        card-background: "#ffffff"
+        text: "#363636"
+        text-header: "#ffffff"
+        text-title: "#303030"
+        text-subtitle: "#424242"
+        card-shadow: "rgba(0, 0, 0, 0.1)"
+        link: "#3273dc"
+        link-hover: "#363636"
+      dark:
+        highlight-primary: "#3367d6"
+        highlight-secondary: "#4285f4"
+        highlight-hover: "#5a95f5"
+        background: "#131313"
+        card-background: "#2b2b2b"
+        text: "#eaeaea"
+        text-header: "#ffffff"
+        text-title: "#fafafa"
+        text-subtitle: "#f5f5f5"
+        card-shadow: none
+        link: "#3273dc"
+        link-hover: "#ffdd57"
+
+    # Default services (manually configured)
+    services:
+    - parameters:
+        name: "Cluster Management"
+        icon: "fas fa-network-wired"
+      items:
+      - parameters:
+          name: "Local Cluster"
+          subtitle: "Primary cluster dashboard"
+          icon: "fas fa-home"
+          tag: "local"
+          tagstyle: "is-primary"
+          url: "https://kubernetes-dashboard.local.example.com"
+      - parameters:
+          name: "Staging Cluster"
+          subtitle: "Staging environment"
+          icon: "fas fa-flask"
+          tag: "staging"
+          tagstyle: "is-warning"
+          url: "https://kubernetes-dashboard.staging.example.com"
+      - parameters:
+          name: "Production Cluster"
+          subtitle: "Production environment"
+          icon: "fas fa-industry"
+          tag: "production"
+          tagstyle: "is-danger"
+          url: "https://kubernetes-dashboard.prod.example.com"
+
+  # Remote cluster configurations
+  remoteClusters:
+  - name: staging
+    enabled: true
+    secretRef:
+      name: cluster-staging-kubeconfig
+      key: kubeconfig  # Optional: defaults to "kubeconfig"
+      # namespace: public  # Optional: defaults to Dashboard namespace
+
+    # Optional: Filter to specific namespaces in the remote cluster
+    namespaceFilter:
+    - "staging"
+    - "qa"
+
+    # Add labels to all discovered resources from this cluster
+    clusterLabels:
+      cluster: "staging"
+      environment: "staging"
+
+    # Optional: Cluster-specific selectors (override main selectors)
+    ingressSelector:
+      matchLabels:
+        visibility: "public"
+
+    httpRouteSelector:
+      matchLabels:
+        visibility: "public"
+
+  - name: production
+    enabled: true
+    secretRef:
+      name: cluster-production-kubeconfig
+      key: kubeconfig
+
+    # Discover from all namespaces (subject to RBAC)
+    # namespaceFilter: []  # Empty means all namespaces
+
+    clusterLabels:
+      cluster: "production"
+      environment: "prod"
+
+    # Production-specific filters
+    ingressSelector:
+      matchLabels:
+        visibility: "public"
+      matchExpressions:
+      - key: "app.kubernetes.io/instance"
+        operator: NotIn
+        values: ["canary", "test"]
+
+    gatewaySelector:
+      matchLabels:
+        gateway-class: "production-gateway"
+
+  # Global filters (apply to all clusters including local)
+  ingressSelector:
+    matchLabels:
+      dashboard: "enabled"
+
+  httpRouteSelector:
+    matchLabels:
+      dashboard: "enabled"
+
+  gatewaySelector:
+    matchLabels:
+      gateway: "public"
+
+  # Domain filters apply to all clusters
+  domainFilters:
+  - "example.com"
+  - "example.org"
+
+  # Service grouping configuration
+  serviceGrouping:
+    strategy: "custom"  # Group by cluster and namespace
+    customRules:
+    - name: "Local Services"
+      condition:
+        "homer.rajsingh.info/cluster": "local"
+      priority: 10
+    - name: "Staging Services"
+      condition:
+        "cluster": "staging"
+      priority: 5
+    - name: "Production Services"
+      condition:
+        "cluster": "production"
+      priority: 1
+
+  # Advanced features
+  advanced:
+    enableDependencyAnalysis: true
+    enableMetricsAggregation: true
+    enableLayoutOptimization: true
+    maxServicesPerGroup: 50  # Higher limit for multi-cluster
+---
+# Example Service Account and RBAC for remote cluster access
+# This should be created in each remote cluster
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: homer-operator-reader
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: homer-operator-reader
+rules:
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingresses"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["gateway.networking.k8s.io"]
+  resources: ["httproutes", "gateways"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homer-operator-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homer-operator-reader
+subjects:
+- kind: ServiceAccount
+  name: homer-operator-reader
+  namespace: kube-system
+---
+# Instructions for creating kubeconfig for remote cluster:
+#
+# 1. Get the service account token:
+#    kubectl -n kube-system get secret $(kubectl -n kube-system get sa homer-operator-reader -o jsonpath='{.secrets[0].name}') -o jsonpath='{.data.token}' | base64 -d
+#
+# 2. Get the cluster CA certificate:
+#    kubectl config view --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}'
+#
+# 3. Get the cluster server URL:
+#    kubectl config view -o jsonpath='{.clusters[0].cluster.server}'
+#
+# 4. Create a kubeconfig file with the above information:
+#
+# apiVersion: v1
+# kind: Config
+# clusters:
+# - name: remote-cluster
+#   cluster:
+#     certificate-authority-data: <CA_CERT_BASE64>
+#     server: <CLUSTER_SERVER_URL>
+# contexts:
+# - name: homer-operator
+#   context:
+#     cluster: remote-cluster
+#     user: homer-operator
+# current-context: homer-operator
+# users:
+# - name: homer-operator
+#   user:
+#     token: <SERVICE_ACCOUNT_TOKEN>
+#
+# 5. Create the secret:
+#    kubectl create secret generic cluster-staging-kubeconfig \
+#      --from-file=kubeconfig=./kubeconfig-staging.yaml \
+#      -n public

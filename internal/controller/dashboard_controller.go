@@ -43,16 +43,12 @@ import (
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
-const (
-	dashboardFinalizer = "homer.rajsingh.info/finalizer"
-	gatewayKind        = "Gateway"
-)
-
 // DashboardReconciler reconciles a Dashboard object
 type DashboardReconciler struct {
 	client.Client
 	Scheme           *runtime.Scheme
 	EnableGatewayAPI bool
+	ClusterManager   *ClusterManager
 }
 
 //+kubebuilder:rbac:groups=homer.rajsingh.info,resources=dashboards,verbs=get;list;watch;create;update;patch;delete
@@ -65,6 +61,7 @@ type DashboardReconciler struct {
 //+kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",resources=configmaps/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+//+kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list
 //+kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
 //+kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
 
@@ -81,7 +78,20 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, err
 	}
 
-	filteredIngressList, err := r.getFilteredIngresses(ctx, &dashboard)
+	// Initialize ClusterManager if not already done
+	if r.ClusterManager == nil {
+		r.ClusterManager = NewClusterManager(r.Client, r.Scheme)
+	}
+
+	// Update cluster connections based on dashboard configuration
+	if err := r.ClusterManager.UpdateClusters(ctx, &dashboard); err != nil {
+		log := log.FromContext(ctx)
+		log.Error(err, "Failed to update cluster connections")
+		// Continue with local cluster discovery even if remote clusters fail
+	}
+
+	// Discover resources from all clusters
+	filteredIngressList, err := r.getMultiClusterFilteredIngresses(ctx, &dashboard)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -333,6 +343,44 @@ func (r *DashboardReconciler) getFilteredIngresses(ctx context.Context, dashboar
 	return networkingv1.IngressList{Items: filteredIngresses}, nil
 }
 
+// getMultiClusterFilteredIngresses discovers and filters Ingresses from all configured clusters
+func (r *DashboardReconciler) getMultiClusterFilteredIngresses(ctx context.Context, dashboard *homerv1alpha1.Dashboard) (networkingv1.IngressList, error) {
+	allIngresses := []networkingv1.Ingress{}
+
+	// Use ClusterManager if available and remote clusters are configured
+	if r.ClusterManager != nil && len(dashboard.Spec.RemoteClusters) > 0 {
+		clusterIngresses, err := r.ClusterManager.DiscoverIngresses(ctx, dashboard)
+		if err != nil {
+			log := log.FromContext(ctx)
+			log.Error(err, "Failed to discover ingresses from clusters")
+			// Continue with partial results
+		}
+
+		// Aggregate all discovered ingresses
+		for clusterName, ingresses := range clusterIngresses {
+			log := log.FromContext(ctx)
+			log.V(1).Info("Discovered ingresses from cluster", "cluster", clusterName, "count", len(ingresses))
+
+			// Apply domain filters
+			for _, ingress := range ingresses {
+				shouldInclude, err := r.shouldIncludeIngress(ctx, &ingress, dashboard)
+				if err != nil {
+					log.Error(err, "Error checking ingress inclusion", "ingress", ingress.Name, "cluster", clusterName)
+					continue
+				}
+				if shouldInclude {
+					allIngresses = append(allIngresses, ingress)
+				}
+			}
+		}
+	} else {
+		// Fall back to single-cluster discovery
+		return r.getFilteredIngresses(ctx, dashboard)
+	}
+
+	return networkingv1.IngressList{Items: allIngresses}, nil
+}
+
 func (r *DashboardReconciler) validateDashboardConfig(dashboard *homerv1alpha1.Dashboard) error {
 	if err := homer.ValidateTheme(dashboard.Spec.HomerConfig.Theme); err != nil {
 		return err
@@ -530,6 +578,10 @@ func (r *DashboardReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				handler.EnqueueRequestsFromMapFunc(r.findDashboardsForGateway))
 	}
 
+	// Watch secrets for multi-cluster kubeconfig changes
+	builder = builder.Watches(&corev1.Secret{},
+		handler.EnqueueRequestsFromMapFunc(r.findDashboardsForSecret))
+
 	return builder.Complete(r)
 }
 
@@ -613,6 +665,94 @@ func (r *DashboardReconciler) findDashboardsForGateway(ctx context.Context, obj 
 						Name:      dashboard.Name,
 					},
 				})
+			}
+		}
+	}
+
+	return requests
+}
+
+// findDashboardsForSecret finds all dashboards that should be reconciled when a Secret changes
+// This is specifically for kubeconfig secrets used in multi-cluster configurations
+func (r *DashboardReconciler) findDashboardsForSecret(ctx context.Context, obj client.Object) []ctrl.Request {
+	secret, ok := obj.(*corev1.Secret)
+	if !ok {
+		return nil
+	}
+
+	// List all dashboards to find those using this secret
+	dashboards := &homerv1alpha1.DashboardList{}
+	if err := r.List(ctx, dashboards); err != nil {
+		return nil
+	}
+
+	var requests []ctrl.Request
+	for _, dashboard := range dashboards.Items {
+		// Check if this dashboard uses this secret for remote clusters
+		for _, remoteCluster := range dashboard.Spec.RemoteClusters {
+			secretNamespace := remoteCluster.SecretRef.Namespace
+			if secretNamespace == "" {
+				secretNamespace = dashboard.Namespace
+			}
+
+			// If the secret matches, trigger reconciliation
+			if secret.Name == remoteCluster.SecretRef.Name && secret.Namespace == secretNamespace {
+				requests = append(requests, ctrl.Request{
+					NamespacedName: client.ObjectKey{
+						Namespace: dashboard.Namespace,
+						Name:      dashboard.Name,
+					},
+				})
+				break // No need to check other clusters once we found a match
+			}
+		}
+
+		// Also check if this secret is used for smart card secrets (existing functionality)
+		if dashboard.Spec.Secrets != nil {
+			secretRefs := []*homerv1alpha1.SecretKeyRef{
+				dashboard.Spec.Secrets.APIKey,
+				dashboard.Spec.Secrets.Token,
+				dashboard.Spec.Secrets.Password,
+				dashboard.Spec.Secrets.Username,
+			}
+
+			for _, ref := range secretRefs {
+				if ref != nil {
+					secretNamespace := ref.Namespace
+					if secretNamespace == "" {
+						secretNamespace = dashboard.Namespace
+					}
+					if secret.Name == ref.Name && secret.Namespace == secretNamespace {
+						requests = append(requests, ctrl.Request{
+							NamespacedName: client.ObjectKey{
+								Namespace: dashboard.Namespace,
+								Name:      dashboard.Name,
+							},
+						})
+						break
+					}
+				}
+			}
+
+			// Check header secrets
+			if dashboard.Spec.Secrets.Headers != nil {
+				for _, ref := range dashboard.Spec.Secrets.Headers {
+					if ref != nil {
+						secretNamespace := ref.Namespace
+						if secretNamespace == "" {
+							secretNamespace = dashboard.Namespace
+						}
+						if secret.Name == ref.Name && secret.Namespace == secretNamespace {
+							requests = append(requests, ctrl.Request{
+								NamespacedName: client.ObjectKey{
+									Namespace: dashboard.Namespace,
+									Name:      dashboard.Name,
+								},
+							})
+							break
+						}
+					}
+				}
 			}
 		}
 	}
@@ -721,20 +861,44 @@ func (r *DashboardReconciler) createOrUpdateResources(ctx context.Context, resou
 
 func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *homer.HomerConfig, dashboard *homerv1alpha1.Dashboard, filteredIngressList networkingv1.IngressList) (corev1.ConfigMap, error) {
 	if r.EnableGatewayAPI {
-		clusterHTTPRoutes := &gatewayv1.HTTPRouteList{}
-
-		if err := r.List(ctx, clusterHTTPRoutes); err != nil {
-			return corev1.ConfigMap{}, err
-		}
-
 		filteredHTTPRoutes := []gatewayv1.HTTPRoute{}
-		for _, httproute := range clusterHTTPRoutes.Items {
-			shouldInclude, err := r.shouldIncludeHTTPRoute(ctx, &httproute, dashboard)
+
+		// Use ClusterManager for multi-cluster discovery if available
+		if r.ClusterManager != nil && len(dashboard.Spec.RemoteClusters) > 0 {
+			clusterHTTPRoutes, err := r.ClusterManager.DiscoverHTTPRoutes(ctx, dashboard)
 			if err != nil {
+				log := log.FromContext(ctx)
+				log.Error(err, "Failed to discover HTTPRoutes from clusters")
+				// Continue with partial results
+			}
+
+			// Aggregate all discovered HTTPRoutes
+			for clusterName, httproutes := range clusterHTTPRoutes {
+				log := log.FromContext(ctx)
+				log.V(1).Info("Discovered HTTPRoutes from cluster", "cluster", clusterName, "count", len(httproutes))
+
+				// Apply domain filters (already filtered by ClusterManager but apply domain filters)
+				for _, httproute := range httproutes {
+					if homer.MatchesDomainFilters(r.getHTTPRouteHosts(&httproute), dashboard.Spec.DomainFilters) {
+						filteredHTTPRoutes = append(filteredHTTPRoutes, httproute)
+					}
+				}
+			}
+		} else {
+			// Fall back to single-cluster discovery
+			clusterHTTPRoutes := &gatewayv1.HTTPRouteList{}
+			if err := r.List(ctx, clusterHTTPRoutes); err != nil {
 				return corev1.ConfigMap{}, err
 			}
-			if shouldInclude {
-				filteredHTTPRoutes = append(filteredHTTPRoutes, httproute)
+
+			for _, httproute := range clusterHTTPRoutes.Items {
+				shouldInclude, err := r.shouldIncludeHTTPRoute(ctx, &httproute, dashboard)
+				if err != nil {
+					return corev1.ConfigMap{}, err
+				}
+				if shouldInclude {
+					filteredHTTPRoutes = append(filteredHTTPRoutes, httproute)
+				}
 			}
 		}
 
@@ -742,6 +906,15 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 	}
 
 	return homer.CreateConfigMap(homerConfig, dashboard.Name, dashboard.Namespace, filteredIngressList, dashboard)
+}
+
+// getHTTPRouteHosts extracts hostnames from an HTTPRoute
+func (r *DashboardReconciler) getHTTPRouteHosts(httproute *gatewayv1.HTTPRoute) []string {
+	hosts := []string{}
+	for _, hostname := range httproute.Spec.Hostnames {
+		hosts = append(hosts, string(hostname))
+	}
+	return hosts
 }
 
 // generatePWAManifest generates PWA manifest if enabled, returns empty string if disabled
@@ -1052,6 +1225,23 @@ func (r *DashboardReconciler) updateStatus(ctx context.Context, dashboard *homer
 	dashboard.Status.ReadyReplicas = readyReplicas
 	dashboard.Status.AvailableReplicas = availableReplicas
 	dashboard.Status.ObservedGeneration = dashboard.Generation
+
+	// Update cluster connection statuses if ClusterManager is available
+	if r.ClusterManager != nil {
+		clusterStatuses := r.ClusterManager.GetClusterStatuses()
+
+		// Get discovered resource counts
+		if len(dashboard.Spec.RemoteClusters) > 0 {
+			clusterIngresses, _ := r.ClusterManager.DiscoverIngresses(ctx, dashboard)
+			var clusterHTTPRoutes map[string][]gatewayv1.HTTPRoute
+			if r.EnableGatewayAPI {
+				clusterHTTPRoutes, _ = r.ClusterManager.DiscoverHTTPRoutes(ctx, dashboard)
+			}
+			clusterStatuses = r.ClusterManager.UpdateClusterStatuses(clusterStatuses, clusterIngresses, clusterHTTPRoutes)
+		}
+
+		dashboard.Status.ClusterStatuses = clusterStatuses
+	}
 
 	if err := r.Status().Patch(ctx, dashboard, patch); err != nil {
 		if apierrors.IsNotFound(err) {

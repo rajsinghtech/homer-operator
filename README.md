@@ -535,6 +535,281 @@ The operator supports both simultaneously for zero-downtime migration:
 
 ---
 
+## Multi-Cluster Support
+
+Discover and aggregate services from multiple Kubernetes clusters into a single unified dashboard.
+
+### Features
+
+- **Multiple Cluster Connections**: Connect to any number of remote clusters using kubeconfig secrets
+- **Automatic Secret Rotation**: Detects kubeconfig changes and automatically reconnects without pod restarts
+- **Per-Cluster Filtering**: Apply namespace, label, and domain filters independently per cluster
+- **Cluster Metadata**: Automatically enriches discovered services with cluster information
+- **Status Tracking**: Monitor connection status and resource counts per cluster
+- **Secure Authentication**: Token-based authentication with RBAC support
+
+### Quick Start
+
+1. **Create a read-only service account in the remote cluster:**
+
+```bash
+# On remote cluster
+kubectl create namespace kube-system
+kubectl create serviceaccount homer-reader -n kube-system
+
+# Create ClusterRole with read permissions
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: homer-reader
+rules:
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingresses"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["gateway.networking.k8s.io"]
+  resources: ["httproutes", "gateways"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get", "list"]
+EOF
+
+# Bind the role
+kubectl create clusterrolebinding homer-reader \
+  --clusterrole=homer-reader \
+  --serviceaccount=kube-system:homer-reader
+
+# Create long-lived token
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: homer-reader-token
+  namespace: kube-system
+  annotations:
+    kubernetes.io/service-account.name: homer-reader
+type: kubernetes.io/service-account-token
+EOF
+```
+
+2. **Generate kubeconfig for the remote cluster:**
+
+```bash
+# Get token and CA cert
+TOKEN=$(kubectl get secret homer-reader-token -n kube-system -o jsonpath='{.data.token}' | base64 -d)
+CA_CERT=$(kubectl get secret homer-reader-token -n kube-system -o jsonpath='{.data.ca\.crt}')
+SERVER=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+
+# Create kubeconfig
+cat > remote-kubeconfig.yaml <<EOF
+apiVersion: v1
+kind: Config
+clusters:
+- name: remote-cluster
+  cluster:
+    certificate-authority-data: ${CA_CERT}
+    server: ${SERVER}
+contexts:
+- name: remote-cluster
+  context:
+    cluster: remote-cluster
+    user: homer-reader
+current-context: remote-cluster
+users:
+- name: homer-reader
+  user:
+    token: ${TOKEN}
+EOF
+```
+
+3. **Create secret in the main cluster:**
+
+```bash
+# On main cluster where operator is running
+kubectl create secret generic remote-cluster-kubeconfig \
+  --from-file=kubeconfig=remote-kubeconfig.yaml \
+  -n default
+```
+
+4. **Create multi-cluster dashboard:**
+
+```yaml
+apiVersion: homer.rajsingh.info/v1alpha1
+kind: Dashboard
+metadata:
+  name: multi-cluster-dashboard
+  namespace: default
+spec:
+  replicas: 1
+
+  # Configure remote clusters
+  remoteClusters:
+    - name: production
+      enabled: true
+      secretRef:
+        name: remote-cluster-kubeconfig
+        namespace: default
+        key: kubeconfig
+
+      # Optional: Filter resources in remote cluster
+      namespaceFilter:
+        - default
+        - production
+
+      # Optional: Add cluster labels to discovered resources
+      clusterLabels:
+        cluster: production
+        region: us-east-1
+
+      # Optional: Apply label selectors
+      ingressSelector:
+        matchLabels:
+          environment: production
+
+      domainFilters:
+        - "mycompany.com"
+
+  homerConfig:
+    title: "Multi-Cluster Dashboard"
+    subtitle: "Services from multiple clusters"
+```
+
+### Configuration Options
+
+```yaml
+apiVersion: homer.rajsingh.info/v1alpha1
+kind: Dashboard
+metadata:
+  name: advanced-multicluster
+spec:
+  remoteClusters:
+    - name: cluster-name
+      enabled: true  # Set to false to temporarily disable
+
+      # Kubeconfig secret reference (required)
+      secretRef:
+        name: kubeconfig-secret-name
+        namespace: secret-namespace
+        key: kubeconfig  # Key in secret containing kubeconfig
+
+      # Namespace filtering (optional)
+      namespaceFilter:
+        - namespace-1
+        - namespace-2
+
+      # Cluster labels (optional) - added to all discovered resources
+      clusterLabels:
+        cluster: production
+        region: us-west-2
+        team: platform
+
+      # Resource filtering (optional) - same as main cluster
+      ingressSelector:
+        matchLabels:
+          app: web
+
+      httpRouteSelector:
+        matchLabels:
+          gateway: public
+
+      gatewaySelector:
+        matchLabels:
+          type: ingress
+
+      domainFilters:
+        - "example.com"
+```
+
+### Status Monitoring
+
+Check multi-cluster connection status:
+
+```bash
+kubectl get dashboard multi-cluster-dashboard -o jsonpath='{.status.clusterStatuses}' | jq
+```
+
+Example output:
+```json
+[
+  {
+    "name": "production",
+    "connected": true,
+    "lastConnectionTime": "2025-10-02T10:39:15Z",
+    "discoveredIngresses": 5,
+    "discoveredHTTPRoutes": 3
+  },
+  {
+    "name": "staging",
+    "connected": false,
+    "lastError": "failed to connect: unauthorized",
+    "lastConnectionTime": "2025-10-02T10:38:00Z"
+  }
+]
+```
+
+### Automatic Secret Rotation
+
+The operator automatically detects kubeconfig changes and reconnects:
+
+```bash
+# Update the secret with new credentials
+kubectl create secret generic remote-cluster-kubeconfig \
+  --from-file=kubeconfig=new-kubeconfig.yaml \
+  -n default \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# Operator automatically detects the change and reconnects
+# Check logs to verify:
+kubectl logs -n homer-operator-system deployment/homer-operator-controller-manager
+```
+
+### Cluster Metadata
+
+Resources discovered from remote clusters are automatically enriched with metadata:
+
+**Labels:**
+- `homer.rajsingh.info/cluster: <cluster-name>`
+- User-defined labels from `clusterLabels`
+
+**Annotations:**
+- `homer.rajsingh.info/source-cluster: <cluster-name>`
+
+This allows filtering and grouping services by cluster in your dashboards.
+
+### Security Considerations
+
+- Use read-only service accounts with minimal RBAC permissions
+- Store kubeconfigs in Kubernetes secrets
+- Use network policies to restrict operator egress
+- Rotate tokens regularly using automatic secret rotation
+- Consider using certificate-based authentication for production
+
+### Troubleshooting
+
+**Connection failures:**
+```bash
+# Check Dashboard status
+kubectl get dashboard <name> -o yaml
+
+# Check operator logs
+kubectl logs -n homer-operator-system deployment/homer-operator-controller-manager
+
+# Verify secret exists and is readable
+kubectl get secret <secret-name> -n <namespace> -o yaml
+
+# Test kubeconfig manually
+kubectl --kubeconfig=<path> get namespaces
+```
+
+**Common issues:**
+- **Connection refused**: Ensure cluster API server is accessible from operator pod
+- **Unauthorized**: Verify service account has correct RBAC permissions
+- **Certificate errors**: Check certificate-authority-data in kubeconfig
+- **No resources discovered**: Verify namespace filters and label selectors
+
+---
+
 ### Local Development
 
 ```bash

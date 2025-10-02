@@ -1938,6 +1938,23 @@ func UpdateConfigMapHTTPRoute(cm *corev1.ConfigMap, httproute *gatewayv1.HTTPRou
 	cm.Data["config.yml"] = string(objYAML)
 }
 
+// MatchesDomainFilters checks if any of the provided hosts match the domain filters
+func MatchesDomainFilters(hosts []string, domainFilters []string) bool {
+	// If no domain filters specified, include everything
+	if len(domainFilters) == 0 {
+		return true
+	}
+
+	// Check if any host matches any filter
+	for _, host := range hosts {
+		if utils.MatchesHostDomainFilters(host, domainFilters) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // ValidateHomerConfig validates the Homer configuration for common issues
 func ValidateHomerConfig(config *HomerConfig) error {
 	if config == nil {
