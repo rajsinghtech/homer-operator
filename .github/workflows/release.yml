@@ -13,15 +13,18 @@ env:
   GO_VERSION: '1.25.1'
 
 jobs:
-  release:
-    name: Build and Push
+  build-image:
+    name: Build and Push Image
     runs-on: ubuntu-latest
-    # Don't run on PRs, only on direct pushes to main or tags
     if: github.event_name == 'push'
     permissions:
       contents: read
       packages: write
-      id-token: write  # For cosign signing
+      id-token: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      tags: ${{ steps.meta.outputs.tags }}
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -34,11 +37,24 @@ jobs:
       - name: Cache Go modules
         uses: actions/cache@v4
         with:
-          path: ~/go/pkg/mod
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-
 
+      - name: Extract version
+        id: version
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+          else
+            VERSION="0.0.0-dev"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -77,6 +93,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: false
+          sbom: false
           build-args: |
             GO_VERSION=${{ env.GO_VERSION }}
 
@@ -88,7 +106,6 @@ jobs:
           fi
           echo "✅ Docker build successful with digest: ${{ steps.build.outputs.digest }}"
 
-      # Image signing
       - name: Install cosign
         uses: sigstore/cosign-installer@v3.9.2
 
@@ -100,30 +117,95 @@ jobs:
           echo "$TAGS" | while IFS= read -r tag; do
             if [[ -n "$tag" ]]; then
               echo "Signing: $tag@${DIGEST}"
-              if ! cosign sign --yes "$tag@${DIGEST}"; then
-                echo "First attempt failed, retrying in 10 seconds..."
-                sleep 10
-                if ! cosign sign --yes "$tag@${DIGEST}"; then
-                  echo "❌ Failed to sign $tag after retry"
-                  echo "::warning::Failed to sign image $tag - continuing with unsigned image"
-                else
-                  echo "✅ Successfully signed $tag on retry"
-                fi
-              else
-                echo "✅ Successfully signed $tag"
-              fi
+              cosign sign --yes "$tag@${DIGEST}" || echo "::warning::Failed to sign image $tag"
             fi
           done
 
-      - name: Generate SBOM
-        uses: anchore/sbom-action@v0.20.6
-        with:
-          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
-          format: spdx-json
-          output-file: sbom.spdx.json
+  release-helm:
+    name: Release Helm Chart
+    runs-on: ubuntu-latest
+    needs: build-image
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Upload SBOM
-        uses: actions/upload-artifact@v4
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
         with:
-          name: sbom
-          path: sbom.spdx.json
+          version: v3.17.0
+
+      - name: Log in to GHCR for Helm
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} --username ${{ github.actor }} --password-stdin
+
+      - name: Update Helm chart with image digest
+        if: github.ref_type == 'tag'
+        run: |
+          DIGEST="${{ needs.build-image.outputs.digest }}"
+          VERSION="${{ needs.build-image.outputs.version }}"
+
+          # Update values.yaml with digest
+          sed -i "s|tag:.*|digest: \"$DIGEST\"|g" charts/homer-operator/values.yaml
+
+          # Update Chart.yaml version
+          sed -i "s|^version:.*|version: $VERSION|g" charts/homer-operator/Chart.yaml
+          sed -i "s|^appVersion:.*|appVersion: $VERSION|g" charts/homer-operator/Chart.yaml
+
+      - name: Package and push Helm chart
+        run: |
+          VERSION="${{ needs.build-image.outputs.version }}"
+
+          # Package chart
+          helm package charts/homer-operator --version "$VERSION"
+
+          # Push to GHCR
+          helm push homer-operator-${VERSION}.tgz oci://${{ env.REGISTRY }}/${{ github.repository }}/charts
+
+  create-github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    if: github.ref_type == 'tag'
+    needs: [build-image, release-helm]
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          VERSION="${{ needs.build-image.outputs.version }}"
+          DIGEST="${{ needs.build-image.outputs.digest }}"
+
+          cat > release-notes.md <<EOF
+          ## Homer Operator $VERSION
+
+          ### Container Image
+          \`\`\`
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$VERSION
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@$DIGEST
+          \`\`\`
+
+          ### Helm Chart
+          \`\`\`bash
+          helm install homer-operator oci://${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/charts/homer-operator --version $VERSION
+          \`\`\`
+
+          ### Verification
+          \`\`\`bash
+          # Verify image signature
+          cosign verify ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@$DIGEST
+          \`\`\`
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release-notes.md
+          draft: false
+          prerelease: false
+          generate_release_notes: true

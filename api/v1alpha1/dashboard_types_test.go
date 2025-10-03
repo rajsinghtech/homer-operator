@@ -160,7 +160,6 @@ func TestDashboardSpecValidation(t *testing.T) {
 					}
 				}
 			}
-
 		})
 	}
 }
@@ -349,7 +348,6 @@ func TestDashboardCreation(t *testing.T) {
 	if dashboard.Spec.HealthCheck.Interval != "45s" {
 		t.Errorf("Expected interval '45s', got '%s'", dashboard.Spec.HealthCheck.Interval)
 	}
-
 }
 
 // Helper function to create int32 pointer
