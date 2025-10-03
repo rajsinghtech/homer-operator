@@ -79,17 +79,10 @@ func TestDashboardSpecValidation(t *testing.T) {
 			hasError: false,
 		},
 		{
-			name: "Valid spec with advanced config",
+			name: "Valid spec with remote clusters",
 			spec: DashboardSpec{
 				HomerConfig: homer.HomerConfig{
 					Title: "Test Dashboard",
-				},
-				Advanced: &AdvancedConfig{
-					EnableDependencyAnalysis: true,
-					EnableMetricsAggregation: true,
-					EnableLayoutOptimization: true,
-					MaxServicesPerGroup:      10,
-					MaxItemsPerService:       20,
 				},
 			},
 			hasError: false,
@@ -119,13 +112,6 @@ func TestDashboardSpecValidation(t *testing.T) {
 					Timeout:      "15s",
 					HealthPath:   "/api/health",
 					ExpectedCode: 200,
-				},
-				Advanced: &AdvancedConfig{
-					EnableDependencyAnalysis: true,
-					EnableMetricsAggregation: true,
-					EnableLayoutOptimization: true,
-					MaxServicesPerGroup:      15,
-					MaxItemsPerService:       25,
 				},
 				DomainFilters: []string{"example.com", "internal.local"},
 			},
@@ -175,15 +161,6 @@ func TestDashboardSpecValidation(t *testing.T) {
 				}
 			}
 
-			// Validate advanced config
-			if dashboard.Spec.Advanced != nil {
-				ac := dashboard.Spec.Advanced
-				if ac.MaxServicesPerGroup < 0 || ac.MaxItemsPerService < 0 {
-					if !tt.hasError {
-						t.Error("Expected max values to be non-negative")
-					}
-				}
-			}
 		})
 	}
 }
@@ -313,25 +290,6 @@ func TestServiceHealthConfigValidation(t *testing.T) {
 	}
 }
 
-func TestAdvancedConfigDefaults(t *testing.T) {
-	config := &AdvancedConfig{}
-
-	// Check that default values work properly
-	if config.MaxServicesPerGroup < 0 {
-		t.Error("MaxServicesPerGroup should not be negative")
-	}
-
-	if config.MaxItemsPerService < 0 {
-		t.Error("MaxItemsPerService should not be negative")
-	}
-
-	// Test that zero values (unlimited) are valid
-	if config.MaxServicesPerGroup == 0 && config.MaxItemsPerService == 0 {
-		// This should be valid (unlimited) - test passes by not erroring
-		t.Log("Zero values are correctly treated as unlimited")
-	}
-}
-
 func TestDashboardCreation(t *testing.T) {
 	dashboard := &Dashboard{
 		ObjectMeta: metav1.ObjectMeta{
@@ -359,13 +317,6 @@ func TestDashboardCreation(t *testing.T) {
 					"User-Agent":    "Homer-Health-Check/1.0",
 					"Authorization": "Bearer health-token",
 				},
-			},
-			Advanced: &AdvancedConfig{
-				EnableDependencyAnalysis: true,
-				EnableMetricsAggregation: false,
-				EnableLayoutOptimization: true,
-				MaxServicesPerGroup:      12,
-				MaxItemsPerService:       30,
 			},
 		},
 	}
@@ -399,17 +350,6 @@ func TestDashboardCreation(t *testing.T) {
 		t.Errorf("Expected interval '45s', got '%s'", dashboard.Spec.HealthCheck.Interval)
 	}
 
-	if dashboard.Spec.Advanced.MaxServicesPerGroup != 12 {
-		t.Errorf("Expected max services per group 12, got %d", dashboard.Spec.Advanced.MaxServicesPerGroup)
-	}
-
-	if dashboard.Spec.Advanced.EnableDependencyAnalysis != true {
-		t.Error("Expected dependency analysis to be enabled")
-	}
-
-	if dashboard.Spec.Advanced.EnableMetricsAggregation != false {
-		t.Error("Expected metrics aggregation to be disabled")
-	}
 }
 
 // Helper function to create int32 pointer

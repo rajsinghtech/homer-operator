@@ -185,13 +185,6 @@ spec:
       condition:
         "cluster": "production"
       priority: 1
-
-  # Advanced features
-  advanced:
-    enableDependencyAnalysis: true
-    enableMetricsAggregation: true
-    enableLayoutOptimization: true
-    maxServicesPerGroup: 50  # Higher limit for multi-cluster
 ---
 # Example Service Account and RBAC for remote cluster access
 # This should be created in each remote cluster

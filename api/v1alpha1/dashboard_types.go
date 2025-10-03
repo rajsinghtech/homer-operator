@@ -80,9 +80,6 @@ type DashboardSpec struct {
 	// HealthCheck configures health checking for discovered services.
 	HealthCheck *ServiceHealthConfig `json:"healthCheck,omitempty"`
 
-	// Advanced configures advanced aggregation and analysis features.
-	Advanced *AdvancedConfig `json:"advanced,omitempty"`
-
 	// RemoteClusters configures discovery from additional Kubernetes clusters.
 	// When specified, the operator will connect to these clusters and discover
 	// Ingress/HTTPRoute resources from them in addition to the local cluster.
@@ -364,26 +361,4 @@ type ServiceHealthConfig struct {
 
 	// Headers to include in health check requests
 	Headers map[string]string `json:"headers,omitempty"`
-}
-
-// AdvancedConfig configures advanced aggregation and analysis features
-type AdvancedConfig struct {
-	// EnableDependencyAnalysis enables automatic service dependency detection
-	EnableDependencyAnalysis bool `json:"enableDependencyAnalysis,omitempty"`
-
-	// EnableMetricsAggregation enables service metrics collection and display
-	EnableMetricsAggregation bool `json:"enableMetricsAggregation,omitempty"`
-
-	// EnableLayoutOptimization enables automatic service layout optimization
-	EnableLayoutOptimization bool `json:"enableLayoutOptimization,omitempty"`
-
-	// MaxServicesPerGroup limits the number of services per group (0 = unlimited)
-	// +kubebuilder:validation:Minimum=0
-	// +kubebuilder:default=0
-	MaxServicesPerGroup int `json:"maxServicesPerGroup,omitempty"`
-
-	// MaxItemsPerService limits the number of items per service (0 = unlimited)
-	// +kubebuilder:validation:Minimum=0
-	// +kubebuilder:default=0
-	MaxItemsPerService int `json:"maxItemsPerService,omitempty"`
 }

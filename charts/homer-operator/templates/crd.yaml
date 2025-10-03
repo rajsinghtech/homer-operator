@@ -61,35 +61,6 @@ spec:
           spec:
             description: DashboardSpec defines the desired state of Dashboard
             properties:
-              advanced:
-                description: Advanced configures advanced aggregation and analysis
-                  features.
-                properties:
-                  enableDependencyAnalysis:
-                    description: EnableDependencyAnalysis enables automatic service
-                      dependency detection
-                    type: boolean
-                  enableLayoutOptimization:
-                    description: EnableLayoutOptimization enables automatic service
-                      layout optimization
-                    type: boolean
-                  enableMetricsAggregation:
-                    description: EnableMetricsAggregation enables service metrics
-                      collection and display
-                    type: boolean
-                  maxItemsPerService:
-                    default: 0
-                    description: MaxItemsPerService limits the number of items per
-                      service (0 = unlimited)
-                    minimum: 0
-                    type: integer
-                  maxServicesPerGroup:
-                    default: 0
-                    description: MaxServicesPerGroup limits the number of services
-                      per group (0 = unlimited)
-                    minimum: 0
-                    type: integer
-                type: object
               assets:
                 description: Assets configures custom assets (logos, icons, CSS) for
                   the dashboard.
