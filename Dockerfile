@@ -1,30 +1,41 @@
-# Build the manager binary
-FROM golang:1.25.1 AS builder
+# Build stage
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+
 ARG TARGETOS
 ARG TARGETARCH
 
 WORKDIR /workspace
-# Copy the Go Modules manifests
-COPY go.mod go.mod
-COPY go.sum go.sum
-# Cache dependencies
-RUN go mod download
 
-# Copy the go source
-COPY cmd/main.go cmd/main.go
+# Install build dependencies
+RUN apk add --no-cache git ca-certificates
+
+# Copy go mod files first for better caching
+COPY go.mod go.sum ./
+
+# Download dependencies (cached layer)
+ENV GOTOOLCHAIN=auto
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+
+# Copy source code
+COPY cmd/ cmd/
 COPY api/ api/
-COPY internal/controller/ internal/controller/
+COPY internal/ internal/
 COPY pkg/ pkg/
 
-# Build
-# Build for target platform
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
-    go build -a -ldflags="-w -s" -trimpath -o manager cmd/main.go
+# Build with cache mounts and target platform
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -ldflags="-w -s" -trimpath -o manager cmd/main.go
 
-# Use distroless base image
+# Runtime stage
 FROM gcr.io/distroless/static:nonroot
+
 WORKDIR /
+
 COPY --from=builder /workspace/manager .
+
 USER 65532:65532
 
 ENTRYPOINT ["/manager"]

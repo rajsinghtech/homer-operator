@@ -6,6 +6,7 @@ on:
       - main
     tags:
       - 'v*.*.*'
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
@@ -16,7 +17,6 @@ jobs:
   build-image:
     name: Build and Push Image
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
     permissions:
       contents: read
       packages: write
@@ -29,32 +29,19 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
-
       - name: Extract version
         id: version
         run: |
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            VERSION="${{ github.ref_name }}"
-            VERSION="${VERSION#v}"
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "is_release=true" >> $GITHUB_OUTPUT
+            echo "Version: $VERSION"
           else
-            VERSION="0.0.0-dev"
+            echo "version=0.0.0-latest" >> $GITHUB_OUTPUT
+            echo "is_release=false" >> $GITHUB_OUTPUT
+            echo "Version: 0.0.0-latest (development)"
           fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Version: $VERSION"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -75,19 +62,18 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=branch
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,prefix=sha-,enable={{is_default_branch}}
+            type=raw,value=latest
+            type=sha,prefix=sha-
 
       - name: Build and push Docker image
         id: build
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: ${{ github.ref_type == 'tag' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -95,8 +81,6 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: false
           sbom: false
-          build-args: |
-            GO_VERSION=${{ env.GO_VERSION }}
 
       - name: Verify build success
         run: |
@@ -104,7 +88,8 @@ jobs:
             echo "❌ Docker build failed - no digest generated"
             exit 1
           fi
-          echo "✅ Docker build successful with digest: ${{ steps.build.outputs.digest }}"
+          echo "✅ Docker build successful"
+          echo "Digest: ${{ steps.build.outputs.digest }}"
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3.9.2
@@ -117,9 +102,22 @@ jobs:
           echo "$TAGS" | while IFS= read -r tag; do
             if [[ -n "$tag" ]]; then
               echo "Signing: $tag@${DIGEST}"
-              cosign sign --yes "$tag@${DIGEST}" || echo "::warning::Failed to sign image $tag"
+              cosign sign --yes "$tag@${DIGEST}" || echo "::warning::Failed to sign $tag"
             fi
           done
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0.20.6
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.spdx.json
 
   release-helm:
     name: Release Helm Chart
@@ -137,75 +135,98 @@ jobs:
         with:
           version: v3.17.0
 
-      - name: Log in to GHCR for Helm
-        run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} --username ${{ github.actor }} --password-stdin
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Update Helm chart with image digest
-        if: github.ref_type == 'tag'
+      - name: Update Chart with image digest
+        env:
+          DIGEST: ${{ needs.build-image.outputs.digest }}
+          VERSION: ${{ needs.build-image.outputs.version }}
         run: |
-          DIGEST="${{ needs.build-image.outputs.digest }}"
+          # Update Chart.yaml versions
+          sed -i "s/version: .*/version: $VERSION/" charts/homer-operator/Chart.yaml
+          sed -i "s/appVersion: .*/appVersion: \"$VERSION\"/" charts/homer-operator/Chart.yaml
+
+          # Update values.yaml to use the specific digest
+          REPO_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE_WITH_DIGEST="${{ env.REGISTRY }}/${REPO_NAME}@${DIGEST}"
+
+          # Update the image repository and tag in values.yaml (only main image, not rbac-proxy)
+          sed -i "s|^  repository: .*|  repository: ${{ env.REGISTRY }}/${REPO_NAME}|" charts/homer-operator/values.yaml
+          sed -i "s|^  tag: .*|  tag: \"$VERSION\"|" charts/homer-operator/values.yaml
+
+          echo "Updated Chart.yaml and values.yaml"
+          echo "Version: $VERSION"
+          echo "Image: $IMAGE_WITH_DIGEST"
+
+      - name: Validate updated chart
+        run: |
+          helm lint charts/homer-operator
+          helm template test charts/homer-operator --dry-run > /dev/null
+          echo "✅ Updated chart validation passed"
+
+      - name: Package and Push Helm Chart
+        run: |
           VERSION="${{ needs.build-image.outputs.version }}"
+          REPO_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
 
-          # Update values.yaml with digest
-          sed -i "s|tag:.*|digest: \"$DIGEST\"|g" charts/homer-operator/values.yaml
-
-          # Update Chart.yaml version
-          sed -i "s|^version:.*|version: $VERSION|g" charts/homer-operator/Chart.yaml
-          sed -i "s|^appVersion:.*|appVersion: $VERSION|g" charts/homer-operator/Chart.yaml
-
-      - name: Package and push Helm chart
-        run: |
-          VERSION="${{ needs.build-image.outputs.version }}"
-
-          # Package chart
-          helm package charts/homer-operator --version "$VERSION"
+          # Package the chart
+          helm package charts/homer-operator --destination ./packaged-charts
 
           # Push to GHCR
-          helm push homer-operator-${VERSION}.tgz oci://${{ env.REGISTRY }}/${{ github.repository }}/charts
+          helm push "./packaged-charts/homer-operator-${VERSION}.tgz" "oci://${{ env.REGISTRY }}/${REPO_NAME}/charts"
+
+          echo "✅ Chart pushed to: oci://${{ env.REGISTRY }}/${REPO_NAME}/charts/homer-operator:${VERSION}"
 
   create-github-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    if: github.ref_type == 'tag'
     needs: [build-image, release-helm]
+    if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Generate release notes
-        id: notes
-        run: |
-          VERSION="${{ needs.build-image.outputs.version }}"
-          DIGEST="${{ needs.build-image.outputs.digest }}"
+      - name: Download SBOM
+        uses: actions/download-artifact@v4
+        with:
+          name: sbom
 
-          cat > release-notes.md <<EOF
-          ## Homer Operator $VERSION
-
-          ### Container Image
-          \`\`\`
-          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$VERSION
-          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@$DIGEST
-          \`\`\`
-
-          ### Helm Chart
-          \`\`\`bash
-          helm install homer-operator oci://${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/charts/homer-operator --version $VERSION
-          \`\`\`
-
-          ### Verification
-          \`\`\`bash
-          # Verify image signature
-          cosign verify ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@$DIGEST
-          \`\`\`
-          EOF
-
-      - name: Create GitHub Release
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          body_path: release-notes.md
           draft: false
           prerelease: false
           generate_release_notes: true
+          files: |
+            sbom.spdx.json
+          body: |
+            ## Release ${{ needs.build-image.outputs.version }}
+
+            ### Docker Image
+            ```bash
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build-image.outputs.version }}
+            ```
+
+            **Digest:** `${{ needs.build-image.outputs.digest }}`
+
+            ### Helm Chart
+            ```bash
+            helm install homer-operator oci://${{ env.REGISTRY }}/${{ github.repository }}/charts/homer-operator \
+              --version ${{ needs.build-image.outputs.version }} \
+              --namespace homer-operator-system \
+              --create-namespace
+            ```
+
+            ### What's Changed
+            See the full changelog below.
+
+            ---
+
+            **Full Changelog**: https://github.com/${{ github.repository }}/commits/${{ github.ref_name }}
