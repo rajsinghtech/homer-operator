@@ -71,6 +71,21 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  verbs:
+  - get
+  - list
 {{- if .Values.operator.enableGatewayAPI }}
 - apiGroups:
   - gateway.networking.k8s.io
