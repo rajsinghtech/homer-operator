@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	homerv1alpha1 "github.com/rajsinghtech/homer-operator/api/v1alpha1"
+	"github.com/rajsinghtech/homer-operator/pkg/homer"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -411,4 +412,365 @@ func TestClusterManager_ClusterLabels(t *testing.T) {
 	if ingresses[0].Labels["environment"] != "staging" {
 		t.Error("Expected environment label to be added")
 	}
+}
+
+// TestMultiClusterIngressAnnotationsPreserved verifies that Homer annotations on Ingresses
+// from remote clusters are preserved and applied to the generated Homer config
+func TestMultiClusterIngressAnnotationsPreserved(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = networkingv1.AddToScheme(scheme)
+	_ = homerv1alpha1.AddToScheme(scheme)
+	_ = gatewayv1.Install(scheme)
+
+	ingress := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "annotated-ingress",
+			Namespace: "remote-namespace",
+			Annotations: map[string]string{
+				"item.homer.rajsingh.info/name":     "My Application",
+				"item.homer.rajsingh.info/subtitle": "Production instance",
+				"item.homer.rajsingh.info/logo":     "https://example.com/logo.png",
+				"item.homer.rajsingh.info/tag":      "production",
+				"item.homer.rajsingh.info/keywords": "app, api, service",
+				"service.homer.rajsingh.info/name":  "Remote Services",
+			},
+		},
+		Spec: networkingv1.IngressSpec{
+			Rules: []networkingv1.IngressRule{{Host: "app.remote.example.com"}},
+		},
+	}
+
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ingress).Build()
+	cm := NewClusterManager(client, scheme)
+
+	testCluster := &ClusterClient{
+		Name:       "remote-cluster",
+		Client:     client,
+		Connected:  true,
+		ClusterCfg: &homerv1alpha1.RemoteCluster{Name: "remote-cluster"},
+	}
+
+	dashboard := &homerv1alpha1.Dashboard{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-dashboard", Namespace: "default"},
+		Spec: homerv1alpha1.DashboardSpec{
+			HomerConfig: homer.HomerConfig{Title: "Test Dashboard", Header: true},
+		},
+	}
+
+	ctx := context.Background()
+	ingresses, err := cm.discoverClusterIngresses(ctx, testCluster, dashboard)
+	if err != nil {
+		t.Fatalf("Failed to discover ingresses: %v", err)
+	}
+
+	if len(ingresses) != 1 {
+		t.Fatalf("Expected 1 ingress, got %d", len(ingresses))
+	}
+
+	// Verify annotations preserved after discovery
+	expectedAnnotations := map[string]string{
+		"item.homer.rajsingh.info/name":     "My Application",
+		"item.homer.rajsingh.info/subtitle": "Production instance",
+		"item.homer.rajsingh.info/logo":     "https://example.com/logo.png",
+		"item.homer.rajsingh.info/tag":      "production",
+		"item.homer.rajsingh.info/keywords": "app, api, service",
+		"service.homer.rajsingh.info/name":  "Remote Services",
+		"homer.rajsingh.info/cluster":       "remote-cluster",
+	}
+
+	for key, expectedValue := range expectedAnnotations {
+		if actualValue, ok := ingresses[0].Annotations[key]; !ok {
+			t.Errorf("Annotation %s is missing", key)
+		} else if actualValue != expectedValue {
+			t.Errorf("Annotation %s: expected %q, got %q", key, expectedValue, actualValue)
+		}
+	}
+
+	// Test annotations processed into Homer config
+	homerConfig := &homer.HomerConfig{Title: "Test Dashboard", Header: true}
+	for _, ing := range ingresses {
+		homer.UpdateHomerConfigIngress(homerConfig, ing, nil)
+	}
+
+	if len(homerConfig.Services) == 0 {
+		t.Fatal("No services created in Homer config")
+	}
+
+	var targetService *homer.Service
+	for i := range homerConfig.Services {
+		if homerConfig.Services[i].Parameters["name"] == "Remote Services" {
+			targetService = &homerConfig.Services[i]
+			break
+		}
+	}
+
+	if targetService == nil || len(targetService.Items) == 0 {
+		t.Fatal("Service 'Remote Services' not found or has no items")
+	}
+
+	item := targetService.Items[0]
+	expectedParams := map[string]string{
+		"name":     "My Application",
+		"subtitle": "Production instance",
+		"logo":     "https://example.com/logo.png",
+		"tag":      "production",
+		"keywords": "app,api,service",
+	}
+
+	for key, expectedValue := range expectedParams {
+		if actualValue, ok := item.Parameters[key]; !ok || actualValue != expectedValue {
+			t.Errorf("Parameter %s: expected %q, got %q", key, expectedValue, actualValue)
+		}
+	}
+
+	// Verify YAML output
+	ingressList := networkingv1.IngressList{Items: ingresses}
+	configMap, err := homer.CreateConfigMap(homerConfig, "test", "default", ingressList, dashboard)
+	if err != nil {
+		t.Fatalf("Failed to create ConfigMap: %v", err)
+	}
+
+	yamlStr := configMap.Data["config.yml"]
+	expectedStrings := []string{"My Application", "Production instance", "https://example.com/logo.png", "production", "app,api,service", "Remote Services"}
+	for _, expected := range expectedStrings {
+		if !contains(yamlStr, expected) {
+			t.Errorf("Generated YAML does not contain %q", expected)
+		}
+	}
+}
+
+// TestMultiClusterHTTPRouteAnnotationsPreserved verifies that Homer annotations on HTTPRoutes
+// from remote clusters are preserved and applied to the generated Homer config
+func TestMultiClusterHTTPRouteAnnotationsPreserved(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = networkingv1.AddToScheme(scheme)
+	_ = homerv1alpha1.AddToScheme(scheme)
+	_ = gatewayv1.Install(scheme)
+
+	hostname := gatewayv1.Hostname("api.remote.example.com")
+	httproute := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "annotated-httproute",
+			Namespace: "remote-namespace",
+			Annotations: map[string]string{
+				"item.homer.rajsingh.info/name":     "API Gateway",
+				"item.homer.rajsingh.info/subtitle": "GraphQL API",
+				"item.homer.rajsingh.info/logo":     "https://example.com/api-logo.png",
+				"item.homer.rajsingh.info/tag":      "api",
+				"item.homer.rajsingh.info/keywords": "graphql, rest, api",
+				"service.homer.rajsingh.info/name":  "API Services",
+			},
+		},
+		Spec: gatewayv1.HTTPRouteSpec{Hostnames: []gatewayv1.Hostname{hostname}},
+	}
+
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(httproute).Build()
+	cm := NewClusterManager(client, scheme)
+
+	testCluster := &ClusterClient{
+		Name:       "remote-cluster",
+		Client:     client,
+		Connected:  true,
+		ClusterCfg: &homerv1alpha1.RemoteCluster{Name: "remote-cluster"},
+	}
+
+	dashboard := &homerv1alpha1.Dashboard{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-dashboard", Namespace: "default"},
+		Spec: homerv1alpha1.DashboardSpec{
+			HomerConfig: homer.HomerConfig{Title: "Test Dashboard", Header: true},
+		},
+	}
+
+	ctx := context.Background()
+	httproutes, err := cm.discoverClusterHTTPRoutes(ctx, testCluster, dashboard)
+	if err != nil {
+		t.Fatalf("Failed to discover HTTPRoutes: %v", err)
+	}
+
+	if len(httproutes) != 1 {
+		t.Fatalf("Expected 1 HTTPRoute, got %d", len(httproutes))
+	}
+
+	// Verify annotations preserved after discovery
+	expectedAnnotations := map[string]string{
+		"item.homer.rajsingh.info/name":     "API Gateway",
+		"item.homer.rajsingh.info/subtitle": "GraphQL API",
+		"item.homer.rajsingh.info/logo":     "https://example.com/api-logo.png",
+		"item.homer.rajsingh.info/tag":      "api",
+		"item.homer.rajsingh.info/keywords": "graphql, rest, api",
+		"service.homer.rajsingh.info/name":  "API Services",
+		"homer.rajsingh.info/cluster":       "remote-cluster",
+	}
+
+	for key, expectedValue := range expectedAnnotations {
+		if actualValue, ok := httproutes[0].Annotations[key]; !ok {
+			t.Errorf("Annotation %s is missing", key)
+		} else if actualValue != expectedValue {
+			t.Errorf("Annotation %s: expected %q, got %q", key, expectedValue, actualValue)
+		}
+	}
+
+	// Test annotations processed into Homer config
+	homerConfig := &homer.HomerConfig{Title: "Test Dashboard", Header: true}
+	for i := range httproutes {
+		homer.UpdateHomerConfigHTTPRoute(homerConfig, &httproutes[i], nil)
+	}
+
+	if len(homerConfig.Services) == 0 {
+		t.Fatal("No services created in Homer config")
+	}
+
+	var targetService *homer.Service
+	for i := range homerConfig.Services {
+		if homerConfig.Services[i].Parameters["name"] == "API Services" {
+			targetService = &homerConfig.Services[i]
+			break
+		}
+	}
+
+	if targetService == nil || len(targetService.Items) == 0 {
+		t.Fatal("Service 'API Services' not found or has no items")
+	}
+
+	item := targetService.Items[0]
+	expectedParams := map[string]string{
+		"name":     "API Gateway",
+		"subtitle": "GraphQL API",
+		"logo":     "https://example.com/api-logo.png",
+		"tag":      "api",
+		"keywords": "graphql,rest,api",
+	}
+
+	for key, expectedValue := range expectedParams {
+		if actualValue, ok := item.Parameters[key]; !ok || actualValue != expectedValue {
+			t.Errorf("Parameter %s: expected %q, got %q", key, expectedValue, actualValue)
+		}
+	}
+
+	// Verify YAML output
+	configMap, err := homer.CreateConfigMapWithHTTPRoutes(homerConfig, "test", "default", networkingv1.IngressList{}, httproutes, dashboard, nil)
+	if err != nil {
+		t.Fatalf("Failed to create ConfigMap: %v", err)
+	}
+
+	yamlStr := configMap.Data["config.yml"]
+	expectedStrings := []string{"API Gateway", "GraphQL API", "https://example.com/api-logo.png", "api", "graphql,rest,api", "API Services"}
+	for _, expected := range expectedStrings {
+		if !contains(yamlStr, expected) {
+			t.Errorf("Generated YAML does not contain %q", expected)
+		}
+	}
+}
+
+// TestMultiClusterMultipleResourcesWithAnnotations tests multiple ingresses and HTTPRoutes
+// from different clusters with different annotations
+func TestMultiClusterMultipleResourcesWithAnnotations(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = networkingv1.AddToScheme(scheme)
+	_ = homerv1alpha1.AddToScheme(scheme)
+	_ = gatewayv1.Install(scheme)
+
+	// Cluster 1: Ingress
+	cluster1Ingress := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "app1",
+			Namespace: "default",
+			Annotations: map[string]string{
+				"item.homer.rajsingh.info/name": "Cluster 1 App",
+				"item.homer.rajsingh.info/tag":  "cluster1",
+			},
+		},
+		Spec: networkingv1.IngressSpec{Rules: []networkingv1.IngressRule{{Host: "app1.cluster1.com"}}},
+	}
+
+	// Cluster 2: HTTPRoute
+	hostname := gatewayv1.Hostname("app2.cluster2.com")
+	cluster2HTTPRoute := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "app2",
+			Namespace: "default",
+			Annotations: map[string]string{
+				"item.homer.rajsingh.info/name": "Cluster 2 App",
+				"item.homer.rajsingh.info/tag":  "cluster2",
+			},
+		},
+		Spec: gatewayv1.HTTPRouteSpec{Hostnames: []gatewayv1.Hostname{hostname}},
+	}
+
+	client1 := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster1Ingress).Build()
+	client2 := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster2HTTPRoute).Build()
+
+	cm := NewClusterManager(client1, scheme)
+
+	cluster1 := &ClusterClient{
+		Name:       "cluster1",
+		Client:     client1,
+		Connected:  true,
+		ClusterCfg: &homerv1alpha1.RemoteCluster{Name: "cluster1"},
+	}
+
+	cluster2 := &ClusterClient{
+		Name:       "cluster2",
+		Client:     client2,
+		Connected:  true,
+		ClusterCfg: &homerv1alpha1.RemoteCluster{Name: "cluster2"},
+	}
+
+	dashboard := &homerv1alpha1.Dashboard{
+		ObjectMeta: metav1.ObjectMeta{Name: "multi-cluster-dashboard", Namespace: "default"},
+		Spec: homerv1alpha1.DashboardSpec{
+			HomerConfig: homer.HomerConfig{Title: "Multi-Cluster Dashboard", Header: true},
+		},
+	}
+
+	ctx := context.Background()
+
+	// Discover from both clusters
+	ingresses, err := cm.discoverClusterIngresses(ctx, cluster1, dashboard)
+	if err != nil {
+		t.Fatalf("Failed to discover from cluster1: %v", err)
+	}
+
+	httproutes, err := cm.discoverClusterHTTPRoutes(ctx, cluster2, dashboard)
+	if err != nil {
+		t.Fatalf("Failed to discover from cluster2: %v", err)
+	}
+
+	if len(ingresses) != 1 || len(httproutes) != 1 {
+		t.Fatalf("Expected 1 ingress and 1 HTTPRoute, got %d and %d", len(ingresses), len(httproutes))
+	}
+
+	// Create Homer config with all resources
+	homerConfig := &homer.HomerConfig{Title: "Multi-Cluster Dashboard", Header: true}
+	for _, ing := range ingresses {
+		homer.UpdateHomerConfigIngress(homerConfig, ing, nil)
+	}
+	for i := range httproutes {
+		homer.UpdateHomerConfigHTTPRoute(homerConfig, &httproutes[i], nil)
+	}
+
+	// Generate YAML and verify both apps are present
+	ingressList := networkingv1.IngressList{Items: ingresses}
+	configMap, err := homer.CreateConfigMapWithHTTPRoutes(homerConfig, "multi-cluster-test", "default", ingressList, httproutes, dashboard, nil)
+	if err != nil {
+		t.Fatalf("Failed to create ConfigMap: %v", err)
+	}
+
+	yamlStr := configMap.Data["config.yml"]
+
+	// Verify both clusters' apps are in the config
+	expectedStrings := []string{"Cluster 1 App", "cluster1", "Cluster 2 App", "cluster2"}
+	for _, expected := range expectedStrings {
+		if !contains(yamlStr, expected) {
+			t.Errorf("Generated YAML does not contain %q", expected)
+		}
+	}
+}
+
+// Helper function for string search
+func contains(s, substr string) bool {
+	return len(s) > 0 && len(substr) > 0 && (s == substr || len(s) >= len(substr) && (s[0:len(substr)] == substr || contains(s[1:], substr)))
 }

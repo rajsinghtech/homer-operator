@@ -1556,29 +1556,7 @@ func smartInferType(value string) interface{} {
 		return i
 	}
 
-	// Array detection (simple comma-separated)
-	if strings.Contains(value, ",") {
-		return parseArrayValue(value)
-	}
-
 	return value
-}
-
-// parseArrayValue efficiently parses comma-separated values into an array
-func parseArrayValue(value string) []string {
-	items := strings.Split(value, ",")
-	if len(items) <= 1 {
-		return []string{value} // Single item, return as-is
-	}
-
-	// Pre-allocate result slice for better performance
-	result := make([]string, 0, len(items))
-	for _, item := range items {
-		if trimmed := strings.TrimSpace(item); trimmed != "" {
-			result = append(result, trimmed)
-		}
-	}
-	return result
 }
 
 // validateParameterValue validates string values according to their expected type
