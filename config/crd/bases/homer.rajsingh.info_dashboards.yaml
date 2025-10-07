@@ -322,7 +322,9 @@ spec:
                   externalConfig:
                     type: string
                   footer:
-                    type: string
+                    description: Footer can be false to hide the footer or a string
+                      containing HTML content.
+                    x-kubernetes-preserve-unknown-fields: true
                   header:
                     type: boolean
                   hotkey:

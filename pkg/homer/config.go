@@ -73,12 +73,15 @@ var (
 
 // HomerConfig contains base configuration for Homer dashboard.
 type HomerConfig struct {
-	Title             string        `json:"title,omitempty" yaml:"title,omitempty"`
-	Subtitle          string        `json:"subtitle,omitempty" yaml:"subtitle,omitempty"`
-	DocumentTitle     string        `json:"documentTitle,omitempty" yaml:"documentTitle,omitempty"`
-	Logo              string        `json:"logo,omitempty" yaml:"logo,omitempty"`
-	Icon              string        `json:"icon,omitempty" yaml:"icon,omitempty"`
-	Header            bool          `json:"header" yaml:"header"`
+	Title         string `json:"title,omitempty" yaml:"title,omitempty"`
+	Subtitle      string `json:"subtitle,omitempty" yaml:"subtitle,omitempty"`
+	DocumentTitle string `json:"documentTitle,omitempty" yaml:"documentTitle,omitempty"`
+	Logo          string `json:"logo,omitempty" yaml:"logo,omitempty"`
+	Icon          string `json:"icon,omitempty" yaml:"icon,omitempty"`
+	Header        bool   `json:"header" yaml:"header"`
+	// Footer can be false to hide the footer or a string containing HTML content.
+	// +kubebuilder:validation:Type=""
+	// +kubebuilder:pruning:PreserveUnknownFields
 	Footer            string        `json:"footer,omitempty" yaml:"footer,omitempty"`
 	Columns           string        `json:"columns,omitempty" yaml:"columns,omitempty"`
 	ConnectivityCheck bool          `json:"connectivityCheck,omitempty" yaml:"connectivityCheck,omitempty"`

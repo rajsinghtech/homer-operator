@@ -1,0 +1,35 @@
+---
+apiVersion: homer.rajsingh.info/v1alpha1
+kind: Dashboard
+metadata:
+  name: dashboard-no-footer
+  namespace: public
+  labels:
+    app: homer-dashboard
+    tier: frontend
+spec:
+  replicas: 1
+
+  homerConfig:
+    title: "Minimal Dashboard"
+    subtitle: "No Footer Example"
+    header: true
+    # Footer can be set to false to hide it completely (issue #33 fix)
+    footer: false
+
+    # Default layout settings
+    defaults:
+      layout: "columns"
+      colorTheme: "auto"
+
+    # Basic service example
+    services:
+    - parameters:
+        name: "Services"
+        icon: "fas fa-server"
+      items:
+      - parameters:
+          name: "Example Service"
+          subtitle: "This dashboard has no footer"
+          icon: "fas fa-globe"
+          url: "https://example.com"
