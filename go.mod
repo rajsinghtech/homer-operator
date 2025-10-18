@@ -3,7 +3,7 @@ module github.com/rajsinghtech/homer-operator
 go 1.25.1
 
 require (
-	github.com/onsi/ginkgo/v2 v2.25.1
+	github.com/onsi/ginkgo/v2 v2.26.0
 	github.com/onsi/gomega v1.38.2
 	gopkg.in/yaml.v2 v2.4.0
 	k8s.io/api v0.34.1
@@ -17,6 +17,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect
 	github.com/go-openapi/swag/jsonname v0.25.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
+	golang.org/x/mod v0.27.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.0 // indirect
 )
 
