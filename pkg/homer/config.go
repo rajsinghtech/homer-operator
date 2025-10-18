@@ -1131,6 +1131,20 @@ func createIngressItems(ingress networkingv1.Ingress, domainFilters []string) []
 		item := createIngressItem(ingress, host, validRuleCount)
 		processItemAnnotations(&item, ingress.ObjectMeta.Annotations)
 
+		// Append cluster name suffix from label AFTER processing annotations
+		// so that it takes precedence over any name annotations
+		if clusterName, ok := ingress.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != "local" {
+			fmt.Fprintf(os.Stderr, "DEBUG: Ingress %s from cluster %s, labels: %v\n", ingress.ObjectMeta.Name, clusterName, ingress.ObjectMeta.Labels)
+			if suffix, hasSuffix := ingress.ObjectMeta.Labels["cluster-name-suffix"]; hasSuffix && suffix != "" {
+				if currentName, hasName := item.Parameters["name"]; hasName && currentName != "" {
+					fmt.Fprintf(os.Stderr, "DEBUG: Appending suffix %q to name %q\n", suffix, currentName)
+					setItemParameter(&item, "name", currentName+suffix)
+				}
+			} else {
+				fmt.Fprintf(os.Stderr, "DEBUG: No cluster-name-suffix label found for %s\n", ingress.ObjectMeta.Name)
+			}
+		}
+
 		// Skip items that are marked as hidden
 		if isItemHidden(&item) {
 			continue
@@ -1167,17 +1181,6 @@ func createIngressItem(ingress networkingv1.Ingress, host string, validRuleCount
 	name := ingress.ObjectMeta.Name
 	if validRuleCount > 1 {
 		name = ingress.ObjectMeta.Name + "-" + host
-	}
-
-	// Append cluster name suffix from label if set (only for remote clusters)
-	if clusterName, ok := ingress.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != "local" {
-		fmt.Fprintf(os.Stderr, "DEBUG: Ingress %s from cluster %s, labels: %v\n", ingress.ObjectMeta.Name, clusterName, ingress.ObjectMeta.Labels)
-		if suffix, hasSuffix := ingress.ObjectMeta.Labels["cluster-name-suffix"]; hasSuffix && suffix != "" {
-			fmt.Fprintf(os.Stderr, "DEBUG: Appending suffix %q to name %q\n", suffix, name)
-			name = name + suffix
-		} else {
-			fmt.Fprintf(os.Stderr, "DEBUG: No cluster-name-suffix label found for %s\n", ingress.ObjectMeta.Name)
-		}
 	}
 
 	setItemParameter(&item, "name", name)
@@ -1296,17 +1299,6 @@ func updateHomerConfigWithHTTPRoutes(
 				name = httproute.ObjectMeta.Name + "-" + hostStr
 			}
 
-			// Append cluster name suffix from label if set (only for remote clusters)
-			if clusterName, ok := httproute.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != "local" {
-				fmt.Fprintf(os.Stderr, "DEBUG: HTTPRoute %s from cluster %s, labels: %v\n", httproute.ObjectMeta.Name, clusterName, httproute.ObjectMeta.Labels)
-				if suffix, hasSuffix := httproute.ObjectMeta.Labels["cluster-name-suffix"]; hasSuffix && suffix != "" {
-					fmt.Fprintf(os.Stderr, "DEBUG: Appending suffix %q to name %q\n", suffix, name)
-					name = name + suffix
-				} else {
-					fmt.Fprintf(os.Stderr, "DEBUG: No cluster-name-suffix label found for %s\n", httproute.ObjectMeta.Name)
-				}
-			}
-
 			setItemParameter(&item, "name", name)
 
 			// Set metadata for conflict detection
@@ -1315,6 +1307,20 @@ func updateHomerConfigWithHTTPRoutes(
 			item.LastUpdate = httproute.ObjectMeta.CreationTimestamp.Time.Format("2006-01-02T15:04:05Z")
 
 			processItemAnnotations(&item, httproute.ObjectMeta.Annotations)
+
+			// Append cluster name suffix from label AFTER processing annotations
+			// so that it takes precedence over any name annotations
+			if clusterName, ok := httproute.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != "local" {
+				fmt.Fprintf(os.Stderr, "DEBUG: HTTPRoute %s from cluster %s, labels: %v\n", httproute.ObjectMeta.Name, clusterName, httproute.ObjectMeta.Labels)
+				if suffix, hasSuffix := httproute.ObjectMeta.Labels["cluster-name-suffix"]; hasSuffix && suffix != "" {
+					if currentName, hasName := item.Parameters["name"]; hasName && currentName != "" {
+						fmt.Fprintf(os.Stderr, "DEBUG: Appending suffix %q to name %q\n", suffix, currentName)
+						setItemParameter(&item, "name", currentName+suffix)
+					}
+				} else {
+					fmt.Fprintf(os.Stderr, "DEBUG: No cluster-name-suffix label found for %s\n", httproute.ObjectMeta.Name)
+				}
+			}
 
 			// Skip items that are marked as hidden
 			if isItemHidden(&item) {
