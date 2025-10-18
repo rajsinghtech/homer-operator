@@ -1164,8 +1164,12 @@ func createIngressItem(ingress networkingv1.Ingress, host string, validRuleCount
 
 	// Append cluster name suffix from label if set (only for remote clusters)
 	if clusterName, ok := ingress.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != "local" {
+		log.Printf("DEBUG: Ingress %s from cluster %s, labels: %v", ingress.ObjectMeta.Name, clusterName, ingress.ObjectMeta.Labels)
 		if suffix, hasSuffix := ingress.ObjectMeta.Labels["cluster-name-suffix"]; hasSuffix && suffix != "" {
+			log.Printf("DEBUG: Appending suffix %q to name %q", suffix, name)
 			name = name + suffix
+		} else {
+			log.Printf("DEBUG: No cluster-name-suffix label found for %s", ingress.ObjectMeta.Name)
 		}
 	}
 
@@ -1287,8 +1291,12 @@ func updateHomerConfigWithHTTPRoutes(
 
 			// Append cluster name suffix from label if set (only for remote clusters)
 			if clusterName, ok := httproute.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != "local" {
+				log.Printf("DEBUG: HTTPRoute %s from cluster %s, labels: %v", httproute.ObjectMeta.Name, clusterName, httproute.ObjectMeta.Labels)
 				if suffix, hasSuffix := httproute.ObjectMeta.Labels["cluster-name-suffix"]; hasSuffix && suffix != "" {
+					log.Printf("DEBUG: Appending suffix %q to name %q", suffix, name)
 					name = name + suffix
+				} else {
+					log.Printf("DEBUG: No cluster-name-suffix label found for %s", httproute.ObjectMeta.Name)
 				}
 			}
 
