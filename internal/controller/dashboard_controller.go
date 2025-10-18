@@ -872,17 +872,13 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 				// Continue with partial results
 			}
 
-			// Aggregate all discovered HTTPRoutes
+			// Aggregate all discovered HTTPRoutes (already filtered by ClusterManager)
 			for clusterName, httproutes := range clusterHTTPRoutes {
 				log := log.FromContext(ctx)
 				log.V(1).Info("Discovered HTTPRoutes from cluster", "cluster", clusterName, "count", len(httproutes))
 
-				// Apply domain filters (already filtered by ClusterManager but apply domain filters)
-				for _, httproute := range httproutes {
-					if homer.MatchesDomainFilters(r.getHTTPRouteHosts(&httproute), dashboard.Spec.DomainFilters) {
-						filteredHTTPRoutes = append(filteredHTTPRoutes, httproute)
-					}
-				}
+				// HTTPRoutes are already filtered by ClusterManager with per-cluster domain filters
+				filteredHTTPRoutes = append(filteredHTTPRoutes, httproutes...)
 			}
 		} else {
 			// Fall back to single-cluster discovery
@@ -902,7 +898,9 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 			}
 		}
 
-		return homer.CreateConfigMapWithHTTPRoutes(homerConfig, dashboard.Name, dashboard.Namespace, filteredIngressList, filteredHTTPRoutes, dashboard, dashboard.Spec.DomainFilters)
+		// Don't pass domain filters since HTTPRoutes are already filtered by ClusterManager
+		// and we want to show all hostnames from each HTTPRoute
+		return homer.CreateConfigMapWithHTTPRoutes(homerConfig, dashboard.Name, dashboard.Namespace, filteredIngressList, filteredHTTPRoutes, dashboard, nil)
 	}
 
 	return homer.CreateConfigMap(homerConfig, dashboard.Name, dashboard.Namespace, filteredIngressList, dashboard)

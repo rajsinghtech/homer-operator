@@ -1250,11 +1250,21 @@ func updateHomerConfigWithHTTPRoutes(
 		// This allows for cleanup when all hostnames are removed
 		return
 	} else {
+		// Check if HTTPRoute has per-cluster domain filters annotation
+		effectiveDomainFilters := domainFilters
+		if filterAnnotation, ok := httproute.ObjectMeta.Annotations["homer.rajsingh.info/domain-filters"]; ok && filterAnnotation != "" {
+			// Use per-cluster domain filters from annotation
+			effectiveDomainFilters = strings.Split(filterAnnotation, ",")
+			for i := range effectiveDomainFilters {
+				effectiveDomainFilters[i] = strings.TrimSpace(effectiveDomainFilters[i])
+			}
+		}
+
 		// Create separate item for each hostname that matches domain filters
 		var filteredHostnames []gatewayv1.Hostname
 		for _, hostname := range httproute.Spec.Hostnames {
 			hostStr := string(hostname)
-			if utils.MatchesHostDomainFilters(hostStr, domainFilters) {
+			if utils.MatchesHostDomainFilters(hostStr, effectiveDomainFilters) {
 				filteredHostnames = append(filteredHostnames, hostname)
 			}
 		}

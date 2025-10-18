@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -522,6 +523,11 @@ func (m *ClusterManager) discoverClusterHTTPRoutes(ctx context.Context, cluster 
 				clusterHTTPRoutes.Items[i].Annotations = make(map[string]string)
 			}
 			clusterHTTPRoutes.Items[i].Annotations["homer.rajsingh.info/cluster"] = cluster.Name
+
+			// Store domain filters as annotation so Homer config generator knows which hostnames to show
+			if len(domainFilters) > 0 {
+				clusterHTTPRoutes.Items[i].Annotations["homer.rajsingh.info/domain-filters"] = strings.Join(domainFilters, ",")
+			}
 
 			filtered = append(filtered, clusterHTTPRoutes.Items[i])
 		}
