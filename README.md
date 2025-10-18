@@ -703,6 +703,7 @@ spec:
         cluster: production
         region: us-west-2
         team: platform
+        cluster-tagstyle: "is-danger"  # Optional: Customize badge color (red/yellow/blue/green/gray)
 
       # Resource filtering (optional) - same as main cluster
       ingressSelector:
@@ -717,9 +718,22 @@ spec:
         matchLabels:
           type: ingress
 
+      # Per-cluster domain filtering (optional) - overrides global domainFilters for this cluster
       domainFilters:
-        - "example.com"
+        - "prod.example.com"     # Only production domains from this cluster
+        - "api.example.com"      # API endpoints
 ```
+
+**Automatic Cluster Tagging:**
+Services from remote clusters automatically get badge tags with the cluster name. Customize colors using the `cluster-tagstyle` label:
+- `is-danger` (red) - production
+- `is-warning` (yellow) - staging
+- `is-info` (blue, default) - development
+- `is-success` (green) - QA
+- `is-light` (gray) - deprecated
+
+**Per-Cluster Domain Filtering:**
+Each cluster can have independent `domainFilters` to control which services are discovered. If not specified, inherits from the main `spec.domainFilters`.
 
 ### Status Monitoring
 
