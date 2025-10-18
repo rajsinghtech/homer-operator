@@ -342,24 +342,24 @@ func (m *ClusterManager) discoverClusterIngresses(ctx context.Context, cluster *
 		}
 
 		filtered := []networkingv1.Ingress{}
-		for _, ingress := range clusterIngresses.Items {
-			if labelSelector.Matches(labels.Set(ingress.Labels)) {
+		for i := range clusterIngresses.Items {
+			if labelSelector.Matches(labels.Set(clusterIngresses.Items[i].Labels)) {
 				// Add cluster labels if specified
 				if cluster.ClusterCfg != nil && cluster.ClusterCfg.ClusterLabels != nil {
-					if ingress.Labels == nil {
-						ingress.Labels = make(map[string]string)
+					if clusterIngresses.Items[i].Labels == nil {
+						clusterIngresses.Items[i].Labels = make(map[string]string)
 					}
 					for k, v := range cluster.ClusterCfg.ClusterLabels {
-						ingress.Labels[k] = v
+						clusterIngresses.Items[i].Labels[k] = v
 					}
 				}
 				// Add cluster annotation for identification
-				if ingress.Annotations == nil {
-					ingress.Annotations = make(map[string]string)
+				if clusterIngresses.Items[i].Annotations == nil {
+					clusterIngresses.Items[i].Annotations = make(map[string]string)
 				}
-				ingress.Annotations["homer.rajsingh.info/cluster"] = cluster.Name
+				clusterIngresses.Items[i].Annotations["homer.rajsingh.info/cluster"] = cluster.Name
 
-				filtered = append(filtered, ingress)
+				filtered = append(filtered, clusterIngresses.Items[i])
 			}
 		}
 		return filtered, nil
@@ -455,29 +455,29 @@ func (m *ClusterManager) discoverClusterHTTPRoutes(ctx context.Context, cluster 
 
 	// Filter HTTPRoutes based on selectors
 	filtered := []gatewayv1.HTTPRoute{}
-	for _, httproute := range clusterHTTPRoutes.Items {
-		shouldInclude, err := m.shouldIncludeHTTPRoute(ctx, cluster, &httproute, dashboard)
+	for i := range clusterHTTPRoutes.Items {
+		shouldInclude, err := m.shouldIncludeHTTPRoute(ctx, cluster, &clusterHTTPRoutes.Items[i], dashboard)
 		if err != nil {
-			m.log.V(1).Error(err, "Error checking HTTPRoute inclusion", "httproute", httproute.Name, "cluster", cluster.Name)
+			m.log.V(1).Error(err, "Error checking HTTPRoute inclusion", "httproute", clusterHTTPRoutes.Items[i].Name, "cluster", cluster.Name)
 			continue
 		}
 		if shouldInclude {
 			// Add cluster labels if specified
 			if cluster.ClusterCfg != nil && cluster.ClusterCfg.ClusterLabels != nil {
-				if httproute.Labels == nil {
-					httproute.Labels = make(map[string]string)
+				if clusterHTTPRoutes.Items[i].Labels == nil {
+					clusterHTTPRoutes.Items[i].Labels = make(map[string]string)
 				}
 				for k, v := range cluster.ClusterCfg.ClusterLabels {
-					httproute.Labels[k] = v
+					clusterHTTPRoutes.Items[i].Labels[k] = v
 				}
 			}
 			// Add cluster annotation for identification
-			if httproute.Annotations == nil {
-				httproute.Annotations = make(map[string]string)
+			if clusterHTTPRoutes.Items[i].Annotations == nil {
+				clusterHTTPRoutes.Items[i].Annotations = make(map[string]string)
 			}
-			httproute.Annotations["homer.rajsingh.info/cluster"] = cluster.Name
+			clusterHTTPRoutes.Items[i].Annotations["homer.rajsingh.info/cluster"] = cluster.Name
 
-			filtered = append(filtered, httproute)
+			filtered = append(filtered, clusterHTTPRoutes.Items[i])
 		}
 	}
 

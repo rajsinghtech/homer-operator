@@ -330,13 +330,13 @@ func (r *DashboardReconciler) getFilteredIngresses(ctx context.Context, dashboar
 	}
 
 	filteredIngresses := []networkingv1.Ingress{}
-	for _, ingress := range clusterIngresses.Items {
-		shouldInclude, err := r.shouldIncludeIngress(ctx, &ingress, dashboard)
+	for i := range clusterIngresses.Items {
+		shouldInclude, err := r.shouldIncludeIngress(ctx, &clusterIngresses.Items[i], dashboard)
 		if err != nil {
 			return networkingv1.IngressList{}, err
 		}
 		if shouldInclude {
-			filteredIngresses = append(filteredIngresses, ingress)
+			filteredIngresses = append(filteredIngresses, clusterIngresses.Items[i])
 		}
 	}
 
@@ -362,14 +362,14 @@ func (r *DashboardReconciler) getMultiClusterFilteredIngresses(ctx context.Conte
 			log.V(1).Info("Discovered ingresses from cluster", "cluster", clusterName, "count", len(ingresses))
 
 			// Apply domain filters
-			for _, ingress := range ingresses {
-				shouldInclude, err := r.shouldIncludeIngress(ctx, &ingress, dashboard)
+			for i := range ingresses {
+				shouldInclude, err := r.shouldIncludeIngress(ctx, &ingresses[i], dashboard)
 				if err != nil {
-					log.Error(err, "Error checking ingress inclusion", "ingress", ingress.Name, "cluster", clusterName)
+					log.Error(err, "Error checking ingress inclusion", "ingress", ingresses[i].Name, "cluster", clusterName)
 					continue
 				}
 				if shouldInclude {
-					allIngresses = append(allIngresses, ingress)
+					allIngresses = append(allIngresses, ingresses[i])
 				}
 			}
 		}
@@ -891,13 +891,13 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 				return corev1.ConfigMap{}, err
 			}
 
-			for _, httproute := range clusterHTTPRoutes.Items {
-				shouldInclude, err := r.shouldIncludeHTTPRoute(ctx, &httproute, dashboard)
+			for i := range clusterHTTPRoutes.Items {
+				shouldInclude, err := r.shouldIncludeHTTPRoute(ctx, &clusterHTTPRoutes.Items[i], dashboard)
 				if err != nil {
 					return corev1.ConfigMap{}, err
 				}
 				if shouldInclude {
-					filteredHTTPRoutes = append(filteredHTTPRoutes, httproute)
+					filteredHTTPRoutes = append(filteredHTTPRoutes, clusterHTTPRoutes.Items[i])
 				}
 			}
 		}
