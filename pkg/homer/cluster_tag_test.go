@@ -19,34 +19,33 @@ func TestIngressClusterAutoTag(t *testing.T) {
 		expectedTagStyle string
 	}{
 		{
-			name:             "Remote cluster ottawa - default blue",
+			name:         "Remote cluster without tagstyle - no tag",
+			clusterAnnot: "ottawa",
+			expectTag:    false,
+		},
+		{
+			name:             "Remote cluster with blue tag",
 			clusterAnnot:     "ottawa",
+			tagStyleLabel:    "is-info",
 			expectTag:        true,
 			expectedTagName:  "ottawa",
-			expectedTagStyle: "is-info", // Default blue
+			expectedTagStyle: "is-info",
 		},
 		{
-			name:             "Remote cluster robbinsdale - default blue",
-			clusterAnnot:     "robbinsdale",
-			expectTag:        true,
-			expectedTagName:  "robbinsdale",
-			expectedTagStyle: "is-info", // Default blue
-		},
-		{
-			name:             "Remote cluster with custom red color",
-			clusterAnnot:     "ottawa",
+			name:             "Remote cluster with red tag",
+			clusterAnnot:     "production",
 			tagStyleLabel:    "is-danger",
 			expectTag:        true,
-			expectedTagName:  "ottawa",
-			expectedTagStyle: "is-danger", // Custom red
+			expectedTagName:  "production",
+			expectedTagStyle: "is-danger",
 		},
 		{
-			name:             "Remote cluster with custom yellow color",
+			name:             "Remote cluster with yellow tag",
 			clusterAnnot:     "staging",
 			tagStyleLabel:    "is-warning",
 			expectTag:        true,
 			expectedTagName:  "staging",
-			expectedTagStyle: "is-warning", // Custom yellow
+			expectedTagStyle: "is-warning",
 		},
 		{
 			name:         "Local cluster",
@@ -137,26 +136,25 @@ func TestHTTPRouteClusterAutoTag(t *testing.T) {
 		expectedTagStyle string
 	}{
 		{
-			name:             "Remote cluster ottawa - default blue",
+			name:         "Remote cluster without tagstyle - no tag",
+			clusterAnnot: "ottawa",
+			expectTag:    false,
+		},
+		{
+			name:             "Remote cluster with blue tag",
 			clusterAnnot:     "ottawa",
+			tagStyleLabel:    "is-info",
 			expectTag:        true,
 			expectedTagName:  "ottawa",
-			expectedTagStyle: "is-info", // Default blue
+			expectedTagStyle: "is-info",
 		},
 		{
-			name:             "Remote cluster robbinsdale - default blue",
-			clusterAnnot:     "robbinsdale",
-			expectTag:        true,
-			expectedTagName:  "robbinsdale",
-			expectedTagStyle: "is-info", // Default blue
-		},
-		{
-			name:             "Remote cluster with custom red color",
+			name:             "Remote cluster with red tag",
 			clusterAnnot:     "production",
 			tagStyleLabel:    "is-danger",
 			expectTag:        true,
 			expectedTagName:  "production",
-			expectedTagStyle: "is-danger", // Custom red
+			expectedTagStyle: "is-danger",
 		},
 		{
 			name:         "Local cluster",

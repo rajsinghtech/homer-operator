@@ -1177,16 +1177,13 @@ func createIngressItem(ingress networkingv1.Ingress, host string, validRuleCount
 	item.Namespace = ingress.ObjectMeta.Namespace
 	item.LastUpdate = ingress.ObjectMeta.CreationTimestamp.Time.Format("2006-01-02T15:04:05Z")
 
-	// Auto-tag with cluster name if present
+	// Auto-tag with cluster name if cluster-tagstyle label is set
 	if clusterName, ok := ingress.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != "local" {
-		setItemParameter(&item, "tag", clusterName)
-
-		// Check if cluster-tagstyle label is set, otherwise use default blue
-		tagStyle := "is-info" // Default blue
-		if customStyle, hasStyle := ingress.ObjectMeta.Labels["cluster-tagstyle"]; hasStyle && customStyle != "" {
-			tagStyle = customStyle
+		// Only add tag if cluster-tagstyle is explicitly set
+		if tagStyle, hasStyle := ingress.ObjectMeta.Labels["cluster-tagstyle"]; hasStyle && tagStyle != "" {
+			setItemParameter(&item, "tag", clusterName)
+			setItemParameter(&item, "tagstyle", tagStyle)
 		}
-		setItemParameter(&item, "tagstyle", tagStyle)
 	}
 
 	return item
@@ -1322,16 +1319,13 @@ func createHTTPRouteItem(httproute *gatewayv1.HTTPRoute, hostname, protocol stri
 		setItemParameter(&item, "subtitle", "")
 	}
 
-	// Auto-tag with cluster name if present
+	// Auto-tag with cluster name if cluster-tagstyle label is set
 	if clusterName, ok := httproute.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != "local" {
-		setItemParameter(&item, "tag", clusterName)
-
-		// Check if cluster-tagstyle label is set, otherwise use default blue
-		tagStyle := "is-info" // Default blue
-		if customStyle, hasStyle := httproute.ObjectMeta.Labels["cluster-tagstyle"]; hasStyle && customStyle != "" {
-			tagStyle = customStyle
+		// Only add tag if cluster-tagstyle is explicitly set
+		if tagStyle, hasStyle := httproute.ObjectMeta.Labels["cluster-tagstyle"]; hasStyle && tagStyle != "" {
+			setItemParameter(&item, "tag", clusterName)
+			setItemParameter(&item, "tagstyle", tagStyle)
 		}
-		setItemParameter(&item, "tagstyle", tagStyle)
 	}
 
 	return item
