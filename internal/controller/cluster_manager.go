@@ -673,7 +673,7 @@ func (m *ClusterManager) getSecretHash(ctx context.Context, dashboard *homerv1al
 }
 
 // getDomainFiltersForCluster returns the domain filters to use for a cluster
-// If the cluster has its own domain filters, use those; otherwise use the dashboard's
+// Local cluster uses dashboard-level filters, remote clusters use their own explicit filters
 func (m *ClusterManager) getDomainFiltersForCluster(cluster *ClusterClient, dashboard *homerv1alpha1.Dashboard) []string {
 	if cluster.ClusterCfg != nil && len(cluster.ClusterCfg.DomainFilters) > 0 {
 		return cluster.ClusterCfg.DomainFilters
@@ -681,8 +681,8 @@ func (m *ClusterManager) getDomainFiltersForCluster(cluster *ClusterClient, dash
 	if cluster.Name == localClusterName {
 		return dashboard.Spec.DomainFilters
 	}
-	// Remote clusters with no explicit domain filters use dashboard filters
-	return dashboard.Spec.DomainFilters
+	// Remote clusters with no explicit domain filters: no filtering (return empty)
+	return nil
 }
 
 // matchesIngressDomainFilters checks if an Ingress matches any of the domain filters
