@@ -477,8 +477,12 @@ func (m *ClusterManager) discoverClusterHTTPRoutes(ctx context.Context, cluster 
 	// Determine which domain filters to use for this cluster
 	domainFilters := m.getDomainFiltersForCluster(cluster, dashboard)
 
+	m.log.V(1).Info("Starting HTTPRoute filtering", "cluster", cluster.Name, "total", len(clusterHTTPRoutes.Items), "domainFilters", domainFilters)
+
 	// Filter HTTPRoutes based on selectors
 	filtered := []gatewayv1.HTTPRoute{}
+	selectorPassed := 0
+	domainFilterPassed := 0
 	for i := range clusterHTTPRoutes.Items {
 		shouldInclude, err := m.shouldIncludeHTTPRoute(ctx, cluster, &clusterHTTPRoutes.Items[i], dashboard)
 		if err != nil {
@@ -486,12 +490,15 @@ func (m *ClusterManager) discoverClusterHTTPRoutes(ctx context.Context, cluster 
 			continue
 		}
 		if shouldInclude {
+			selectorPassed++
 			// Apply domain filters if specified
 			if len(domainFilters) > 0 {
 				if !matchesHTTPRouteDomainFilters(&clusterHTTPRoutes.Items[i], domainFilters) {
+					m.log.V(1).Info("HTTPRoute filtered out by domain", "cluster", cluster.Name, "httproute", clusterHTTPRoutes.Items[i].Name, "hostnames", clusterHTTPRoutes.Items[i].Spec.Hostnames)
 					continue
 				}
 			}
+			domainFilterPassed++
 
 			// Add cluster labels if specified
 			if cluster.ClusterCfg != nil && cluster.ClusterCfg.ClusterLabels != nil {
@@ -511,6 +518,8 @@ func (m *ClusterManager) discoverClusterHTTPRoutes(ctx context.Context, cluster 
 			filtered = append(filtered, clusterHTTPRoutes.Items[i])
 		}
 	}
+
+	m.log.V(1).Info("HTTPRoute filtering complete", "cluster", cluster.Name, "total", len(clusterHTTPRoutes.Items), "selectorPassed", selectorPassed, "domainFilterPassed", domainFilterPassed, "final", len(filtered))
 
 	return filtered, nil
 }
@@ -549,6 +558,7 @@ func (m *ClusterManager) shouldIncludeHTTPRoute(ctx context.Context, cluster *Cl
 			return false, err
 		}
 
+		matchedGateway := false
 		for _, parentRef := range httproute.Spec.ParentRefs {
 			if parentRef.Kind != nil && string(*parentRef.Kind) != gatewayKind {
 				continue
@@ -562,14 +572,22 @@ func (m *ClusterManager) shouldIncludeHTTPRoute(ctx context.Context, cluster *Cl
 			gateway := &gatewayv1.Gateway{}
 			if err := cluster.Client.Get(ctx, client.ObjectKey{Name: string(parentRef.Name), Namespace: namespace}, gateway); err != nil {
 				if apierrors.IsNotFound(err) {
+					m.log.V(1).Info("Gateway not found for HTTPRoute", "cluster", cluster.Name, "httproute", httproute.Name, "gateway", parentRef.Name, "namespace", namespace)
 					continue
 				}
 				return false, err
 			}
 
 			if selector.Matches(labels.Set(gateway.Labels)) {
+				matchedGateway = true
+				m.log.V(1).Info("HTTPRoute matched gateway selector", "cluster", cluster.Name, "httproute", httproute.Name, "gateway", parentRef.Name, "namespace", namespace, "labels", gateway.Labels)
 				return true, nil
+			} else {
+				m.log.V(1).Info("Gateway labels did not match selector", "cluster", cluster.Name, "httproute", httproute.Name, "gateway", parentRef.Name, "namespace", namespace, "gatewayLabels", gateway.Labels, "selector", gatewaySelector)
 			}
+		}
+		if !matchedGateway {
+			m.log.V(1).Info("HTTPRoute did not match any gateway", "cluster", cluster.Name, "httproute", httproute.Name, "parentRefs", len(httproute.Spec.ParentRefs))
 		}
 		return false, nil
 	}
