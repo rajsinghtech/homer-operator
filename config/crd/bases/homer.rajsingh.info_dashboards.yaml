@@ -532,6 +532,14 @@ spec:
                         ClusterLabels are additional labels to add to all resources discovered from this cluster.
                         This can be used to identify or group resources by their source cluster in the Homer dashboard.
                       type: object
+                    domainFilters:
+                      description: |-
+                        DomainFilters optionally filters HTTPRoutes and Ingresses by domain names in this cluster.
+                        If not specified, the main dashboard domainFilters will be used.
+                        If specified, only these domain filters will be applied to resources from this cluster.
+                      items:
+                        type: string
+                      type: array
                     enabled:
                       default: true
                       description: |-

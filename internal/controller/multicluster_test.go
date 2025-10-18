@@ -770,6 +770,93 @@ func TestMultiClusterMultipleResourcesWithAnnotations(t *testing.T) {
 	}
 }
 
+// TestClusterManager_PerClusterDomainFilters verifies that each cluster can have its own domain filters
+func TestClusterManager_PerClusterDomainFilters(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = networkingv1.AddToScheme(scheme)
+	_ = homerv1alpha1.AddToScheme(scheme)
+	_ = gatewayv1.Install(scheme)
+
+	// Create ingresses with different domains
+	cluster1Ingress := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "app1",
+			Namespace: "default",
+		},
+		Spec: networkingv1.IngressSpec{
+			Rules: []networkingv1.IngressRule{{Host: "app.cluster1.com"}},
+		},
+	}
+
+	cluster2Ingress := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "app2",
+			Namespace: "default",
+		},
+		Spec: networkingv1.IngressSpec{
+			Rules: []networkingv1.IngressRule{{Host: "app.cluster2.com"}},
+		},
+	}
+
+	client1 := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster1Ingress).Build()
+	client2 := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster2Ingress).Build()
+
+	cm := NewClusterManager(client1, scheme)
+
+	// Cluster 1 with domain filter for cluster1.com
+	cluster1 := &ClusterClient{
+		Name:      "cluster1",
+		Client:    client1,
+		Connected: true,
+		ClusterCfg: &homerv1alpha1.RemoteCluster{
+			Name:          "cluster1",
+			DomainFilters: []string{"cluster1.com"},
+		},
+	}
+
+	// Cluster 2 with domain filter for cluster2.com
+	cluster2 := &ClusterClient{
+		Name:      "cluster2",
+		Client:    client2,
+		Connected: true,
+		ClusterCfg: &homerv1alpha1.RemoteCluster{
+			Name:          "cluster2",
+			DomainFilters: []string{"cluster2.com"},
+		},
+	}
+
+	dashboard := &homerv1alpha1.Dashboard{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+	}
+
+	ctx := context.Background()
+
+	// Cluster 1 should only return app.cluster1.com
+	ingresses1, err := cm.discoverClusterIngresses(ctx, cluster1, dashboard)
+	if err != nil {
+		t.Fatalf("Failed to discover from cluster1: %v", err)
+	}
+	if len(ingresses1) != 1 {
+		t.Errorf("Expected 1 ingress from cluster1, got %d", len(ingresses1))
+	}
+	if len(ingresses1) > 0 && ingresses1[0].Spec.Rules[0].Host != "app.cluster1.com" {
+		t.Errorf("Expected host app.cluster1.com, got %s", ingresses1[0].Spec.Rules[0].Host)
+	}
+
+	// Cluster 2 should only return app.cluster2.com
+	ingresses2, err := cm.discoverClusterIngresses(ctx, cluster2, dashboard)
+	if err != nil {
+		t.Fatalf("Failed to discover from cluster2: %v", err)
+	}
+	if len(ingresses2) != 1 {
+		t.Errorf("Expected 1 ingress from cluster2, got %d", len(ingresses2))
+	}
+	if len(ingresses2) > 0 && ingresses2[0].Spec.Rules[0].Host != "app.cluster2.com" {
+		t.Errorf("Expected host app.cluster2.com, got %s", ingresses2[0].Spec.Rules[0].Host)
+	}
+}
+
 // Helper function for string search
 func contains(s, substr string) bool {
 	return len(s) > 0 && len(substr) > 0 && (s == substr || len(s) >= len(substr) && (s[0:len(substr)] == substr || contains(s[1:], substr)))

@@ -126,6 +126,11 @@ type RemoteCluster struct {
 	// GatewaySelector optionally filters HTTPRoutes by Gateway labels in this cluster.
 	// Works the same as the main gatewaySelector but only applies to this cluster.
 	GatewaySelector *metav1.LabelSelector `json:"gatewaySelector,omitempty"`
+
+	// DomainFilters optionally filters HTTPRoutes and Ingresses by domain names in this cluster.
+	// If not specified, the main dashboard domainFilters will be used.
+	// If specified, only these domain filters will be applied to resources from this cluster.
+	DomainFilters []string `json:"domainFilters,omitempty"`
 }
 
 // KubeconfigSecretRef references a Secret containing kubeconfig data

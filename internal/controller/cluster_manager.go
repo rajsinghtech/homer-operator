@@ -335,6 +335,9 @@ func (m *ClusterManager) discoverClusterIngresses(ctx context.Context, cluster *
 		selector = dashboard.Spec.IngressSelector
 	}
 
+	// Determine which domain filters to use for this cluster
+	domainFilters := m.getDomainFiltersForCluster(cluster, dashboard)
+
 	if selector != nil {
 		labelSelector, err := metav1.LabelSelectorAsSelector(selector)
 		if err != nil {
@@ -344,6 +347,13 @@ func (m *ClusterManager) discoverClusterIngresses(ctx context.Context, cluster *
 		filtered := []networkingv1.Ingress{}
 		for i := range clusterIngresses.Items {
 			if labelSelector.Matches(labels.Set(clusterIngresses.Items[i].Labels)) {
+				// Apply domain filters if specified
+				if len(domainFilters) > 0 {
+					if !matchesIngressDomainFilters(&clusterIngresses.Items[i], domainFilters) {
+						continue
+					}
+				}
+
 				// Add cluster labels if specified
 				if cluster.ClusterCfg != nil && cluster.ClusterCfg.ClusterLabels != nil {
 					if clusterIngresses.Items[i].Labels == nil {
@@ -365,9 +375,18 @@ func (m *ClusterManager) discoverClusterIngresses(ctx context.Context, cluster *
 		return filtered, nil
 	}
 
-	// Add cluster metadata to all ingresses
+	// Add cluster metadata to all ingresses and apply domain filtering
+	filtered := []networkingv1.Ingress{}
 	for i := range clusterIngresses.Items {
 		ingress := &clusterIngresses.Items[i]
+
+		// Apply domain filters if specified
+		if len(domainFilters) > 0 {
+			if !matchesIngressDomainFilters(ingress, domainFilters) {
+				continue
+			}
+		}
+
 		if cluster.ClusterCfg != nil && cluster.ClusterCfg.ClusterLabels != nil {
 			if ingress.Labels == nil {
 				ingress.Labels = make(map[string]string)
@@ -381,9 +400,11 @@ func (m *ClusterManager) discoverClusterIngresses(ctx context.Context, cluster *
 			ingress.Annotations = make(map[string]string)
 		}
 		ingress.Annotations["homer.rajsingh.info/cluster"] = cluster.Name
+
+		filtered = append(filtered, *ingress)
 	}
 
-	return clusterIngresses.Items, nil
+	return filtered, nil
 }
 
 // DiscoverHTTPRoutes discovers HTTPRoute resources from all connected clusters
@@ -453,6 +474,9 @@ func (m *ClusterManager) discoverClusterHTTPRoutes(ctx context.Context, cluster 
 		}
 	}
 
+	// Determine which domain filters to use for this cluster
+	domainFilters := m.getDomainFiltersForCluster(cluster, dashboard)
+
 	// Filter HTTPRoutes based on selectors
 	filtered := []gatewayv1.HTTPRoute{}
 	for i := range clusterHTTPRoutes.Items {
@@ -462,6 +486,13 @@ func (m *ClusterManager) discoverClusterHTTPRoutes(ctx context.Context, cluster 
 			continue
 		}
 		if shouldInclude {
+			// Apply domain filters if specified
+			if len(domainFilters) > 0 {
+				if !matchesHTTPRouteDomainFilters(&clusterHTTPRoutes.Items[i], domainFilters) {
+					continue
+				}
+			}
+
 			// Add cluster labels if specified
 			if cluster.ClusterCfg != nil && cluster.ClusterCfg.ClusterLabels != nil {
 				if clusterHTTPRoutes.Items[i].Labels == nil {
@@ -607,4 +638,66 @@ func (m *ClusterManager) getSecretHash(ctx context.Context, dashboard *homerv1al
 	// Compute SHA256 hash
 	hash := sha256.Sum256(kubeconfigData)
 	return hex.EncodeToString(hash[:]), nil
+}
+
+// getDomainFiltersForCluster returns the domain filters to use for a cluster
+// If the cluster has its own domain filters, use those; otherwise use the dashboard's
+func (m *ClusterManager) getDomainFiltersForCluster(cluster *ClusterClient, dashboard *homerv1alpha1.Dashboard) []string {
+	if cluster.ClusterCfg != nil && len(cluster.ClusterCfg.DomainFilters) > 0 {
+		return cluster.ClusterCfg.DomainFilters
+	}
+	if cluster.Name == localClusterName {
+		return dashboard.Spec.DomainFilters
+	}
+	// Remote clusters with no explicit domain filters use dashboard filters
+	return dashboard.Spec.DomainFilters
+}
+
+// matchesIngressDomainFilters checks if an Ingress matches any of the domain filters
+func matchesIngressDomainFilters(ingress *networkingv1.Ingress, domainFilters []string) bool {
+	if len(domainFilters) == 0 {
+		return true
+	}
+
+	for _, rule := range ingress.Spec.Rules {
+		if rule.Host == "" {
+			continue
+		}
+		for _, filter := range domainFilters {
+			if matchesDomain(rule.Host, filter) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// matchesHTTPRouteDomainFilters checks if an HTTPRoute matches any of the domain filters
+func matchesHTTPRouteDomainFilters(httproute *gatewayv1.HTTPRoute, domainFilters []string) bool {
+	if len(domainFilters) == 0 {
+		return true
+	}
+
+	for _, hostname := range httproute.Spec.Hostnames {
+		host := string(hostname)
+		for _, filter := range domainFilters {
+			if matchesDomain(host, filter) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// matchesDomain checks if a host matches a domain filter
+// Supports exact matches and subdomain wildcards
+func matchesDomain(host, filter string) bool {
+	if host == filter {
+		return true
+	}
+	// Check if filter matches as subdomain (e.g., "example.com" matches "*.example.com")
+	if len(host) > len(filter) && host[len(host)-len(filter)-1:] == "."+filter {
+		return true
+	}
+	return false
 }
