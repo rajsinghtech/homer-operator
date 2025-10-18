@@ -1195,7 +1195,11 @@ func createIngressItem(ingress networkingv1.Ingress, host string, validRuleCount
 	}
 
 	// Set metadata for conflict detection
+	// For remote clusters, include cluster name in Source to make it unique
 	item.Source = ingress.ObjectMeta.Name
+	if clusterName, ok := ingress.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != "local" {
+		item.Source = ingress.ObjectMeta.Name + "@" + clusterName
+	}
 	item.Namespace = ingress.ObjectMeta.Namespace
 	item.LastUpdate = ingress.ObjectMeta.CreationTimestamp.Time.Format("2006-01-02T15:04:05Z")
 
@@ -1302,7 +1306,11 @@ func updateHomerConfigWithHTTPRoutes(
 			setItemParameter(&item, "name", name)
 
 			// Set metadata for conflict detection
+			// For remote clusters, include cluster name in Source to make it unique
 			item.Source = httproute.ObjectMeta.Name
+			if clusterName, ok := httproute.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != "local" {
+				item.Source = httproute.ObjectMeta.Name + "@" + clusterName
+			}
 			item.Namespace = httproute.ObjectMeta.Namespace
 			item.LastUpdate = httproute.ObjectMeta.CreationTimestamp.Time.Format("2006-01-02T15:04:05Z")
 
