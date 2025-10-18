@@ -387,6 +387,13 @@ func createConfigMapWithHTTPRoutesAndHealth(
 
 	cleanupHomerConfig(config)
 
+	fmt.Fprintf(os.Stderr, "DEBUG: createConfigMapWithHTTPRoutesAndHealth called with %d HTTPRoutes\n", len(httproutes))
+	for i, httproute := range httproutes {
+		if clusterAnnot, ok := httproute.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok {
+			fmt.Fprintf(os.Stderr, "DEBUG: HTTPRoute[%d] %s has cluster annotation: %s, labels: %v\n", i, httproute.ObjectMeta.Name, clusterAnnot, httproute.ObjectMeta.Labels)
+		}
+	}
+
 	for _, ingress := range ingresses.Items {
 		UpdateHomerConfigIngress(config, ingress, domainFilters)
 	}
