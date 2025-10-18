@@ -857,6 +857,101 @@ func TestClusterManager_PerClusterDomainFilters(t *testing.T) {
 	}
 }
 
+// TestClusterManager_DashboardDomainFiltersLocalOnly verifies dashboard domain filters only apply to local cluster
+func TestClusterManager_DashboardDomainFiltersLocalOnly(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = networkingv1.AddToScheme(scheme)
+	_ = homerv1alpha1.AddToScheme(scheme)
+	_ = gatewayv1.Install(scheme)
+
+	// Create ingresses with different domains
+	localIngress := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "local-app",
+			Namespace: "default",
+		},
+		Spec: networkingv1.IngressSpec{
+			Rules: []networkingv1.IngressRule{{Host: "app.local.com"}},
+		},
+	}
+
+	remoteIngress1 := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "remote-app1",
+			Namespace: "default",
+		},
+		Spec: networkingv1.IngressSpec{
+			Rules: []networkingv1.IngressRule{{Host: "app.remote.com"}},
+		},
+	}
+
+	remoteIngress2 := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "remote-app2",
+			Namespace: "default",
+		},
+		Spec: networkingv1.IngressSpec{
+			Rules: []networkingv1.IngressRule{{Host: "other.remote.com"}},
+		},
+	}
+
+	localClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(localIngress).Build()
+	remoteClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(remoteIngress1, remoteIngress2).Build()
+
+	cm := NewClusterManager(localClient, scheme)
+
+	// Local cluster
+	localCluster := &ClusterClient{
+		Name:       "local",
+		Client:     localClient,
+		Connected:  true,
+		ClusterCfg: nil, // Local cluster has no ClusterCfg
+	}
+
+	// Remote cluster WITHOUT explicit domain filters
+	remoteCluster := &ClusterClient{
+		Name:      "remote",
+		Client:    remoteClient,
+		Connected: true,
+		ClusterCfg: &homerv1alpha1.RemoteCluster{
+			Name: "remote",
+			// No DomainFilters specified
+		},
+	}
+
+	// Dashboard with domain filter that should only apply to local
+	dashboard := &homerv1alpha1.Dashboard{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+		Spec: homerv1alpha1.DashboardSpec{
+			DomainFilters: []string{"local.com"},
+		},
+	}
+
+	ctx := context.Background()
+
+	// Local cluster should be filtered by dashboard domain filters
+	localIngresses, err := cm.discoverClusterIngresses(ctx, localCluster, dashboard)
+	if err != nil {
+		t.Fatalf("Failed to discover from local cluster: %v", err)
+	}
+	if len(localIngresses) != 1 {
+		t.Errorf("Expected 1 ingress from local cluster (filtered by dashboard domainFilters), got %d", len(localIngresses))
+	}
+	if len(localIngresses) > 0 && localIngresses[0].Spec.Rules[0].Host != "app.local.com" {
+		t.Errorf("Expected host app.local.com, got %s", localIngresses[0].Spec.Rules[0].Host)
+	}
+
+	// Remote cluster should NOT be filtered by dashboard domain filters (no explicit filters = no filtering)
+	remoteIngresses, err := cm.discoverClusterIngresses(ctx, remoteCluster, dashboard)
+	if err != nil {
+		t.Fatalf("Failed to discover from remote cluster: %v", err)
+	}
+	if len(remoteIngresses) != 2 {
+		t.Errorf("Expected 2 ingresses from remote cluster (no filtering), got %d", len(remoteIngresses))
+	}
+}
+
 // Helper function for string search
 func contains(s, substr string) bool {
 	return len(s) > 0 && len(substr) > 0 && (s == substr || len(s) >= len(substr) && (s[0:len(substr)] == substr || contains(s[1:], substr)))
