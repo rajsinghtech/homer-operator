@@ -193,10 +193,18 @@ func (m *ClusterManager) createClusterClient(ctx context.Context, dashboard *hom
 		return nil, fmt.Errorf("key %q not found in secret %s", key, clusterCfg.SecretRef.Name)
 	}
 
-	// Parse kubeconfig
-	restConfig, err := clientcmd.RESTConfigFromKubeConfig(kubeconfigData)
+	// Parse kubeconfig and use the context matching the cluster name
+	config, err := clientcmd.Load(kubeconfigData)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse kubeconfig: %w", err)
+		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
+	}
+
+	// Override current-context to match the cluster name
+	config.CurrentContext = clusterCfg.Name
+
+	restConfig, err := clientcmd.NewDefaultClientConfig(*config, &clientcmd.ConfigOverrides{}).ClientConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create REST config for context %s: %w", clusterCfg.Name, err)
 	}
 
 	// Create client for the remote cluster
