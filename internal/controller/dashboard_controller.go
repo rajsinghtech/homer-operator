@@ -898,9 +898,9 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 			}
 		}
 
-		// Don't pass domain filters since HTTPRoutes are already filtered by ClusterManager
-		// and we want to show all hostnames from each HTTPRoute
-		return homer.CreateConfigMapWithHTTPRoutes(homerConfig, dashboard.Name, dashboard.Namespace, filteredIngressList, filteredHTTPRoutes, dashboard, nil)
+		// Pass domain filters for single-cluster mode (local cluster uses dashboard-level filters)
+		// Multi-cluster HTTPRoutes already have domain filters stored in annotations
+		return homer.CreateConfigMapWithHTTPRoutes(homerConfig, dashboard.Name, dashboard.Namespace, filteredIngressList, filteredHTTPRoutes, dashboard, dashboard.Spec.DomainFilters)
 	}
 
 	return homer.CreateConfigMap(homerConfig, dashboard.Name, dashboard.Namespace, filteredIngressList, dashboard)
