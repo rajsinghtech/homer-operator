@@ -281,3 +281,155 @@ func TestClusterTagNotOverriddenByAnnotations(t *testing.T) {
 		t.Errorf("Expected manual tagstyle 'is-danger', got %q", tagstyle)
 	}
 }
+
+// TestClusterNameSuffix verifies that cluster name suffix is appended to item names from label
+func TestClusterNameSuffix(t *testing.T) {
+	tests := []struct {
+		name               string
+		clusterAnnot       string
+		clusterNameSuffix  string // stored in label
+		expectedNameSuffix string
+	}{
+		{
+			name:               "Remote cluster with suffix in parentheses",
+			clusterAnnot:       "ottawa",
+			clusterNameSuffix:  " (ottawa)",
+			expectedNameSuffix: " (ottawa)",
+		},
+		{
+			name:               "Remote cluster with dash suffix",
+			clusterAnnot:       "production",
+			clusterNameSuffix:  " - production",
+			expectedNameSuffix: " - production",
+		},
+		{
+			name:               "Remote cluster with bracket suffix",
+			clusterAnnot:       "staging",
+			clusterNameSuffix:  " [staging]",
+			expectedNameSuffix: " [staging]",
+		},
+		{
+			name:              "Remote cluster without suffix label",
+			clusterAnnot:      "ottawa",
+			clusterNameSuffix: "",
+		},
+		{
+			name:              "Local cluster with suffix label (should not apply)",
+			clusterAnnot:      "local",
+			clusterNameSuffix: " (local)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Test with Ingress
+			ingress := &networkingv1.Ingress{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "test-ingress",
+					Namespace:   "default",
+					Annotations: map[string]string{},
+					Labels:      map[string]string{},
+				},
+				Spec: networkingv1.IngressSpec{
+					Rules: []networkingv1.IngressRule{
+						{Host: "test.example.com"},
+					},
+				},
+			}
+
+			if tt.clusterAnnot != "" {
+				ingress.ObjectMeta.Annotations["homer.rajsingh.info/cluster"] = tt.clusterAnnot
+			}
+
+			if tt.clusterNameSuffix != "" {
+				ingress.ObjectMeta.Labels["cluster-name-suffix"] = tt.clusterNameSuffix
+			}
+
+			config := &HomerConfig{
+				Title:  "Test Dashboard",
+				Header: true,
+			}
+
+			UpdateHomerConfigIngress(config, *ingress, nil)
+
+			if len(config.Services) == 0 {
+				t.Fatal("Expected at least one service")
+			}
+
+			service := config.Services[0]
+			if len(service.Items) == 0 {
+				t.Fatal("Expected at least one item")
+			}
+
+			item := service.Items[0]
+			itemName := item.Parameters["name"]
+			baseName := "test-ingress"
+
+			if tt.expectedNameSuffix != "" {
+				expectedName := baseName + tt.expectedNameSuffix
+				if itemName != expectedName {
+					t.Errorf("Expected name %q, got %q", expectedName, itemName)
+				}
+			} else {
+				// Should not have suffix
+				if itemName != baseName {
+					t.Errorf("Expected name %q without suffix, got %q", baseName, itemName)
+				}
+			}
+
+			// Test with HTTPRoute
+			hostname := gatewayv1.Hostname("test.example.com")
+			httproute := &gatewayv1.HTTPRoute{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "test-httproute",
+					Namespace:   "default",
+					Annotations: map[string]string{},
+					Labels:      map[string]string{},
+				},
+				Spec: gatewayv1.HTTPRouteSpec{
+					Hostnames: []gatewayv1.Hostname{hostname},
+				},
+			}
+
+			if tt.clusterAnnot != "" {
+				httproute.ObjectMeta.Annotations["homer.rajsingh.info/cluster"] = tt.clusterAnnot
+			}
+
+			if tt.clusterNameSuffix != "" {
+				httproute.ObjectMeta.Labels["cluster-name-suffix"] = tt.clusterNameSuffix
+			}
+
+			config2 := &HomerConfig{
+				Title:  "Test Dashboard",
+				Header: true,
+			}
+
+			UpdateHomerConfigHTTPRoute(config2, httproute, nil)
+
+			if len(config2.Services) == 0 {
+				t.Fatal("Expected at least one service")
+			}
+
+			service2 := config2.Services[0]
+			if len(service2.Items) == 0 {
+				t.Fatal("Expected at least one item")
+			}
+
+			item2 := service2.Items[0]
+			itemName2 := item2.Parameters["name"]
+			baseName2 := "test-httproute"
+
+			if tt.expectedNameSuffix != "" {
+				expectedName2 := baseName2 + tt.expectedNameSuffix
+				if itemName2 != expectedName2 {
+					t.Errorf("Expected HTTPRoute name %q, got %q", expectedName2, itemName2)
+				}
+			} else {
+				// Should not have suffix
+				if itemName2 != baseName2 {
+					t.Errorf("Expected HTTPRoute name %q without suffix, got %q", baseName2, itemName2)
+				}
+			}
+		})
+	}
+}

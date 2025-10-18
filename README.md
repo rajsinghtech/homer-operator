@@ -724,16 +724,33 @@ spec:
         - "api.example.com"      # API endpoints
 ```
 
-**Automatic Cluster Tagging:**
-Services from remote clusters automatically get badge tags with the cluster name. Customize colors using the `cluster-tagstyle` label:
+**Cluster Name Suffix:**
+Append custom suffixes to service display names to distinguish items from different clusters. Configure using the `cluster-name-suffix` label in `clusterLabels`:
+
+```yaml
+remoteClusters:
+  - name: ottawa
+    clusterLabels:
+      cluster-name-suffix: " (ottawa)"      # -> "Service Name (ottawa)"
+      # Other formats:
+      # " - ottawa"     -> "Service Name - ottawa"
+      # " [ottawa]"     -> "Service Name [ottawa]"
+```
+
+This suffix is only applied to items from **remote clusters**, not the local cluster. If the label is not set, no suffix is appended.
+
+**Automatic Cluster Tagging (Optional):**
+Services from remote clusters can also get badge tags with the cluster name when `cluster-tagstyle` is set in `clusterLabels`. Available colors:
 - `is-danger` (red) - production
 - `is-warning` (yellow) - staging
-- `is-info` (blue, default) - development
-- `is-success` (green) - QA
+- `is-info` (blue) - development
+- `is-success` (green) - QA/testing
 - `is-light` (gray) - deprecated
 
+**Important:** Tags are only added when `cluster-tagstyle` is explicitly configured. You can use both suffix and tags, or just one approach for cluster identification.
+
 **Per-Cluster Domain Filtering:**
-Each cluster can have independent `domainFilters` to control which services are discovered. If not specified, inherits from the main `spec.domainFilters`.
+Each cluster can have independent `domainFilters` to control which services are discovered. If not specified for a remote cluster, no domain filtering is applied (all resources pass through). Dashboard-level `spec.domainFilters` only applies to the local cluster.
 
 ### Status Monitoring
 

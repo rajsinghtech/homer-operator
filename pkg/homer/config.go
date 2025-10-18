@@ -1161,6 +1161,14 @@ func createIngressItem(ingress networkingv1.Ingress, host string, validRuleCount
 	if validRuleCount > 1 {
 		name = ingress.ObjectMeta.Name + "-" + host
 	}
+
+	// Append cluster name suffix from label if set (only for remote clusters)
+	if clusterName, ok := ingress.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != "local" {
+		if suffix, hasSuffix := ingress.ObjectMeta.Labels["cluster-name-suffix"]; hasSuffix && suffix != "" {
+			name = name + suffix
+		}
+	}
+
 	setItemParameter(&item, "name", name)
 	setItemParameter(&item, "logo", IngressIconURL)
 	setItemParameter(&item, "subtitle", host)
@@ -1276,6 +1284,14 @@ func updateHomerConfigWithHTTPRoutes(
 			if len(filteredHostnames) > 1 {
 				name = httproute.ObjectMeta.Name + "-" + hostStr
 			}
+
+			// Append cluster name suffix from label if set (only for remote clusters)
+			if clusterName, ok := httproute.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != "local" {
+				if suffix, hasSuffix := httproute.ObjectMeta.Labels["cluster-name-suffix"]; hasSuffix && suffix != "" {
+					name = name + suffix
+				}
+			}
+
 			setItemParameter(&item, "name", name)
 
 			// Set metadata for conflict detection
