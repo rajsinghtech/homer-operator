@@ -61,7 +61,7 @@ type DashboardReconciler struct {
 //+kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",resources=configmaps/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
-//+kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list
+//+kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 //+kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
 //+kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
 
@@ -582,6 +582,10 @@ func (r *DashboardReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	builder = builder.Watches(&corev1.Secret{},
 		handler.EnqueueRequestsFromMapFunc(r.findDashboardsForSecret))
 
+	// Watch namespaces for annotation changes
+	builder = builder.Watches(&corev1.Namespace{},
+		handler.EnqueueRequestsFromMapFunc(r.findDashboardsForNamespace))
+
 	return builder.Complete(r)
 }
 
@@ -760,6 +764,78 @@ func (r *DashboardReconciler) findDashboardsForSecret(ctx context.Context, obj c
 	return requests
 }
 
+// findDashboardsForNamespace finds all dashboards that should be reconciled when a namespace's annotations change
+func (r *DashboardReconciler) findDashboardsForNamespace(ctx context.Context, obj client.Object) []ctrl.Request {
+	namespace, ok := obj.(*corev1.Namespace)
+	if !ok {
+		return nil
+	}
+
+	// Check if namespace has any homer annotations
+	hasHomerAnnotations := false
+	for key := range namespace.Annotations {
+		if len(key) > len(serviceAnnotationPrefix) &&
+			(key[:len(serviceAnnotationPrefix)] == serviceAnnotationPrefix ||
+				key[:len(itemAnnotationPrefix)] == itemAnnotationPrefix) {
+			hasHomerAnnotations = true
+			break
+		}
+	}
+
+	if !hasHomerAnnotations {
+		return nil
+	}
+
+	// Find all dashboards and trigger reconciliation
+	// The reconciliation will pick up resources from this namespace with the new annotations
+	dashboards := &homerv1alpha1.DashboardList{}
+	if err := r.List(ctx, dashboards); err != nil {
+		return nil
+	}
+
+	requests := make([]ctrl.Request, 0, len(dashboards.Items))
+	for _, dashboard := range dashboards.Items {
+		requests = append(requests, ctrl.Request{
+			NamespacedName: client.ObjectKey{
+				Namespace: dashboard.Namespace,
+				Name:      dashboard.Name,
+			},
+		})
+	}
+
+	return requests
+}
+
+// mergeNamespaceAnnotations merges namespace annotations with resource annotations
+// Namespace annotations serve as defaults, resource annotations override
+func (r *DashboardReconciler) mergeNamespaceAnnotations(ctx context.Context, resourceNamespace string, resourceAnnotations map[string]string) map[string]string {
+	// Fetch the namespace
+	namespace := &corev1.Namespace{}
+	if err := r.Get(ctx, client.ObjectKey{Name: resourceNamespace}, namespace); err != nil {
+		// If we can't get the namespace, just return the resource annotations
+		return resourceAnnotations
+	}
+
+	// Start with namespace annotations as the base
+	merged := make(map[string]string)
+
+	// First, copy relevant namespace annotations (service.homer.* and item.homer.*)
+	for key, value := range namespace.Annotations {
+		if len(key) > len(serviceAnnotationPrefix) && key[:len(serviceAnnotationPrefix)] == serviceAnnotationPrefix {
+			merged[key] = value
+		} else if len(key) > len(itemAnnotationPrefix) && key[:len(itemAnnotationPrefix)] == itemAnnotationPrefix {
+			merged[key] = value
+		}
+	}
+
+	// Then overlay resource annotations (these override namespace defaults)
+	for key, value := range resourceAnnotations {
+		merged[key] = value
+	}
+
+	return merged
+}
+
 func (r *DashboardReconciler) shouldIncludeIngress(ctx context.Context, ingress *networkingv1.Ingress, dashboard *homerv1alpha1.Dashboard) (bool, error) {
 	log := log.FromContext(ctx)
 
@@ -860,6 +936,17 @@ func (r *DashboardReconciler) createOrUpdateResources(ctx context.Context, resou
 }
 
 func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *homer.HomerConfig, dashboard *homerv1alpha1.Dashboard, filteredIngressList networkingv1.IngressList) (corev1.ConfigMap, error) {
+	// Merge namespace annotations into Ingress annotations
+	mergedIngressList := networkingv1.IngressList{
+		Items: make([]networkingv1.Ingress, len(filteredIngressList.Items)),
+	}
+	for i, ingress := range filteredIngressList.Items {
+		// Create a copy to avoid mutating the original
+		ingressCopy := ingress.DeepCopy()
+		ingressCopy.Annotations = r.mergeNamespaceAnnotations(ctx, ingress.Namespace, ingress.Annotations)
+		mergedIngressList.Items[i] = *ingressCopy
+	}
+
 	if r.EnableGatewayAPI {
 		filteredHTTPRoutes := []gatewayv1.HTTPRoute{}
 
@@ -898,21 +985,21 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 			}
 		}
 
+		// Merge namespace annotations into HTTPRoute annotations
+		mergedHTTPRoutes := make([]gatewayv1.HTTPRoute, len(filteredHTTPRoutes))
+		for i, httproute := range filteredHTTPRoutes {
+			// Create a copy to avoid mutating the original
+			httprouteCopy := httproute.DeepCopy()
+			httprouteCopy.Annotations = r.mergeNamespaceAnnotations(ctx, httproute.Namespace, httproute.Annotations)
+			mergedHTTPRoutes[i] = *httprouteCopy
+		}
+
 		// Pass domain filters for single-cluster mode (local cluster uses dashboard-level filters)
 		// Multi-cluster HTTPRoutes already have domain filters stored in annotations
-		return homer.CreateConfigMapWithHTTPRoutes(homerConfig, dashboard.Name, dashboard.Namespace, filteredIngressList, filteredHTTPRoutes, dashboard, dashboard.Spec.DomainFilters)
+		return homer.CreateConfigMapWithHTTPRoutes(homerConfig, dashboard.Name, dashboard.Namespace, mergedIngressList, mergedHTTPRoutes, dashboard, dashboard.Spec.DomainFilters)
 	}
 
-	return homer.CreateConfigMap(homerConfig, dashboard.Name, dashboard.Namespace, filteredIngressList, dashboard)
-}
-
-// getHTTPRouteHosts extracts hostnames from an HTTPRoute
-func (r *DashboardReconciler) getHTTPRouteHosts(httproute *gatewayv1.HTTPRoute) []string {
-	hosts := []string{}
-	for _, hostname := range httproute.Spec.Hostnames {
-		hosts = append(hosts, string(hostname))
-	}
-	return hosts
+	return homer.CreateConfigMap(homerConfig, dashboard.Name, dashboard.Namespace, mergedIngressList, dashboard)
 }
 
 // generatePWAManifest generates PWA manifest if enabled, returns empty string if disabled

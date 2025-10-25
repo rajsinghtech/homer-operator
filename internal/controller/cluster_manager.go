@@ -41,6 +41,12 @@ import (
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
+const (
+	// Homer annotation prefixes
+	serviceAnnotationPrefix = "service.homer.rajsingh.info/"
+	itemAnnotationPrefix    = "item.homer.rajsingh.info/"
+)
+
 // ClusterClient represents a client connection to a Kubernetes cluster
 type ClusterClient struct {
 	Name       string
@@ -378,6 +384,9 @@ func (m *ClusterManager) discoverClusterIngresses(ctx context.Context, cluster *
 				}
 				clusterIngresses.Items[i].Annotations["homer.rajsingh.info/cluster"] = cluster.Name
 
+				// Merge namespace annotations from the source cluster
+				m.mergeNamespaceAnnotationsForIngress(ctx, cluster.Client, &clusterIngresses.Items[i])
+
 				filtered = append(filtered, clusterIngresses.Items[i])
 			}
 		}
@@ -409,6 +418,9 @@ func (m *ClusterManager) discoverClusterIngresses(ctx context.Context, cluster *
 			ingress.Annotations = make(map[string]string)
 		}
 		ingress.Annotations["homer.rajsingh.info/cluster"] = cluster.Name
+
+		// Merge namespace annotations from the source cluster
+		m.mergeNamespaceAnnotationsForIngress(ctx, cluster.Client, ingress)
 
 		filtered = append(filtered, *ingress)
 	}
@@ -529,6 +541,9 @@ func (m *ClusterManager) discoverClusterHTTPRoutes(ctx context.Context, cluster 
 				clusterHTTPRoutes.Items[i].Annotations["homer.rajsingh.info/domain-filters"] = strings.Join(domainFilters, ",")
 			}
 
+			// Merge namespace annotations from the source cluster
+			m.mergeNamespaceAnnotationsForHTTPRoute(ctx, cluster.Client, &clusterHTTPRoutes.Items[i])
+
 			filtered = append(filtered, clusterHTTPRoutes.Items[i])
 		}
 	}
@@ -572,7 +587,6 @@ func (m *ClusterManager) shouldIncludeHTTPRoute(ctx context.Context, cluster *Cl
 			return false, err
 		}
 
-		matchedGateway := false
 		for _, parentRef := range httproute.Spec.ParentRefs {
 			if parentRef.Kind != nil && string(*parentRef.Kind) != gatewayKind {
 				continue
@@ -593,16 +607,12 @@ func (m *ClusterManager) shouldIncludeHTTPRoute(ctx context.Context, cluster *Cl
 			}
 
 			if selector.Matches(labels.Set(gateway.Labels)) {
-				matchedGateway = true
 				m.log.V(1).Info("HTTPRoute matched gateway selector", "cluster", cluster.Name, "httproute", httproute.Name, "gateway", parentRef.Name, "namespace", namespace, "labels", gateway.Labels)
 				return true, nil
-			} else {
-				m.log.V(1).Info("Gateway labels did not match selector", "cluster", cluster.Name, "httproute", httproute.Name, "gateway", parentRef.Name, "namespace", namespace, "gatewayLabels", gateway.Labels, "selector", gatewaySelector)
 			}
+			m.log.V(1).Info("Gateway labels did not match selector", "cluster", cluster.Name, "httproute", httproute.Name, "gateway", parentRef.Name, "namespace", namespace, "gatewayLabels", gateway.Labels, "selector", gatewaySelector)
 		}
-		if !matchedGateway {
-			m.log.V(1).Info("HTTPRoute did not match any gateway", "cluster", cluster.Name, "httproute", httproute.Name, "parentRefs", len(httproute.Spec.ParentRefs))
-		}
+		m.log.V(1).Info("HTTPRoute did not match any gateway", "cluster", cluster.Name, "httproute", httproute.Name, "parentRefs", len(httproute.Spec.ParentRefs))
 		return false, nil
 	}
 
@@ -732,4 +742,64 @@ func matchesDomain(host, filter string) bool {
 		return true
 	}
 	return false
+}
+
+// mergeNamespaceAnnotationsForIngress merges namespace annotations into an Ingress resource
+// Namespace annotations serve as defaults, resource annotations override
+func (m *ClusterManager) mergeNamespaceAnnotationsForIngress(ctx context.Context, clusterClient client.Client, ingress *networkingv1.Ingress) {
+	// Fetch the namespace from the appropriate cluster
+	namespace := &corev1.Namespace{}
+	if err := clusterClient.Get(ctx, client.ObjectKey{Name: ingress.Namespace}, namespace); err != nil {
+		// If we can't get the namespace, just continue with existing annotations
+		m.log.V(2).Info("Could not fetch namespace for ingress", "namespace", ingress.Namespace, "ingress", ingress.Name, "error", err)
+		return
+	}
+
+	// Merge namespace annotations (namespace defaults, resource overrides)
+	if ingress.Annotations == nil {
+		ingress.Annotations = make(map[string]string)
+	}
+
+	// First, apply namespace annotations as defaults (only if not already set)
+	for key, value := range namespace.Annotations {
+		if len(key) > len(serviceAnnotationPrefix) && key[:len(serviceAnnotationPrefix)] == serviceAnnotationPrefix {
+			if _, exists := ingress.Annotations[key]; !exists {
+				ingress.Annotations[key] = value
+			}
+		} else if len(key) > len(itemAnnotationPrefix) && key[:len(itemAnnotationPrefix)] == itemAnnotationPrefix {
+			if _, exists := ingress.Annotations[key]; !exists {
+				ingress.Annotations[key] = value
+			}
+		}
+	}
+}
+
+// mergeNamespaceAnnotationsForHTTPRoute merges namespace annotations into an HTTPRoute resource
+// Namespace annotations serve as defaults, resource annotations override
+func (m *ClusterManager) mergeNamespaceAnnotationsForHTTPRoute(ctx context.Context, clusterClient client.Client, httproute *gatewayv1.HTTPRoute) {
+	// Fetch the namespace from the appropriate cluster
+	namespace := &corev1.Namespace{}
+	if err := clusterClient.Get(ctx, client.ObjectKey{Name: httproute.Namespace}, namespace); err != nil {
+		// If we can't get the namespace, just continue with existing annotations
+		m.log.V(2).Info("Could not fetch namespace for httproute", "namespace", httproute.Namespace, "httproute", httproute.Name, "error", err)
+		return
+	}
+
+	// Merge namespace annotations (namespace defaults, resource overrides)
+	if httproute.Annotations == nil {
+		httproute.Annotations = make(map[string]string)
+	}
+
+	// First, apply namespace annotations as defaults (only if not already set)
+	for key, value := range namespace.Annotations {
+		if len(key) > len(serviceAnnotationPrefix) && key[:len(serviceAnnotationPrefix)] == serviceAnnotationPrefix {
+			if _, exists := httproute.Annotations[key]; !exists {
+				httproute.Annotations[key] = value
+			}
+		} else if len(key) > len(itemAnnotationPrefix) && key[:len(itemAnnotationPrefix)] == itemAnnotationPrefix {
+			if _, exists := httproute.Annotations[key]; !exists {
+				httproute.Annotations[key] = value
+			}
+		}
+	}
 }
