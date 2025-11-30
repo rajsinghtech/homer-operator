@@ -86,6 +86,7 @@ rules:
   verbs:
   - get
   - list
+  - watch
 {{- if .Values.operator.enableGatewayAPI }}
 - apiGroups:
   - gateway.networking.k8s.io
