@@ -3,7 +3,7 @@ module github.com/rajsinghtech/homer-operator
 go 1.25.1
 
 require (
-	github.com/onsi/ginkgo/v2 v2.26.0
+	github.com/onsi/ginkgo/v2 v2.27.3
 	github.com/onsi/gomega v1.38.2
 	gopkg.in/yaml.v2 v2.4.0
 	k8s.io/api v0.34.1
