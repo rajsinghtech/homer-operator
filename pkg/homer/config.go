@@ -39,6 +39,7 @@ const (
 	DefaultNamespace    = "default"
 	GenericType         = "Generic"
 	CRDSource           = "crd"
+	LocalCluster        = "local"
 	NameField           = "name"
 	URLField            = "url"
 	WarningValueField   = "warning_value"
@@ -386,13 +387,6 @@ func createConfigMapWithHTTPRoutesAndHealth(
 	originalConfig := *config
 
 	cleanupHomerConfig(config)
-
-	fmt.Fprintf(os.Stderr, "DEBUG: createConfigMapWithHTTPRoutesAndHealth called with %d HTTPRoutes\n", len(httproutes))
-	for i, httproute := range httproutes {
-		if clusterAnnot, ok := httproute.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok {
-			fmt.Fprintf(os.Stderr, "DEBUG: HTTPRoute[%d] %s has cluster annotation: %s, labels: %v\n", i, httproute.ObjectMeta.Name, clusterAnnot, httproute.ObjectMeta.Labels)
-		}
-	}
 
 	for _, ingress := range ingresses.Items {
 		UpdateHomerConfigIngress(config, ingress, domainFilters)
@@ -1133,15 +1127,11 @@ func createIngressItems(ingress networkingv1.Ingress, domainFilters []string) []
 
 		// Append cluster name suffix from label AFTER processing annotations
 		// so that it takes precedence over any name annotations
-		if clusterName, ok := ingress.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != "local" {
-			fmt.Fprintf(os.Stderr, "DEBUG: Ingress %s from cluster %s, labels: %v\n", ingress.ObjectMeta.Name, clusterName, ingress.ObjectMeta.Labels)
+		if clusterName, ok := ingress.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != LocalCluster {
 			if suffix, hasSuffix := ingress.ObjectMeta.Labels["cluster-name-suffix"]; hasSuffix && suffix != "" {
 				if currentName, hasName := item.Parameters["name"]; hasName && currentName != "" {
-					fmt.Fprintf(os.Stderr, "DEBUG: Appending suffix %q to name %q\n", suffix, currentName)
 					setItemParameter(&item, "name", currentName+suffix)
 				}
-			} else {
-				fmt.Fprintf(os.Stderr, "DEBUG: No cluster-name-suffix label found for %s\n", ingress.ObjectMeta.Name)
 			}
 		}
 
@@ -1197,14 +1187,14 @@ func createIngressItem(ingress networkingv1.Ingress, host string, validRuleCount
 	// Set metadata for conflict detection
 	// For remote clusters, include cluster name in Source to make it unique
 	item.Source = ingress.ObjectMeta.Name
-	if clusterName, ok := ingress.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != "local" {
+	if clusterName, ok := ingress.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != LocalCluster {
 		item.Source = ingress.ObjectMeta.Name + "@" + clusterName
 	}
 	item.Namespace = ingress.ObjectMeta.Namespace
 	item.LastUpdate = ingress.ObjectMeta.CreationTimestamp.Time.Format("2006-01-02T15:04:05Z")
 
 	// Auto-tag with cluster name if cluster-tagstyle label is set
-	if clusterName, ok := ingress.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != "local" {
+	if clusterName, ok := ingress.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != LocalCluster {
 		// Only add tag if cluster-tagstyle is explicitly set
 		if tagStyle, hasStyle := ingress.ObjectMeta.Labels["cluster-tagstyle"]; hasStyle && tagStyle != "" {
 			setItemParameter(&item, "tag", clusterName)
@@ -1308,7 +1298,7 @@ func updateHomerConfigWithHTTPRoutes(
 			// Set metadata for conflict detection
 			// For remote clusters, include cluster name in Source to make it unique
 			item.Source = httproute.ObjectMeta.Name
-			if clusterName, ok := httproute.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != "local" {
+			if clusterName, ok := httproute.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != LocalCluster {
 				item.Source = httproute.ObjectMeta.Name + "@" + clusterName
 			}
 			item.Namespace = httproute.ObjectMeta.Namespace
@@ -1318,15 +1308,11 @@ func updateHomerConfigWithHTTPRoutes(
 
 			// Append cluster name suffix from label AFTER processing annotations
 			// so that it takes precedence over any name annotations
-			if clusterName, ok := httproute.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != "local" {
-				fmt.Fprintf(os.Stderr, "DEBUG: HTTPRoute %s from cluster %s, labels: %v\n", httproute.ObjectMeta.Name, clusterName, httproute.ObjectMeta.Labels)
+			if clusterName, ok := httproute.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != LocalCluster {
 				if suffix, hasSuffix := httproute.ObjectMeta.Labels["cluster-name-suffix"]; hasSuffix && suffix != "" {
 					if currentName, hasName := item.Parameters["name"]; hasName && currentName != "" {
-						fmt.Fprintf(os.Stderr, "DEBUG: Appending suffix %q to name %q\n", suffix, currentName)
 						setItemParameter(&item, "name", currentName+suffix)
 					}
-				} else {
-					fmt.Fprintf(os.Stderr, "DEBUG: No cluster-name-suffix label found for %s\n", httproute.ObjectMeta.Name)
 				}
 			}
 
@@ -1365,7 +1351,7 @@ func createHTTPRouteItem(httproute *gatewayv1.HTTPRoute, hostname, protocol stri
 	}
 
 	// Auto-tag with cluster name if cluster-tagstyle label is set
-	if clusterName, ok := httproute.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != "local" {
+	if clusterName, ok := httproute.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != LocalCluster {
 		// Only add tag if cluster-tagstyle is explicitly set
 		if tagStyle, hasStyle := httproute.ObjectMeta.Labels["cluster-tagstyle"]; hasStyle && tagStyle != "" {
 			setItemParameter(&item, "tag", clusterName)
@@ -1615,18 +1601,27 @@ func processDynamicParameter(item *Item, fieldName, value string, validationLeve
 func smartInferType(value string) interface{} {
 	value = strings.TrimSpace(value)
 
-	// Boolean detection
-	lower := strings.ToLower(value)
-	if lower == "true" || lower == "1" || lower == "yes" || lower == "on" {
-		return true
-	}
-	if lower == "false" || lower == "0" || lower == "no" || lower == "off" {
-		return false
-	}
-
-	// Integer detection
+	// Integer detection FIRST - prevents "0" and "1" from being converted to booleans
+	// This is important for fields like updateInterval, timeout, apiVersion, etc.
 	if i, err := strconv.Atoi(value); err == nil {
 		return i
+	}
+
+	// Float detection - for values like danger_value: 95.5
+	// Only if it contains a decimal point to avoid converting integers
+	if strings.Contains(value, ".") {
+		if f, err := strconv.ParseFloat(value, 64); err == nil {
+			return f
+		}
+	}
+
+	// Boolean detection - only for explicit boolean strings
+	lower := strings.ToLower(value)
+	if lower == "true" || lower == "yes" || lower == "on" {
+		return true
+	}
+	if lower == "false" || lower == "no" || lower == "off" {
+		return false
 	}
 
 	return value
@@ -1665,13 +1660,18 @@ func isItemHidden(item *Item) bool {
 
 	// Check for hide parameter
 	if hideValue, exists := item.Parameters["hide"]; exists {
-		// Use smart type inference to handle boolean values
+		// Use smart type inference to handle boolean and integer values
 		hideInterface := smartInferType(hideValue)
-		if hideBool, ok := hideInterface.(bool); ok {
-			return hideBool
+		switch v := hideInterface.(type) {
+		case bool:
+			return v
+		case int:
+			// Treat 0 as false, non-zero as true (JavaScript truthiness)
+			return v != 0
+		default:
+			// For strings, treat non-empty as true
+			return hideValue != ""
 		}
-		// If not a boolean, treat non-empty string as true
-		return hideValue != ""
 	}
 
 	return false
@@ -2428,10 +2428,11 @@ func flattenServicesForYAML(services []Service) []map[string]interface{} {
 	for _, service := range services {
 		serviceMap := make(map[string]interface{})
 
-		// Add parameters with smart type inference
+		// Add parameters with smart type inference and YAML key conversion
 		if service.Parameters != nil {
 			for key, value := range service.Parameters {
-				serviceMap[key] = smartInferType(value)
+				yamlKey := getYAMLKey(key)
+				serviceMap[yamlKey] = smartInferType(value)
 			}
 		}
 
@@ -2491,14 +2492,60 @@ func flattenItemsForYAML(items []Item) []map[string]interface{} {
 }
 
 // getYAMLKey converts parameter keys to proper YAML field names
+// Homer uses camelCase for JavaScript property access, so we need to ensure
+// annotation keys (which may be lowercase) are converted to proper camelCase
 func getYAMLKey(key string) string {
 	switch strings.ToLower(key) {
+	// Service/Item parameters from Homer service components
 	case "legacyapi":
 		return "legacyApi"
 	case "librarytype":
 		return "libraryType"
 	case "usecredentials":
 		return "useCredentials"
+	case "apiversion":
+		return "apiVersion"
+	case "checkinterval":
+		return "checkInterval"
+	case "updateinterval":
+		return "updateInterval"
+	case "refreshinterval":
+		return "refreshInterval"
+	case "successcodes":
+		return "successCodes"
+	case "rateinterval":
+		return "rateInterval"
+	case "torrentinterval":
+		return "torrentInterval"
+	case "downloadinterval":
+		return "downloadInterval"
+	case "hideaverages":
+		return "hideaverages" // Homer uses lowercase
+	case "api_token":
+		return "api_token" // Homer uses underscore
+	case "warning_value":
+		return "warning_value" // Homer uses underscore
+	case "danger_value":
+		return "danger_value" // Homer uses underscore
+	case "hide_decimals":
+		return "hide_decimals" // Homer uses underscore
+	case "small_font_on_small_screens":
+		return "small_font_on_small_screens" // Homer uses underscore
+	case "small_font_on_desktop":
+		return "small_font_on_desktop" // Homer uses underscore
+
+	// Global config fields
+	case "documenttitle":
+		return "documentTitle"
+	case "colortheme":
+		return "colorTheme"
+	case "connectivitycheck":
+		return "connectivityCheck"
+	case "externalconfig":
+		return "externalConfig"
+	case "tagstyle":
+		return "tagstyle" // Homer uses lowercase
+
 	default:
 		return key
 	}

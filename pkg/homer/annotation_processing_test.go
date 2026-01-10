@@ -21,29 +21,30 @@ import (
 )
 
 // TestBooleanValueParsing tests comprehensive boolean value parsing
+// Note: "1" and "0" are intentionally NOT boolean - they are parsed as integers
+// This is correct because Homer uses these values for fields like apiVersion, timeout, etc.
+// JavaScript's truthiness will handle integer values correctly when accessing boolean fields.
 func TestBooleanValueParsing(t *testing.T) {
 	tests := []struct {
 		input    string
 		expected bool
 	}{
-		// True values
+		// True values (explicit boolean strings)
 		{"true", true},
 		{"TRUE", true},
 		{"True", true},
-		{"1", true},
 		{"yes", true},
 		{"YES", true},
 		{"on", true},
 		{"ON", true},
 		{" true ", true}, // test trimming
 
-		// False values
+		// False values (explicit boolean strings)
 		{"false", false},
 		{"FALSE", false},
-		{"0", false},
 		{"no", false},
 		{"off", false},
-		{"invalid", false},
+		{"invalid", false}, // non-boolean strings are not parsed as bool
 		{"", false},
 		{" false ", false}, // test trimming
 	}
