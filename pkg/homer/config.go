@@ -329,12 +329,17 @@ func CreateConfigMap(
 	name string,
 	namespace string,
 	ingresses networkingv1.IngressList,
+	services []corev1.Service,
 	owner client.Object,
 ) (corev1.ConfigMap, error) {
 	cleanupHomerConfig(config)
 
 	for _, ingress := range ingresses.Items {
 		UpdateHomerConfigIngress(config, ingress, nil)
+	}
+
+	for _, svc := range services {
+		UpdateHomerConfigService(config, svc)
 	}
 
 	if err := ValidateHomerConfig(config); err != nil {
@@ -370,11 +375,12 @@ func CreateConfigMapWithHTTPRoutes(
 	namespace string,
 	ingresses networkingv1.IngressList,
 	httproutes []gatewayv1.HTTPRoute,
+	services []corev1.Service,
 	owner client.Object,
 	domainFilters []string,
 ) (corev1.ConfigMap, error) {
 	return createConfigMapWithHTTPRoutesAndHealth(
-		config, name, namespace, ingresses, httproutes, owner, domainFilters, nil)
+		config, name, namespace, ingresses, httproutes, services, owner, domainFilters, nil)
 }
 
 func createConfigMapWithHTTPRoutesAndHealth(
@@ -383,6 +389,7 @@ func createConfigMapWithHTTPRoutesAndHealth(
 	namespace string,
 	ingresses networkingv1.IngressList,
 	httproutes []gatewayv1.HTTPRoute,
+	services []corev1.Service,
 	owner client.Object,
 	domainFilters []string,
 	healthConfig *ServiceHealthConfig,
@@ -396,6 +403,10 @@ func createConfigMapWithHTTPRoutesAndHealth(
 	}
 	for _, httproute := range httproutes {
 		UpdateHomerConfigHTTPRoute(config, &httproute, domainFilters)
+	}
+
+	for _, svc := range services {
+		UpdateHomerConfigService(config, svc)
 	}
 
 	if err := validateCRDServicePreservation(&originalConfig, config); err != nil {

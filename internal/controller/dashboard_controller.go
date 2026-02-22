@@ -96,11 +96,16 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, err
 	}
 
+	filteredServices, err := r.getMultiClusterFilteredServices(ctx, &dashboard)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	if err := r.validateDashboardConfig(&dashboard); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	resources, _, err := r.prepareResources(ctx, &dashboard, filteredIngressList)
+	resources, _, err := r.prepareResources(ctx, &dashboard, filteredIngressList, filteredServices)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -381,6 +386,48 @@ func (r *DashboardReconciler) getMultiClusterFilteredIngresses(ctx context.Conte
 	return networkingv1.IngressList{Items: allIngresses}, nil
 }
 
+func (r *DashboardReconciler) getFilteredServices(ctx context.Context, dashboard *homerv1alpha1.Dashboard) ([]corev1.Service, error) {
+	if dashboard.Spec.ServiceSelector == nil {
+		return nil, nil
+	}
+
+	serviceList := &corev1.ServiceList{}
+	if err := r.List(ctx, serviceList); err != nil {
+		return nil, err
+	}
+
+	var filtered []corev1.Service
+	for i := range serviceList.Items {
+		shouldInclude, err := r.shouldIncludeService(ctx, &serviceList.Items[i], dashboard)
+		if err != nil {
+			return nil, err
+		}
+		if shouldInclude {
+			filtered = append(filtered, serviceList.Items[i])
+		}
+	}
+
+	return filtered, nil
+}
+
+func (r *DashboardReconciler) getMultiClusterFilteredServices(ctx context.Context, dashboard *homerv1alpha1.Dashboard) ([]corev1.Service, error) {
+	if r.ClusterManager != nil && len(dashboard.Spec.RemoteClusters) > 0 {
+		clusterServices, err := r.ClusterManager.DiscoverServices(ctx, dashboard)
+		if err != nil {
+			log := log.FromContext(ctx)
+			log.Error(err, "Failed to discover Services from clusters")
+		}
+
+		var allServices []corev1.Service
+		for _, services := range clusterServices {
+			allServices = append(allServices, services...)
+		}
+		return allServices, nil
+	}
+
+	return r.getFilteredServices(ctx, dashboard)
+}
+
 func (r *DashboardReconciler) validateDashboardConfig(dashboard *homerv1alpha1.Dashboard) error {
 	if err := homer.ValidateTheme(dashboard.Spec.HomerConfig.Theme); err != nil {
 		return err
@@ -388,7 +435,7 @@ func (r *DashboardReconciler) validateDashboardConfig(dashboard *homerv1alpha1.D
 	return homer.ValidateHomerConfig(&dashboard.Spec.HomerConfig)
 }
 
-func (r *DashboardReconciler) prepareResources(ctx context.Context, dashboard *homerv1alpha1.Dashboard, filteredIngressList networkingv1.IngressList) ([]client.Object, *homer.HomerConfig, error) {
+func (r *DashboardReconciler) prepareResources(ctx context.Context, dashboard *homerv1alpha1.Dashboard, filteredIngressList networkingv1.IngressList, filteredServices []corev1.Service) ([]client.Object, *homer.HomerConfig, error) {
 	deploymentConfig := r.buildDeploymentConfig(dashboard)
 	deployment := homer.CreateDeployment(dashboard.Name, dashboard.Namespace, dashboard.Spec.Replicas, dashboard, deploymentConfig)
 	service := homer.CreateService(dashboard.Name, dashboard.Namespace, dashboard)
@@ -398,7 +445,7 @@ func (r *DashboardReconciler) prepareResources(ctx context.Context, dashboard *h
 		return nil, nil, err
 	}
 
-	configMap, err := r.createConfigMap(ctx, homerConfig, dashboard, filteredIngressList)
+	configMap, err := r.createConfigMap(ctx, homerConfig, dashboard, filteredIngressList, filteredServices)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -582,6 +629,10 @@ func (r *DashboardReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	builder = builder.Watches(&corev1.Secret{},
 		handler.EnqueueRequestsFromMapFunc(r.findDashboardsForSecret))
 
+	// Watch Services for discovery
+	builder = builder.Watches(&corev1.Service{},
+		handler.EnqueueRequestsFromMapFunc(r.findDashboardsForService))
+
 	// Watch namespaces for annotation changes
 	builder = builder.Watches(&corev1.Namespace{},
 		handler.EnqueueRequestsFromMapFunc(r.findDashboardsForNamespace))
@@ -604,6 +655,33 @@ func (r *DashboardReconciler) findDashboardsForIngress(ctx context.Context, obj 
 	var requests []ctrl.Request
 	for _, dashboard := range dashboards.Items {
 		if shouldInclude, err := r.shouldIncludeIngress(ctx, ingress, &dashboard); err == nil && shouldInclude {
+			requests = append(requests, ctrl.Request{
+				NamespacedName: client.ObjectKey{
+					Namespace: dashboard.Namespace,
+					Name:      dashboard.Name,
+				},
+			})
+		}
+	}
+
+	return requests
+}
+
+// findDashboardsForService finds all dashboards that should be reconciled when a Service changes
+func (r *DashboardReconciler) findDashboardsForService(ctx context.Context, obj client.Object) []ctrl.Request {
+	svc, ok := obj.(*corev1.Service)
+	if !ok {
+		return nil
+	}
+
+	dashboards := &homerv1alpha1.DashboardList{}
+	if err := r.List(ctx, dashboards); err != nil {
+		return nil
+	}
+
+	var requests []ctrl.Request
+	for _, dashboard := range dashboards.Items {
+		if shouldInclude, err := r.shouldIncludeService(ctx, svc, &dashboard); err == nil && shouldInclude {
 			requests = append(requests, ctrl.Request{
 				NamespacedName: client.ObjectKey{
 					Namespace: dashboard.Namespace,
@@ -852,6 +930,22 @@ func (r *DashboardReconciler) shouldIncludeIngress(ctx context.Context, ingress 
 	return true, nil
 }
 
+func (r *DashboardReconciler) shouldIncludeService(ctx context.Context, svc *corev1.Service, dashboard *homerv1alpha1.Dashboard) (bool, error) {
+	log := log.FromContext(ctx)
+
+	if dashboard.Spec.ServiceSelector == nil {
+		return false, nil
+	}
+
+	if match, err := validateLabelSelector(dashboard.Spec.ServiceSelector, svc.Labels, svc.Name, "service", log); err != nil {
+		return false, err
+	} else if !match {
+		return false, nil
+	}
+
+	return true, nil
+}
+
 func (r *DashboardReconciler) shouldIncludeHTTPRoute(ctx context.Context, httproute *gatewayv1.HTTPRoute, dashboard *homerv1alpha1.Dashboard) (bool, error) {
 	log := log.FromContext(ctx)
 
@@ -935,7 +1029,7 @@ func (r *DashboardReconciler) createOrUpdateResources(ctx context.Context, resou
 	return nil
 }
 
-func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *homer.HomerConfig, dashboard *homerv1alpha1.Dashboard, filteredIngressList networkingv1.IngressList) (corev1.ConfigMap, error) {
+func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *homer.HomerConfig, dashboard *homerv1alpha1.Dashboard, filteredIngressList networkingv1.IngressList, filteredServices []corev1.Service) (corev1.ConfigMap, error) {
 	// Merge namespace annotations into Ingress annotations
 	mergedIngressList := networkingv1.IngressList{
 		Items: make([]networkingv1.Ingress, len(filteredIngressList.Items)),
@@ -945,6 +1039,14 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 		ingressCopy := ingress.DeepCopy()
 		ingressCopy.Annotations = r.mergeNamespaceAnnotations(ctx, ingress.Namespace, ingress.Annotations)
 		mergedIngressList.Items[i] = *ingressCopy
+	}
+
+	// Merge namespace annotations into Service annotations
+	mergedServices := make([]corev1.Service, len(filteredServices))
+	for i, svc := range filteredServices {
+		svcCopy := svc.DeepCopy()
+		svcCopy.Annotations = r.mergeNamespaceAnnotations(ctx, svc.Namespace, svc.Annotations)
+		mergedServices[i] = *svcCopy
 	}
 
 	if r.EnableGatewayAPI {
@@ -996,10 +1098,10 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 
 		// Pass domain filters for single-cluster mode (local cluster uses dashboard-level filters)
 		// Multi-cluster HTTPRoutes already have domain filters stored in annotations
-		return homer.CreateConfigMapWithHTTPRoutes(homerConfig, dashboard.Name, dashboard.Namespace, mergedIngressList, mergedHTTPRoutes, dashboard, dashboard.Spec.DomainFilters)
+		return homer.CreateConfigMapWithHTTPRoutes(homerConfig, dashboard.Name, dashboard.Namespace, mergedIngressList, mergedHTTPRoutes, mergedServices, dashboard, dashboard.Spec.DomainFilters)
 	}
 
-	return homer.CreateConfigMap(homerConfig, dashboard.Name, dashboard.Namespace, mergedIngressList, dashboard)
+	return homer.CreateConfigMap(homerConfig, dashboard.Name, dashboard.Namespace, mergedIngressList, mergedServices, dashboard)
 }
 
 // generatePWAManifest generates PWA manifest if enabled, returns empty string if disabled

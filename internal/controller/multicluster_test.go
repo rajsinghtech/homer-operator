@@ -526,7 +526,7 @@ func TestMultiClusterIngressAnnotationsPreserved(t *testing.T) {
 
 	// Verify YAML output
 	ingressList := networkingv1.IngressList{Items: ingresses}
-	configMap, err := homer.CreateConfigMap(homerConfig, "test", "default", ingressList, dashboard)
+	configMap, err := homer.CreateConfigMap(homerConfig, "test", "default", ingressList, nil, dashboard)
 	if err != nil {
 		t.Fatalf("Failed to create ConfigMap: %v", err)
 	}
@@ -650,7 +650,7 @@ func TestMultiClusterHTTPRouteAnnotationsPreserved(t *testing.T) {
 	}
 
 	// Verify YAML output
-	configMap, err := homer.CreateConfigMapWithHTTPRoutes(homerConfig, "test", "default", networkingv1.IngressList{}, httproutes, dashboard, nil)
+	configMap, err := homer.CreateConfigMapWithHTTPRoutes(homerConfig, "test", "default", networkingv1.IngressList{}, httproutes, nil, dashboard, nil)
 	if err != nil {
 		t.Fatalf("Failed to create ConfigMap: %v", err)
 	}
@@ -754,7 +754,7 @@ func TestMultiClusterMultipleResourcesWithAnnotations(t *testing.T) {
 
 	// Generate YAML and verify both apps are present
 	ingressList := networkingv1.IngressList{Items: ingresses}
-	configMap, err := homer.CreateConfigMapWithHTTPRoutes(homerConfig, "multi-cluster-test", "default", ingressList, httproutes, dashboard, nil)
+	configMap, err := homer.CreateConfigMapWithHTTPRoutes(homerConfig, "multi-cluster-test", "default", ingressList, httproutes, nil, dashboard, nil)
 	if err != nil {
 		t.Fatalf("Failed to create ConfigMap: %v", err)
 	}
