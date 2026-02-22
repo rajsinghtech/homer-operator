@@ -204,6 +204,11 @@ func (in *DashboardSpec) DeepCopyInto(out *DashboardSpec) {
 		*out = new(v1.LabelSelector)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.ServiceSelector != nil {
+		in, out := &in.ServiceSelector, &out.ServiceSelector
+		*out = new(v1.LabelSelector)
+		(*in).DeepCopyInto(*out)
+	}
 	if in.DomainFilters != nil {
 		in, out := &in.DomainFilters, &out.DomainFilters
 		*out = make([]string, len(*in))
@@ -357,6 +362,11 @@ func (in *RemoteCluster) DeepCopyInto(out *RemoteCluster) {
 	}
 	if in.HTTPRouteSelector != nil {
 		in, out := &in.HTTPRouteSelector, &out.HTTPRouteSelector
+		*out = new(v1.LabelSelector)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.ServiceSelector != nil {
+		in, out := &in.ServiceSelector, &out.ServiceSelector
 		*out = new(v1.LabelSelector)
 		(*in).DeepCopyInto(*out)
 	}

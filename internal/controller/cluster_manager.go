@@ -619,8 +619,156 @@ func (m *ClusterManager) shouldIncludeHTTPRoute(ctx context.Context, cluster *Cl
 	return true, nil
 }
 
+// DiscoverServices discovers Service resources from all connected clusters
+func (m *ClusterManager) DiscoverServices(ctx context.Context, dashboard *homerv1alpha1.Dashboard) (map[string][]corev1.Service, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	results := make(map[string][]corev1.Service)
+	log := log.FromContext(ctx)
+
+	// If no ServiceSelector anywhere, skip entirely
+	if dashboard.Spec.ServiceSelector == nil {
+		hasRemoteSelector := false
+		for _, rc := range dashboard.Spec.RemoteClusters {
+			if rc.ServiceSelector != nil {
+				hasRemoteSelector = true
+				break
+			}
+		}
+		if !hasRemoteSelector {
+			return results, nil
+		}
+	}
+
+	for name, cluster := range m.clients {
+		if !cluster.Connected && name != localClusterName {
+			log.V(1).Info("Skipping disconnected cluster for Service discovery", "cluster", name)
+			continue
+		}
+
+		services, err := m.discoverClusterServices(ctx, cluster, dashboard)
+		if err != nil {
+			log.Error(err, "Failed to discover Services", "cluster", name)
+			if name != localClusterName {
+				cluster.Connected = false
+				cluster.LastError = err
+				cluster.LastCheck = time.Now()
+			}
+			continue
+		}
+
+		if name != localClusterName {
+			cluster.Connected = true
+			cluster.LastError = nil
+			cluster.LastCheck = time.Now()
+		}
+
+		results[name] = services
+		log.V(1).Info("Discovered Services", "cluster", name, "count", len(services))
+	}
+
+	return results, nil
+}
+
+// discoverClusterServices discovers Services from a specific cluster
+func (m *ClusterManager) discoverClusterServices(ctx context.Context, cluster *ClusterClient, dashboard *homerv1alpha1.Dashboard) ([]corev1.Service, error) {
+	// Determine which selector to use (cluster-specific overrides global, global applies to all clusters)
+	var selector *metav1.LabelSelector
+	if cluster.ClusterCfg != nil && cluster.ClusterCfg.ServiceSelector != nil {
+		selector = cluster.ClusterCfg.ServiceSelector
+	} else if dashboard.Spec.ServiceSelector != nil {
+		selector = dashboard.Spec.ServiceSelector
+	}
+
+	// No selector means no Service discovery for this cluster
+	if selector == nil {
+		return nil, nil
+	}
+
+	labelSelector, err := metav1.LabelSelectorAsSelector(selector)
+	if err != nil {
+		return nil, err
+	}
+
+	clusterServices := &corev1.ServiceList{}
+
+	// Apply namespace filter
+	if cluster.ClusterCfg != nil && len(cluster.ClusterCfg.NamespaceFilter) > 0 {
+		filteredServices := []corev1.Service{}
+		for _, ns := range cluster.ClusterCfg.NamespaceFilter {
+			nsServices := &corev1.ServiceList{}
+			if err := cluster.Client.List(ctx, nsServices, client.InNamespace(ns)); err != nil {
+				if !apierrors.IsNotFound(err) {
+					return nil, err
+				}
+				continue
+			}
+			filteredServices = append(filteredServices, nsServices.Items...)
+		}
+		clusterServices.Items = filteredServices
+	} else {
+		if err := cluster.Client.List(ctx, clusterServices); err != nil {
+			return nil, err
+		}
+	}
+
+	// Filter by label selector and add metadata
+	filtered := []corev1.Service{}
+	for i := range clusterServices.Items {
+		svc := &clusterServices.Items[i]
+
+		if !labelSelector.Matches(labels.Set(svc.Labels)) {
+			continue
+		}
+
+		// Add cluster labels
+		if cluster.ClusterCfg != nil && cluster.ClusterCfg.ClusterLabels != nil {
+			if svc.Labels == nil {
+				svc.Labels = make(map[string]string)
+			}
+			for k, v := range cluster.ClusterCfg.ClusterLabels {
+				svc.Labels[k] = v
+			}
+		}
+
+		// Add cluster annotation
+		if svc.Annotations == nil {
+			svc.Annotations = make(map[string]string)
+		}
+		svc.Annotations["homer.rajsingh.info/cluster"] = cluster.Name
+
+		// Merge namespace annotations
+		m.mergeNamespaceAnnotationsForService(ctx, cluster.Client, svc)
+
+		filtered = append(filtered, *svc)
+	}
+
+	return filtered, nil
+}
+
+// mergeNamespaceAnnotationsForService merges namespace annotations into Service annotations
+func (m *ClusterManager) mergeNamespaceAnnotationsForService(ctx context.Context, clusterClient client.Client, svc *corev1.Service) {
+	ns := &corev1.Namespace{}
+	if err := clusterClient.Get(ctx, client.ObjectKey{Name: svc.Namespace}, ns); err != nil {
+		return
+	}
+
+	if svc.Annotations == nil {
+		svc.Annotations = make(map[string]string)
+	}
+
+	for k, v := range ns.Annotations {
+		if strings.HasPrefix(k, serviceAnnotationPrefix) || strings.HasPrefix(k, itemAnnotationPrefix) {
+			if _, exists := svc.Annotations[k]; !exists {
+				svc.Annotations[k] = v
+			}
+		}
+	}
+}
+
 // UpdateClusterStatuses updates the cluster connection counts in the status
-func (m *ClusterManager) UpdateClusterStatuses(statuses []homerv1alpha1.ClusterConnectionStatus, clusterIngresses map[string][]networkingv1.Ingress, clusterHTTPRoutes map[string][]gatewayv1.HTTPRoute) []homerv1alpha1.ClusterConnectionStatus {
+func (m *ClusterManager) UpdateClusterStatuses(statuses []homerv1alpha1.ClusterConnectionStatus, clusterIngresses map[string][]networkingv1.Ingress, clusterHTTPRoutes map[string][]gatewayv1.HTTPRoute, clusterServices map[string][]corev1.Service) []homerv1alpha1.ClusterConnectionStatus {
 	// Create a map for quick lookup
 	statusMap := make(map[string]*homerv1alpha1.ClusterConnectionStatus)
 	for i := range statuses {
@@ -643,6 +791,15 @@ func (m *ClusterManager) UpdateClusterStatuses(statuses []homerv1alpha1.ClusterC
 		}
 		if status, ok := statusMap[clusterName]; ok {
 			status.DiscoveredHTTPRoutes = len(httproutes)
+		}
+	}
+
+	for clusterName, svcs := range clusterServices {
+		if clusterName == localClusterName {
+			continue
+		}
+		if status, ok := statusMap[clusterName]; ok {
+			status.DiscoveredServices = len(svcs)
 		}
 	}
 

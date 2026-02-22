@@ -66,6 +66,11 @@ type DashboardSpec struct {
 	// IngressSelector optionally filters Ingresses by labels. If not specified, all Ingresses are included.
 	IngressSelector *metav1.LabelSelector `json:"ingressSelector,omitempty"`
 
+	// ServiceSelector optionally filters Services by labels for discovery.
+	// Unlike Ingress/HTTPRoute, Services are only discovered when a selector is specified.
+	// If not specified, no Services will be discovered.
+	ServiceSelector *metav1.LabelSelector `json:"serviceSelector,omitempty"`
+
 	// DomainFilters optionally filters HTTPRoutes and Ingresses by domain names. If not specified, all domains are included.
 	DomainFilters []string `json:"domainFilters,omitempty"`
 
@@ -122,6 +127,10 @@ type RemoteCluster struct {
 	// HTTPRouteSelector optionally filters HTTPRoutes by labels in this cluster.
 	// Works the same as the main httpRouteSelector but only applies to this cluster.
 	HTTPRouteSelector *metav1.LabelSelector `json:"httpRouteSelector,omitempty"`
+
+	// ServiceSelector optionally filters Services by labels in this cluster.
+	// Works the same as the main serviceSelector but only applies to this cluster.
+	ServiceSelector *metav1.LabelSelector `json:"serviceSelector,omitempty"`
 
 	// GatewaySelector optionally filters HTTPRoutes by Gateway labels in this cluster.
 	// Works the same as the main gatewaySelector but only applies to this cluster.
@@ -190,6 +199,9 @@ type ClusterConnectionStatus struct {
 
 	// DiscoveredHTTPRoutes is the count of HTTPRoutes discovered from this cluster
 	DiscoveredHTTPRoutes int `json:"discoveredHTTPRoutes,omitempty"`
+
+	// DiscoveredServices is the count of Services discovered from this cluster
+	DiscoveredServices int `json:"discoveredServices,omitempty"`
 }
 
 //+kubebuilder:object:root=true
