@@ -47,6 +47,8 @@ const (
 	BooleanTrue         = "true"
 	BooleanFalse        = "false"
 	FooterHidden        = "__FOOTER_HIDDEN__"
+	ProtocolHTTPS       = "https"
+	ProtocolHTTP        = "http"
 	NamespaceIconURL    = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/" +
 		"resources/labeled/ns-128.png"
 	IngressIconURL = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/" +
@@ -1082,6 +1084,102 @@ func UpdateHomerConfigIngressWithGrouping(
 	}
 }
 
+// UpdateHomerConfigService updates Homer config from a Kubernetes Service resource
+func UpdateHomerConfigService(homerConfig *HomerConfig, svc corev1.Service) {
+	UpdateHomerConfigServiceWithGrouping(homerConfig, svc, nil)
+}
+
+// UpdateHomerConfigServiceWithGrouping updates Homer config from a K8s Service with custom grouping
+func UpdateHomerConfigServiceWithGrouping(
+	homerConfig *HomerConfig,
+	svc corev1.Service,
+	groupingConfig *ServiceGroupingConfig,
+) {
+	serviceGroup := setupK8sServiceGroup(homerConfig, svc, groupingConfig)
+
+	removeItemsFromIngressSource(homerConfig, svc.Name, svc.Namespace)
+	processServiceAnnotations(&serviceGroup, svc.Annotations)
+
+	item := createK8sServiceItem(svc)
+	processItemAnnotations(&item, svc.Annotations)
+
+	// Apply cluster-name-suffix after annotation processing so it takes precedence
+	if clusterName, ok := svc.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != LocalCluster {
+		if suffix, hasSuffix := svc.Labels["cluster-name-suffix"]; hasSuffix && suffix != "" {
+			if currentName, hasName := item.Parameters["name"]; hasName && currentName != "" {
+				setItemParameter(&item, "name", currentName+suffix)
+			}
+		}
+	}
+
+	if isItemHidden(&item) {
+		return
+	}
+
+	updateOrAddServiceItems(homerConfig, serviceGroup, []Item{item})
+}
+
+// setupK8sServiceGroup creates the Homer service group for a K8s Service
+func setupK8sServiceGroup(
+	homerConfig *HomerConfig,
+	svc corev1.Service,
+	groupingConfig *ServiceGroupingConfig,
+) Service {
+	service := Service{}
+	serviceName := determineServiceGroupWithCRDRespect(
+		homerConfig,
+		svc.Namespace,
+		svc.Labels,
+		svc.Annotations,
+		groupingConfig,
+	)
+	setServiceParameter(&service, "name", serviceName)
+	setServiceParameter(&service, "logo", NamespaceIconURL)
+	return service
+}
+
+// createK8sServiceItem builds a Homer dashboard item from a K8s Service
+func createK8sServiceItem(svc corev1.Service) Item {
+	item := Item{}
+
+	name := svc.Name
+	namespace := svc.Namespace
+
+	setItemParameter(&item, "name", name)
+	setItemParameter(&item, "logo", ServiceIconURL)
+	setItemParameter(&item, "subtitle", namespace+"/"+name)
+
+	// Build cluster-internal URL
+	protocol := ProtocolHTTP
+	portSuffix := ""
+	if len(svc.Spec.Ports) > 0 {
+		port := svc.Spec.Ports[0].Port
+		if port == 443 {
+			protocol = ProtocolHTTPS
+		}
+		portSuffix = fmt.Sprintf(":%d", port)
+	}
+	setItemParameter(&item, "url", fmt.Sprintf("%s://%s.%s.svc.cluster.local%s", protocol, name, namespace, portSuffix))
+
+	// Set source metadata for conflict detection
+	item.Source = name
+	if clusterName, ok := svc.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != LocalCluster {
+		item.Source = name + "@" + clusterName
+	}
+	item.Namespace = namespace
+	item.LastUpdate = svc.CreationTimestamp.Time.Format("2006-01-02T15:04:05Z")
+
+	// Auto-tag with cluster name if cluster-tagstyle label is set
+	if clusterName, ok := svc.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != LocalCluster {
+		if tagStyle, hasStyle := svc.Labels["cluster-tagstyle"]; hasStyle && tagStyle != "" {
+			setItemParameter(&item, "tag", clusterName)
+			setItemParameter(&item, "tagstyle", tagStyle)
+		}
+	}
+
+	return item
+}
+
 // setupIngressService creates and configures a service for an ingress
 func setupIngressService(
 	homerConfig *HomerConfig,
@@ -1483,10 +1581,10 @@ func determineProtocolFromHTTPRoute(httproute *gatewayv1.HTTPRoute) string {
 		// If the parent reference specifies a section name that typically indicates HTTPS
 		if parentRef.SectionName != nil {
 			sectionName := string(*parentRef.SectionName)
-			if strings.Contains(strings.ToLower(sectionName), "https") ||
+			if strings.Contains(strings.ToLower(sectionName), ProtocolHTTPS) ||
 				strings.Contains(strings.ToLower(sectionName), "tls") ||
 				strings.Contains(strings.ToLower(sectionName), "ssl") {
-				return "https"
+				return ProtocolHTTPS
 			}
 		}
 	}
@@ -1501,12 +1599,12 @@ func determineProtocolFromHTTPRoute(httproute *gatewayv1.HTTPRoute) string {
 			strings.HasSuffix(hostStr, ".com") ||
 			strings.HasSuffix(hostStr, ".org") ||
 			strings.HasSuffix(hostStr, ".net") {
-			return "https"
+			return ProtocolHTTPS
 		}
 	}
 
 	// Default to HTTP for local/development environments
-	return "http"
+	return ProtocolHTTP
 }
 
 // processItemAnnotations safely processes item annotations without reflection
