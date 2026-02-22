@@ -1108,7 +1108,7 @@ func UpdateHomerConfigServiceWithGrouping(
 ) {
 	serviceGroup := setupK8sServiceGroup(homerConfig, svc, groupingConfig)
 
-	removeItemsFromIngressSource(homerConfig, svc.Name, svc.Namespace)
+	removeItemsFromIngressSource(homerConfig, "svc/"+svc.Name, svc.Namespace)
 	processServiceAnnotations(&serviceGroup, svc.Annotations)
 
 	item := createK8sServiceItem(svc)
@@ -1172,10 +1172,10 @@ func createK8sServiceItem(svc corev1.Service) Item {
 	}
 	setItemParameter(&item, "url", fmt.Sprintf("%s://%s.%s.svc.cluster.local%s", protocol, name, namespace, portSuffix))
 
-	// Set source metadata for conflict detection
-	item.Source = name
+	// Set source metadata for conflict detection (prefix with "svc/" to avoid collisions with Ingress items)
+	item.Source = "svc/" + name
 	if clusterName, ok := svc.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != LocalCluster {
-		item.Source = name + "@" + clusterName
+		item.Source = "svc/" + name + "@" + clusterName
 	}
 	item.Namespace = namespace
 	item.LastUpdate = svc.CreationTimestamp.Time.Format("2006-01-02T15:04:05Z")

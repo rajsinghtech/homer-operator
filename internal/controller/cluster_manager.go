@@ -673,11 +673,11 @@ func (m *ClusterManager) DiscoverServices(ctx context.Context, dashboard *homerv
 
 // discoverClusterServices discovers Services from a specific cluster
 func (m *ClusterManager) discoverClusterServices(ctx context.Context, cluster *ClusterClient, dashboard *homerv1alpha1.Dashboard) ([]corev1.Service, error) {
-	// Determine which selector to use
+	// Determine which selector to use (cluster-specific overrides global, global applies to all clusters)
 	var selector *metav1.LabelSelector
 	if cluster.ClusterCfg != nil && cluster.ClusterCfg.ServiceSelector != nil {
 		selector = cluster.ClusterCfg.ServiceSelector
-	} else if cluster.Name == localClusterName && dashboard.Spec.ServiceSelector != nil {
+	} else if dashboard.Spec.ServiceSelector != nil {
 		selector = dashboard.Spec.ServiceSelector
 	}
 
@@ -768,7 +768,7 @@ func (m *ClusterManager) mergeNamespaceAnnotationsForService(ctx context.Context
 }
 
 // UpdateClusterStatuses updates the cluster connection counts in the status
-func (m *ClusterManager) UpdateClusterStatuses(statuses []homerv1alpha1.ClusterConnectionStatus, clusterIngresses map[string][]networkingv1.Ingress, clusterHTTPRoutes map[string][]gatewayv1.HTTPRoute) []homerv1alpha1.ClusterConnectionStatus {
+func (m *ClusterManager) UpdateClusterStatuses(statuses []homerv1alpha1.ClusterConnectionStatus, clusterIngresses map[string][]networkingv1.Ingress, clusterHTTPRoutes map[string][]gatewayv1.HTTPRoute, clusterServices map[string][]corev1.Service) []homerv1alpha1.ClusterConnectionStatus {
 	// Create a map for quick lookup
 	statusMap := make(map[string]*homerv1alpha1.ClusterConnectionStatus)
 	for i := range statuses {
@@ -791,6 +791,15 @@ func (m *ClusterManager) UpdateClusterStatuses(statuses []homerv1alpha1.ClusterC
 		}
 		if status, ok := statusMap[clusterName]; ok {
 			status.DiscoveredHTTPRoutes = len(httproutes)
+		}
+	}
+
+	for clusterName, svcs := range clusterServices {
+		if clusterName == localClusterName {
+			continue
+		}
+		if status, ok := statusMap[clusterName]; ok {
+			status.DiscoveredServices = len(svcs)
 		}
 	}
 

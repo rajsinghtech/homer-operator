@@ -200,8 +200,8 @@ func TestUpdateHomerConfigService_ClusterAnnotation(t *testing.T) {
 	for _, sg := range config.Services {
 		for _, item := range sg.Items {
 			if item.Parameters["name"] == "remote-app" {
-				if item.Source != "remote-app@prod-cluster" {
-					t.Errorf("source = %q, want 'remote-app@prod-cluster'", item.Source)
+				if item.Source != "svc/remote-app@prod-cluster" {
+					t.Errorf("source = %q, want 'svc/remote-app@prod-cluster'", item.Source)
 				}
 				return
 			}

@@ -391,23 +391,17 @@ func (r *DashboardReconciler) getFilteredServices(ctx context.Context, dashboard
 		return nil, nil
 	}
 
-	serviceList := &corev1.ServiceList{}
-	if err := r.List(ctx, serviceList); err != nil {
+	labelSelector, err := metav1.LabelSelectorAsSelector(dashboard.Spec.ServiceSelector)
+	if err != nil {
 		return nil, err
 	}
 
-	var filtered []corev1.Service
-	for i := range serviceList.Items {
-		shouldInclude, err := r.shouldIncludeService(ctx, &serviceList.Items[i], dashboard)
-		if err != nil {
-			return nil, err
-		}
-		if shouldInclude {
-			filtered = append(filtered, serviceList.Items[i])
-		}
+	serviceList := &corev1.ServiceList{}
+	if err := r.List(ctx, serviceList, client.MatchingLabelsSelector{Selector: labelSelector}); err != nil {
+		return nil, err
 	}
 
-	return filtered, nil
+	return serviceList.Items, nil
 }
 
 func (r *DashboardReconciler) getMultiClusterFilteredServices(ctx context.Context, dashboard *homerv1alpha1.Dashboard) ([]corev1.Service, error) {
@@ -1424,7 +1418,8 @@ func (r *DashboardReconciler) updateStatus(ctx context.Context, dashboard *homer
 			if r.EnableGatewayAPI {
 				clusterHTTPRoutes, _ = r.ClusterManager.DiscoverHTTPRoutes(ctx, dashboard)
 			}
-			clusterStatuses = r.ClusterManager.UpdateClusterStatuses(clusterStatuses, clusterIngresses, clusterHTTPRoutes)
+			clusterServices, _ := r.ClusterManager.DiscoverServices(ctx, dashboard)
+			clusterStatuses = r.ClusterManager.UpdateClusterStatuses(clusterStatuses, clusterIngresses, clusterHTTPRoutes, clusterServices)
 		}
 
 		dashboard.Status.ClusterStatuses = clusterStatuses
