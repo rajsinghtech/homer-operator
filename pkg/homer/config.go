@@ -85,7 +85,7 @@ type HomerConfig struct {
 	// +kubebuilder:pruning:PreserveUnknownFields
 	Footer            string        `json:"footer,omitempty" yaml:"footer,omitempty"`
 	Columns           string        `json:"columns,omitempty" yaml:"columns,omitempty"`
-	ConnectivityCheck bool          `json:"connectivityCheck,omitempty" yaml:"connectivityCheck,omitempty"`
+	ConnectivityCheck *bool         `json:"connectivityCheck,omitempty" yaml:"connectivityCheck,omitempty"`
 	Hotkey            HotkeyConfig  `json:"hotkey,omitempty" yaml:"hotkey,omitempty"`
 	Theme             string        `json:"theme,omitempty" yaml:"theme,omitempty"`
 	Stylesheet        []string      `json:"stylesheet,omitempty" yaml:"stylesheet,omitempty"`
@@ -162,11 +162,12 @@ type Service struct {
 }
 
 type Item struct {
-	Parameters    map[string]string            `json:"parameters,omitempty"`
-	NestedObjects map[string]map[string]string `json:"nestedObjects,omitempty"`
-	Source        string                       `json:"-"`
-	Namespace     string                       `json:"-"`
-	LastUpdate    string                       `json:"-"`
+	Parameters    map[string]string              `json:"parameters,omitempty"`
+	NestedObjects map[string]map[string]string   `json:"nestedObjects,omitempty"`
+	ArrayObjects  map[string][]map[string]string `json:"arrayObjects,omitempty"`
+	Source        string                         `json:"-"`
+	Namespace     string                         `json:"-"`
+	LastUpdate    string                         `json:"-"`
 }
 
 type Link struct {
@@ -1524,6 +1525,14 @@ func processItemAnnotationsWithValidation(item *Item, annotations map[string]str
 
 // processItemField processes a single item field using smart convention-based detection
 func processItemField(item *Item, fieldName, value string, validationLevel ValidationLevel) {
+	// Handle array-of-objects annotations (e.g., quick.0.name, quick.1.url)
+	if parts := strings.SplitN(fieldName, ".", 3); len(parts) == 3 {
+		if idx, err := strconv.Atoi(parts[1]); err == nil {
+			processArrayObjectField(item, parts[0], idx, parts[2], value)
+			return
+		}
+	}
+
 	// Handle nested object annotations (e.g., customHeaders/Authorization)
 	if strings.Contains(fieldName, "/") {
 		processNestedObjectField(item, fieldName, value)
@@ -1532,6 +1541,23 @@ func processItemField(item *Item, fieldName, value string, validationLevel Valid
 
 	// Handle all parameters dynamically using smart type inference
 	processDynamicParameter(item, fieldName, value, validationLevel)
+}
+
+// processArrayObjectField handles array-of-objects annotations like quick.0.name
+func processArrayObjectField(item *Item, arrayName string, index int, property, value string) {
+	if item.ArrayObjects == nil {
+		item.ArrayObjects = make(map[string][]map[string]string)
+	}
+
+	arr := item.ArrayObjects[arrayName]
+
+	// Grow the slice to accommodate the index
+	for len(arr) <= index {
+		arr = append(arr, make(map[string]string))
+	}
+
+	arr[index][property] = value
+	item.ArrayObjects[arrayName] = arr
 }
 
 // processNestedObjectField handles nested object annotations like customHeaders/Authorization
@@ -1597,9 +1623,32 @@ func processDynamicParameter(item *Item, fieldName, value string, validationLeve
 	}
 }
 
+// knownArrayParams lists Homer parameters that expect array values.
+// When these parameters contain comma-separated values, they are automatically
+// split into proper YAML arrays. Other parameters use JSON array syntax [...]
+// for explicit array values.
+var knownArrayParams = map[string]bool{
+	"successCodes": true,
+	"successcodes": true,
+	"hide":         true,
+	"groups":       true,
+	"environments": true,
+	"stats":        true,
+	"items":        true,
+	"stylesheet":   true,
+}
+
 // smartInferType uses convention-based detection to infer parameter types
 func smartInferType(value string) interface{} {
 	value = strings.TrimSpace(value)
+
+	// JSON array detection: values wrapped in [...] are parsed as arrays
+	if strings.HasPrefix(value, "[") && strings.HasSuffix(value, "]") {
+		var arr []interface{}
+		if err := json.Unmarshal([]byte(value), &arr); err == nil {
+			return arr
+		}
+	}
 
 	// Integer detection FIRST - prevents "0" and "1" from being converted to booleans
 	// This is important for fields like updateInterval, timeout, apiVersion, etc.
@@ -1625,6 +1674,37 @@ func smartInferType(value string) interface{} {
 	}
 
 	return value
+}
+
+// smartInferTypeForParam infers type with awareness of the parameter name.
+// Known array parameters with comma-separated values are split into arrays.
+func smartInferTypeForParam(key, value string) interface{} {
+	value = strings.TrimSpace(value)
+
+	// JSON array syntax always takes priority regardless of key
+	if strings.HasPrefix(value, "[") && strings.HasSuffix(value, "]") {
+		var arr []interface{}
+		if err := json.Unmarshal([]byte(value), &arr); err == nil {
+			return arr
+		}
+	}
+
+	// For known array parameters, split comma-separated values into arrays
+	if knownArrayParams[key] && strings.Contains(value, ",") {
+		parts := strings.Split(value, ",")
+		arr := make([]interface{}, 0, len(parts))
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				arr = append(arr, smartInferType(part))
+			}
+		}
+		if len(arr) > 0 {
+			return arr
+		}
+	}
+
+	return smartInferType(value)
 }
 
 // validateParameterValue validates string values according to their expected type
@@ -2261,8 +2341,8 @@ func addBasicFields(configMap map[string]interface{}, config *HomerConfig) {
 	if config.Columns != "" {
 		configMap["columns"] = config.Columns
 	}
-	if config.ConnectivityCheck {
-		configMap["connectivityCheck"] = config.ConnectivityCheck
+	if config.ConnectivityCheck != nil {
+		configMap["connectivityCheck"] = *config.ConnectivityCheck
 	}
 	if config.Theme != "" {
 		configMap["theme"] = config.Theme
@@ -2432,7 +2512,7 @@ func flattenServicesForYAML(services []Service) []map[string]interface{} {
 		if service.Parameters != nil {
 			for key, value := range service.Parameters {
 				yamlKey := getYAMLKey(key)
-				serviceMap[yamlKey] = smartInferType(value)
+				serviceMap[yamlKey] = smartInferTypeForParam(yamlKey, value)
 			}
 		}
 
@@ -2468,11 +2548,11 @@ func flattenItemsForYAML(items []Item) []map[string]interface{} {
 	for _, item := range items {
 		itemMap := make(map[string]interface{})
 
-		// Add parameters with smart type inference
+		// Add parameters with smart type inference (key-aware for array detection)
 		if item.Parameters != nil {
 			for key, value := range item.Parameters {
 				yamlKey := getYAMLKey(key)
-				itemMap[yamlKey] = smartInferType(value)
+				itemMap[yamlKey] = smartInferTypeForParam(yamlKey, value)
 			}
 		}
 
@@ -2480,6 +2560,21 @@ func flattenItemsForYAML(items []Item) []map[string]interface{} {
 		if item.NestedObjects != nil {
 			for objectName, objectMap := range item.NestedObjects {
 				itemMap[objectName] = objectMap
+			}
+		}
+
+		// Add array objects (e.g., quick links)
+		if item.ArrayObjects != nil {
+			for arrayName, arrayMaps := range item.ArrayObjects {
+				inferredArray := make([]interface{}, 0, len(arrayMaps))
+				for _, objMap := range arrayMaps {
+					inferredObj := make(map[string]interface{})
+					for k, v := range objMap {
+						inferredObj[k] = smartInferType(v)
+					}
+					inferredArray = append(inferredArray, inferredObj)
+				}
+				itemMap[arrayName] = inferredArray
 			}
 		}
 
@@ -2521,6 +2616,8 @@ func getYAMLKey(key string) string {
 		return "downloadInterval"
 	case "hideaverages":
 		return "hideaverages" // Homer uses lowercase
+	case "locationid":
+		return "locationId" // OpenWeather
 	case "api_token":
 		return "api_token" // Homer uses underscore
 	case "warning_value":

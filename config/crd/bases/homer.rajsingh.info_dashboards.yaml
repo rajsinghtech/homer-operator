@@ -384,6 +384,14 @@ spec:
                         items:
                           items:
                             properties:
+                              arrayObjects:
+                                additionalProperties:
+                                  items:
+                                    additionalProperties:
+                                      type: string
+                                    type: object
+                                  type: array
+                                type: object
                               nestedObjects:
                                 additionalProperties:
                                   additionalProperties:
