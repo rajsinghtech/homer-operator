@@ -19,7 +19,9 @@ package controller
 import (
 	"context"
 	"fmt"
+	"maps"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -191,8 +193,13 @@ func (r *DashboardReconciler) deploymentSpecsDiffer(ctx context.Context, desired
 	// Compare only meaningful fields that should trigger updates
 
 	// Check replicas
-	if *desired.Spec.Replicas != *existing.Spec.Replicas {
-		log.V(1).Info("Replicas differ", "desired", *desired.Spec.Replicas, "existing", *existing.Spec.Replicas)
+	desiredReplicas := desired.Spec.Replicas
+	existingReplicas := existing.Spec.Replicas
+	if (desiredReplicas == nil) != (existingReplicas == nil) {
+		return true
+	}
+	if desiredReplicas != nil && *desiredReplicas != *existingReplicas {
+		log.V(1).Info("Replicas differ", "desired", *desiredReplicas, "existing", *existingReplicas)
 		return true
 	}
 
@@ -843,9 +850,7 @@ func (r *DashboardReconciler) findDashboardsForNamespace(ctx context.Context, ob
 	// Check if namespace has any homer annotations
 	hasHomerAnnotations := false
 	for key := range namespace.Annotations {
-		if len(key) > len(serviceAnnotationPrefix) &&
-			(key[:len(serviceAnnotationPrefix)] == serviceAnnotationPrefix ||
-				key[:len(itemAnnotationPrefix)] == itemAnnotationPrefix) {
+		if strings.HasPrefix(key, serviceAnnotationPrefix) || strings.HasPrefix(key, itemAnnotationPrefix) {
 			hasHomerAnnotations = true
 			break
 		}
@@ -890,17 +895,13 @@ func (r *DashboardReconciler) mergeNamespaceAnnotations(ctx context.Context, res
 
 	// First, copy relevant namespace annotations (service.homer.* and item.homer.*)
 	for key, value := range namespace.Annotations {
-		if len(key) > len(serviceAnnotationPrefix) && key[:len(serviceAnnotationPrefix)] == serviceAnnotationPrefix {
-			merged[key] = value
-		} else if len(key) > len(itemAnnotationPrefix) && key[:len(itemAnnotationPrefix)] == itemAnnotationPrefix {
+		if strings.HasPrefix(key, serviceAnnotationPrefix) || strings.HasPrefix(key, itemAnnotationPrefix) {
 			merged[key] = value
 		}
 	}
 
 	// Then overlay resource annotations (these override namespace defaults)
-	for key, value := range resourceAnnotations {
-		merged[key] = value
-	}
+	maps.Copy(merged, resourceAnnotations)
 
 	return merged
 }

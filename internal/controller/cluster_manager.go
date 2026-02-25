@@ -468,9 +468,7 @@ func (m *ClusterManager) discoverClusterHTTPRoutes(ctx context.Context, cluster 
 	clusterHTTPRoutes := &gatewayv1.HTTPRouteList{}
 
 	// Apply namespace filter if specified for remote clusters
-	listOpts := []client.ListOption{}
 	if cluster.ClusterCfg != nil && len(cluster.ClusterCfg.NamespaceFilter) > 0 {
-		// List HTTPRoutes from each specified namespace
 		filteredHTTPRoutes := []gatewayv1.HTTPRoute{}
 		for _, ns := range cluster.ClusterCfg.NamespaceFilter {
 			nsHTTPRoutes := &gatewayv1.HTTPRouteList{}
@@ -484,8 +482,7 @@ func (m *ClusterManager) discoverClusterHTTPRoutes(ctx context.Context, cluster 
 		}
 		clusterHTTPRoutes.Items = filteredHTTPRoutes
 	} else {
-		// List from all namespaces
-		if err := cluster.Client.List(ctx, clusterHTTPRoutes, listOpts...); err != nil {
+		if err := cluster.Client.List(ctx, clusterHTTPRoutes); err != nil {
 			return nil, err
 		}
 	}
