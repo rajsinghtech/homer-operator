@@ -73,7 +73,7 @@ func TestConnectivityCheckJSONRoundTrip(t *testing.T) {
 		t.Fatalf("marshal error: %v", err)
 	}
 
-	var parsed map[string]interface{}
+	var parsed map[string]any
 	if err := yaml.Unmarshal(yamlBytes, &parsed); err != nil {
 		t.Fatalf("unmarshal error: %v", err)
 	}

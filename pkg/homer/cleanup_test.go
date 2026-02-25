@@ -316,7 +316,7 @@ func TestRemoveItemsFromHTTPRouteSource(t *testing.T) {
 	}
 
 	// Remove all items from route1
-	removeItemsFromHTTPRouteSource(config, "route1", "test-ns")
+	removeItemsFromSource(config, "route1", "test-ns")
 
 	// Verify only route2's item remains
 	if len(config.Services) != 1 {

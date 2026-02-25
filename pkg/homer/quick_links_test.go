@@ -87,22 +87,22 @@ func TestQuickLinksYAMLOutput(t *testing.T) {
 		t.Fatalf("marshal error: %v", err)
 	}
 
-	var parsed map[string]interface{}
+	var parsed map[string]any
 	if err := yaml.Unmarshal(yamlBytes, &parsed); err != nil {
 		t.Fatalf("unmarshal error: %v", err)
 	}
 
-	services := parsed["services"].([]interface{})
-	svc := services[0].(map[interface{}]interface{})
-	items := svc["items"].([]interface{})
-	item := items[0].(map[interface{}]interface{})
+	services := parsed["services"].([]any)
+	svc := services[0].(map[any]any)
+	items := svc["items"].([]any)
+	item := items[0].(map[any]any)
 
 	quickVal, ok := item["quick"]
 	if !ok {
 		t.Fatal("expected quick field in YAML output")
 	}
 
-	quickArr, ok := quickVal.([]interface{})
+	quickArr, ok := quickVal.([]any)
 	if !ok {
 		t.Fatalf("expected quick to be array, got %T", quickVal)
 	}
@@ -111,7 +111,7 @@ func TestQuickLinksYAMLOutput(t *testing.T) {
 		t.Fatalf("expected 2 quick links, got %d", len(quickArr))
 	}
 
-	first := quickArr[0].(map[interface{}]interface{})
+	first := quickArr[0].(map[any]any)
 	if first["name"] != "Admin" {
 		t.Errorf("expected quick[0].name='Admin', got '%v'", first["name"])
 	}
