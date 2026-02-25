@@ -8,8 +8,8 @@
   [![Kubernetes](https://img.shields.io/badge/Kubernetes-v1.20+-blue.svg)](https://kubernetes.io/)
 
   **Kubernetes operator for automated Homer dashboard deployment and management**
-  
-  Automatically generate beautiful, dynamic dashboards from your Kubernetes Ingress and Gateway API resources.
+
+  Automatically generate beautiful, dynamic dashboards from your Kubernetes Ingress, Gateway API, and Service resources.
 </div>
 
 ---
@@ -231,6 +231,7 @@ spec:
 | `httpRouteSelector` | Filter HTTPRoutes by their own labels | HTTPRoutes only | Include all HTTPRoutes |
 | `ingressSelector` | Filter Ingresses by their labels | Ingresses only | Include all Ingresses |
 | `domainFilters` | Filter by hostname/domain names | Both HTTPRoutes & Ingresses | Include all domains |
+| `serviceSelector` | Discover Kubernetes Services by labels | Services only | No Services discovered |
 
 **Domain Filtering Examples:**
 - `example.com` - Matches exactly `example.com`
@@ -243,6 +244,49 @@ spec:
 - **Security Zones**: Public vs internal service separation
 - **Domain Organization**: Company domains vs personal projects
 - **Gateway Migration**: Gradual migration between gateway implementations
+
+### Kubernetes Service Discovery
+
+Discover internal Kubernetes Services and add them to your dashboard — useful for cluster-internal services that don't have Ingress or HTTPRoute resources:
+
+```yaml
+apiVersion: homer.rajsingh.info/v1alpha1
+kind: Dashboard
+metadata:
+  name: internal-dashboard
+spec:
+  # Discover Services matching these labels
+  serviceSelector:
+    matchLabels:
+      homer.rajsingh.info/enabled: "true"
+
+  homerConfig:
+    title: "Internal Services"
+```
+
+Annotate your Services to customize their dashboard appearance:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-api
+  namespace: backend
+  labels:
+    homer.rajsingh.info/enabled: "true"
+  annotations:
+    item.homer.rajsingh.info/name: "Backend API"
+    item.homer.rajsingh.info/subtitle: "Core API service"
+    item.homer.rajsingh.info/logo: "https://example.com/api-logo.png"
+    item.homer.rajsingh.info/type: "Ping"
+    service.homer.rajsingh.info/name: "Backend"
+    service.homer.rajsingh.info/icon: "fas fa-cogs"
+spec:
+  ports:
+    - port: 8080
+```
+
+Service URLs are automatically generated as `http://<name>.<namespace>.svc.cluster.local:<port>`. Unlike Ingress/HTTPRoute discovery, Services are **opt-in** — they are only discovered when `serviceSelector` is specified.
 
 ### Annotation-driven Service Discovery
 
@@ -543,7 +587,7 @@ Discover and aggregate services from multiple Kubernetes clusters into a single 
 
 - **Multiple Cluster Connections**: Connect to any number of remote clusters using kubeconfig secrets
 - **Automatic Secret Rotation**: Detects kubeconfig changes and automatically reconnects without pod restarts
-- **Per-Cluster Filtering**: Apply namespace, label, and domain filters independently per cluster
+- **Per-Cluster Filtering**: Apply namespace, label, domain, and service filters independently per cluster
 - **Cluster Metadata**: Automatically enriches discovered services with cluster information
 - **Status Tracking**: Monitor connection status and resource counts per cluster
 - **Secure Authentication**: Token-based authentication with RBAC support
@@ -571,8 +615,8 @@ rules:
   resources: ["httproutes", "gateways"]
   verbs: ["get", "list", "watch"]
 - apiGroups: [""]
-  resources: ["namespaces"]
-  verbs: ["get", "list"]
+  resources: ["namespaces", "services"]
+  verbs: ["get", "list", "watch"]
 EOF
 
 # Bind the role
@@ -717,6 +761,11 @@ spec:
       gatewaySelector:
         matchLabels:
           type: ingress
+
+      # Service discovery (optional) - discover K8s Services by labels
+      serviceSelector:
+        matchLabels:
+          homer.rajsingh.info/enabled: "true"
 
       # Per-cluster domain filtering (optional) - overrides global domainFilters for this cluster
       domainFilters:
