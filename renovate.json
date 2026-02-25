@@ -24,8 +24,15 @@
   },
   "packageRules": [
     {
-      "matchDepTypes": ["major"],
-      "dependencyDashboardApproval": true
+      "matchUpdateTypes": ["minor", "patch", "digest"],
+      "automerge": true,
+      "automergeType": "pr",
+      "automergeStrategy": "squash"
+    },
+    {
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true,
+      "automerge": false
     }
   ]
 }
