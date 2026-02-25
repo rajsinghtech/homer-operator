@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
@@ -88,7 +89,10 @@ func (r *GenericResourceReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 				return ctrl.Result{}, err
 			}
 
-			r.updateConfigMap(resourceInfo, &configMap, dashboard.Spec.DomainFilters)
+			if err := r.updateConfigMap(resourceInfo, &configMap, dashboard.Spec.DomainFilters); err != nil {
+				log.FromContext(ctx).Error(err, "Failed to update configmap from resource", "dashboard", dashboard.Name)
+				continue
+			}
 
 			if err := utils.UpdateConfigMapWithRetry(ctx, r.Client, &configMap, dashboard.Name); err != nil {
 				return ctrl.Result{}, err
@@ -208,14 +212,13 @@ func (r *GenericResourceReconciler) shouldIncludeHTTPRoute(ctx context.Context, 
 	return true, nil
 }
 
-func (r *GenericResourceReconciler) updateConfigMap(resourceInfo *ResourceInfo, configMap *corev1.ConfigMap, domainFilters []string) {
+func (r *GenericResourceReconciler) updateConfigMap(resourceInfo *ResourceInfo, configMap *corev1.ConfigMap, domainFilters []string) error {
 	if r.IsHTTPRoute {
 		httproute := resourceInfo.Object.(*gatewayv1.HTTPRoute)
-		homer.UpdateConfigMapHTTPRoute(configMap, httproute, domainFilters)
-	} else {
-		ingress := resourceInfo.Object.(*networkingv1.Ingress)
-		homer.UpdateConfigMapIngress(configMap, *ingress, domainFilters)
+		return homer.UpdateConfigMapHTTPRoute(configMap, httproute, domainFilters)
 	}
+	ingress := resourceInfo.Object.(*networkingv1.Ingress)
+	return homer.UpdateConfigMapIngress(configMap, *ingress, domainFilters)
 }
 
 func (r *GenericResourceReconciler) SetupIngressController(mgr ctrl.Manager) error {

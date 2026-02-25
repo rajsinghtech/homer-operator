@@ -6,7 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
+	"maps"
 	"os"
 	"slices"
 	"sort"
@@ -101,10 +102,10 @@ type HomerConfig struct {
 }
 
 // UnmarshalYAML custom unmarshaler to handle footer: false
-func (c *HomerConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
+func (c *HomerConfig) UnmarshalYAML(unmarshal func(any) error) error {
 	type Alias HomerConfig
 	aux := &struct {
-		Footer interface{} `yaml:"footer,omitempty"`
+		Footer any `yaml:"footer,omitempty"`
 		*Alias
 	}{
 		Alias: (*Alias)(c),
@@ -127,7 +128,7 @@ func (c *HomerConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 func (c *HomerConfig) UnmarshalJSON(data []byte) error {
 	type Alias HomerConfig
 	aux := &struct {
-		Footer interface{} `json:"footer,omitempty"`
+		Footer any `json:"footer,omitempty"`
 		*Alias
 	}{
 		Alias: (*Alias)(c),
@@ -410,7 +411,7 @@ func createConfigMapWithHTTPRoutesAndHealth(
 	}
 
 	if err := validateCRDServicePreservation(&originalConfig, config); err != nil {
-		log.Printf("Warning: %v", err)
+		slog.Warn("CRD service preservation check failed", "error", err)
 	}
 
 	if healthConfig != nil {
@@ -635,7 +636,7 @@ func createDeploymentInternal(
 		var dnsConfig corev1.PodDNSConfig
 		if err := json.Unmarshal([]byte(config.DNSConfig), &dnsConfig); err != nil {
 			// Log error but don't fail deployment - DNS config is optional
-			log.Printf("Warning: parse DNSConfig: %v", err)
+			slog.Warn("failed to parse DNSConfig", "error", err)
 		} else {
 			d.Spec.Template.Spec.DNSConfig = &dnsConfig
 		}
@@ -767,7 +768,7 @@ func CreateDeploymentWithDNS(
 		if dnsConfigJSON, err := json.Marshal(dnsConfig); err == nil {
 			config.DNSConfig = string(dnsConfigJSON)
 		} else {
-			log.Printf("Warning: serialize DNSConfig: %v", err)
+			slog.Warn("failed to serialize DNSConfig", "error", err)
 		}
 	}
 	return CreateDeployment(name, namespace, replicas, owner, config)
@@ -1315,21 +1316,21 @@ func createIngressItem(ingress networkingv1.Ingress, host string, validRuleCount
 	return item
 }
 
-func UpdateConfigMapIngress(cm *corev1.ConfigMap, ingress networkingv1.Ingress, domainFilters []string) {
+func UpdateConfigMapIngress(cm *corev1.ConfigMap, ingress networkingv1.Ingress, domainFilters []string) error {
 	configMapMutex.Lock()
 	defer configMapMutex.Unlock()
 
 	homerConfig := HomerConfig{}
-	err := yaml.Unmarshal([]byte(cm.Data["config.yml"]), &homerConfig)
-	if err != nil {
-		return
+	if err := yaml.Unmarshal([]byte(cm.Data["config.yml"]), &homerConfig); err != nil {
+		return fmt.Errorf("unmarshal config.yml: %w", err)
 	}
 	UpdateHomerConfigIngress(&homerConfig, ingress, domainFilters)
 	objYAML, err := marshalHomerConfigToYAML(&homerConfig)
 	if err != nil {
-		return
+		return fmt.Errorf("marshal config: %w", err)
 	}
 	cm.Data["config.yml"] = string(objYAML)
+	return nil
 }
 
 // UpdateHomerConfigHTTPRoute updates the HomerConfig with HTTPRoute information
@@ -1566,10 +1567,8 @@ func smartMergeItems(existingItem, newItem *Item) {
 			if existingItem.NestedObjects[objectName] == nil {
 				existingItem.NestedObjects[objectName] = make(map[string]string)
 			}
-			for key, value := range objectMap {
-				// Additive approach - both CRD and discovered can contribute
-				existingItem.NestedObjects[objectName][key] = value
-			}
+			// Additive approach - both CRD and discovered can contribute
+			maps.Copy(existingItem.NestedObjects[objectName], objectMap)
 		}
 	}
 
@@ -1748,12 +1747,12 @@ var knownArrayParams = map[string]bool{
 }
 
 // smartInferType uses convention-based detection to infer parameter types
-func smartInferType(value string) interface{} {
+func smartInferType(value string) any {
 	value = strings.TrimSpace(value)
 
 	// JSON array detection: values wrapped in [...] are parsed as arrays
 	if strings.HasPrefix(value, "[") && strings.HasSuffix(value, "]") {
-		var arr []interface{}
+		var arr []any
 		if err := json.Unmarshal([]byte(value), &arr); err == nil {
 			return arr
 		}
@@ -1787,12 +1786,12 @@ func smartInferType(value string) interface{} {
 
 // smartInferTypeForParam infers type with awareness of the parameter name.
 // Known array parameters with comma-separated values are split into arrays.
-func smartInferTypeForParam(key, value string) interface{} {
+func smartInferTypeForParam(key, value string) any {
 	value = strings.TrimSpace(value)
 
 	// JSON array syntax always takes priority regardless of key
 	if strings.HasPrefix(value, "[") && strings.HasSuffix(value, "]") {
-		var arr []interface{}
+		var arr []any
 		if err := json.Unmarshal([]byte(value), &arr); err == nil {
 			return arr
 		}
@@ -1801,7 +1800,7 @@ func smartInferTypeForParam(key, value string) interface{} {
 	// For known array parameters, split comma-separated values into arrays
 	if knownArrayParams[key] && strings.Contains(value, ",") {
 		parts := strings.Split(value, ",")
-		arr := make([]interface{}, 0, len(parts))
+		arr := make([]any, 0, len(parts))
 		for _, part := range parts {
 			part = strings.TrimSpace(part)
 			if part != "" {
@@ -2164,21 +2163,21 @@ func processServiceNestedObjectField(service *Service, fieldName, value string) 
 }
 
 // UpdateConfigMapHTTPRoute updates the ConfigMap with HTTPRoute information
-func UpdateConfigMapHTTPRoute(cm *corev1.ConfigMap, httproute *gatewayv1.HTTPRoute, domainFilters []string) {
+func UpdateConfigMapHTTPRoute(cm *corev1.ConfigMap, httproute *gatewayv1.HTTPRoute, domainFilters []string) error {
 	configMapMutex.Lock()
 	defer configMapMutex.Unlock()
 
 	homerConfig := HomerConfig{}
-	err := yaml.Unmarshal([]byte(cm.Data["config.yml"]), &homerConfig)
-	if err != nil {
-		return
+	if err := yaml.Unmarshal([]byte(cm.Data["config.yml"]), &homerConfig); err != nil {
+		return fmt.Errorf("unmarshal config.yml: %w", err)
 	}
 	UpdateHomerConfigHTTPRoute(&homerConfig, httproute, domainFilters)
 	objYAML, err := marshalHomerConfigToYAML(&homerConfig)
 	if err != nil {
-		return
+		return fmt.Errorf("marshal config: %w", err)
 	}
 	cm.Data["config.yml"] = string(objYAML)
+	return nil
 }
 
 // MatchesDomainFilters checks if any of the provided hosts match the domain filters
@@ -2219,18 +2218,8 @@ func ValidateHomerConfig(config *HomerConfig) error {
 		return fmt.Errorf("layout: %s", config.Defaults.Layout)
 	}
 
-	if config.Defaults.ColorTheme != "" {
-		validThemes := []string{"auto", "light", "dark"}
-		valid := false
-		for _, theme := range validThemes {
-			if config.Defaults.ColorTheme == theme {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			return fmt.Errorf("colorTheme: %s", config.Defaults.ColorTheme)
-		}
+	if config.Defaults.ColorTheme != "" && !slices.Contains([]string{"auto", "light", "dark"}, config.Defaults.ColorTheme) {
+		return fmt.Errorf("colorTheme: %s", config.Defaults.ColorTheme)
 	}
 
 	for i, service := range config.Services {
@@ -2409,7 +2398,7 @@ func sortServicesAndItems(config *HomerConfig) {
 
 // marshalHomerConfigToYAML creates properly formatted YAML for Homer
 func marshalHomerConfigToYAML(config *HomerConfig) ([]byte, error) {
-	configMap := make(map[string]interface{})
+	configMap := make(map[string]any)
 
 	addBasicFields(configMap, config)
 	addHotkeyConfig(configMap, config)
@@ -2423,7 +2412,7 @@ func marshalHomerConfigToYAML(config *HomerConfig) ([]byte, error) {
 }
 
 // addBasicFields adds basic configuration fields
-func addBasicFields(configMap map[string]interface{}, config *HomerConfig) {
+func addBasicFields(configMap map[string]any, config *HomerConfig) {
 	if config.Title != "" {
 		configMap["title"] = config.Title
 	}
@@ -2465,27 +2454,27 @@ func addBasicFields(configMap map[string]interface{}, config *HomerConfig) {
 }
 
 // addHotkeyConfig adds hotkey configuration
-func addHotkeyConfig(configMap map[string]interface{}, config *HomerConfig) {
+func addHotkeyConfig(configMap map[string]any, config *HomerConfig) {
 	if config.Hotkey.Search != "" {
-		configMap["hotkey"] = map[string]interface{}{
+		configMap["hotkey"] = map[string]any{
 			"search": config.Hotkey.Search,
 		}
 	}
 }
 
 // addColorsConfig adds colors configuration
-func addColorsConfig(configMap map[string]interface{}, config *HomerConfig) {
+func addColorsConfig(configMap map[string]any, config *HomerConfig) {
 	if config.Colors.Light != (ThemeColors{}) || config.Colors.Dark != (ThemeColors{}) {
-		colorsMap := make(map[string]interface{})
+		colorsMap := make(map[string]any)
 		if config.Colors.Light != (ThemeColors{}) {
-			lightMap := make(map[string]interface{})
+			lightMap := make(map[string]any)
 			addThemeColors(lightMap, config.Colors.Light)
 			if len(lightMap) > 0 {
 				colorsMap["light"] = lightMap
 			}
 		}
 		if config.Colors.Dark != (ThemeColors{}) {
-			darkMap := make(map[string]interface{})
+			darkMap := make(map[string]any)
 			addThemeColors(darkMap, config.Colors.Dark)
 			if len(darkMap) > 0 {
 				colorsMap["dark"] = darkMap
@@ -2498,9 +2487,9 @@ func addColorsConfig(configMap map[string]interface{}, config *HomerConfig) {
 }
 
 // addDefaultsConfig adds defaults configuration
-func addDefaultsConfig(configMap map[string]interface{}, config *HomerConfig) {
+func addDefaultsConfig(configMap map[string]any, config *HomerConfig) {
 	if config.Defaults.ColorTheme != "" || config.Defaults.Layout != "" {
-		defaultsMap := make(map[string]interface{})
+		defaultsMap := make(map[string]any)
 		if config.Defaults.Layout != "" {
 			defaultsMap["layout"] = config.Defaults.Layout
 		}
@@ -2512,9 +2501,9 @@ func addDefaultsConfig(configMap map[string]interface{}, config *HomerConfig) {
 }
 
 // addProxyConfig adds proxy configuration
-func addProxyConfig(configMap map[string]interface{}, config *HomerConfig) {
+func addProxyConfig(configMap map[string]any, config *HomerConfig) {
 	if config.Proxy.UseCredentials || len(config.Proxy.Headers) > 0 {
-		proxyMap := make(map[string]interface{})
+		proxyMap := make(map[string]any)
 		if config.Proxy.UseCredentials {
 			proxyMap["useCredentials"] = config.Proxy.UseCredentials
 		}
@@ -2526,9 +2515,9 @@ func addProxyConfig(configMap map[string]interface{}, config *HomerConfig) {
 }
 
 // addMessageConfig adds message configuration
-func addMessageConfig(configMap map[string]interface{}, config *HomerConfig) {
+func addMessageConfig(configMap map[string]any, config *HomerConfig) {
 	if config.Message.Title != "" || config.Message.Content != "" || config.Message.Url != "" {
-		messageMap := make(map[string]interface{})
+		messageMap := make(map[string]any)
 		if config.Message.Title != "" {
 			messageMap["title"] = config.Message.Title
 		}
@@ -2555,7 +2544,7 @@ func addMessageConfig(configMap map[string]interface{}, config *HomerConfig) {
 }
 
 // addLinksAndServices adds links and services configuration
-func addLinksAndServices(configMap map[string]interface{}, config *HomerConfig) {
+func addLinksAndServices(configMap map[string]any, config *HomerConfig) {
 	if len(config.Links) > 0 {
 		configMap["links"] = config.Links
 	}
@@ -2565,7 +2554,7 @@ func addLinksAndServices(configMap map[string]interface{}, config *HomerConfig) 
 }
 
 // addThemeColors adds theme color fields to a map
-func addThemeColors(colorMap map[string]interface{}, colors ThemeColors) {
+func addThemeColors(colorMap map[string]any, colors ThemeColors) {
 	if colors.HighlightPrimary != "" {
 		colorMap["highlight-primary"] = colors.HighlightPrimary
 	}
@@ -2607,15 +2596,15 @@ func addThemeColors(colorMap map[string]interface{}, colors ThemeColors) {
 	}
 }
 
-func flattenServicesForYAML(services []Service) []map[string]interface{} {
+func flattenServicesForYAML(services []Service) []map[string]any {
 	if len(services) == 0 {
 		return nil
 	}
 
-	result := make([]map[string]interface{}, 0, len(services))
+	result := make([]map[string]any, 0, len(services))
 
 	for _, service := range services {
-		serviceMap := make(map[string]interface{})
+		serviceMap := make(map[string]any)
 
 		// Add parameters with smart type inference and YAML key conversion
 		if service.Parameters != nil {
@@ -2647,15 +2636,15 @@ func flattenServicesForYAML(services []Service) []map[string]interface{} {
 	return result
 }
 
-func flattenItemsForYAML(items []Item) []map[string]interface{} {
+func flattenItemsForYAML(items []Item) []map[string]any {
 	if len(items) == 0 {
 		return nil
 	}
 
-	result := make([]map[string]interface{}, 0, len(items))
+	result := make([]map[string]any, 0, len(items))
 
 	for _, item := range items {
-		itemMap := make(map[string]interface{})
+		itemMap := make(map[string]any)
 
 		// Add parameters with smart type inference (key-aware for array detection)
 		if item.Parameters != nil {
@@ -2675,9 +2664,9 @@ func flattenItemsForYAML(items []Item) []map[string]interface{} {
 		// Add array objects (e.g., quick links)
 		if item.ArrayObjects != nil {
 			for arrayName, arrayMaps := range item.ArrayObjects {
-				inferredArray := make([]interface{}, 0, len(arrayMaps))
+				inferredArray := make([]any, 0, len(arrayMaps))
 				for _, objMap := range arrayMaps {
-					inferredObj := make(map[string]interface{})
+					inferredObj := make(map[string]any)
 					for k, v := range objMap {
 						inferredObj[k] = smartInferType(v)
 					}
@@ -2928,8 +2917,7 @@ func findServiceDependencies(services []Service) []ServiceDependency {
 // findKeywordDependencies finds dependencies based on keywords
 func findKeywordDependencies(keywords string, services []Service, serviceName, itemName string) []ServiceDependency {
 	var dependencies []ServiceDependency
-	keywordList := strings.Split(keywords, ",")
-	for _, keyword := range keywordList {
+	for keyword := range strings.SplitSeq(keywords, ",") {
 		keyword = strings.TrimSpace(keyword)
 		for _, otherService := range services {
 			// Get other service name from Parameters map only
@@ -2969,29 +2957,15 @@ func findSubtitleDependencies(subtitle string, services []Service, serviceName, 
 
 // optimizeServiceLayout optimizes service ordering based on dependencies and usage patterns
 func optimizeServiceLayout(services []Service, _ []ServiceDependency) []Service {
-	// Create a copy to avoid modifying the original
 	optimizedServices := make([]Service, len(services))
 	copy(optimizedServices, services)
 
-	// Simple optimization: sort by number of items (descending) and then by name
-	// More complex dependency-based sorting could be implemented here
-	for i := 0; i < len(optimizedServices)-1; i++ {
-		for j := i + 1; j < len(optimizedServices); j++ {
-			// Sort by item count first (descending)
-			if len(optimizedServices[i].Items) < len(optimizedServices[j].Items) {
-				optimizedServices[i], optimizedServices[j] = optimizedServices[j], optimizedServices[i]
-			} else if len(optimizedServices[i].Items) == len(optimizedServices[j].Items) {
-				// If same item count, sort by name (ascending)
-				// Get service names from Parameters map only
-				serviceNameI := getServiceName(&optimizedServices[i])
-				serviceNameJ := getServiceName(&optimizedServices[j])
-
-				if serviceNameI > serviceNameJ {
-					optimizedServices[i], optimizedServices[j] = optimizedServices[j], optimizedServices[i]
-				}
-			}
+	sort.Slice(optimizedServices, func(i, j int) bool {
+		if len(optimizedServices[i].Items) != len(optimizedServices[j].Items) {
+			return len(optimizedServices[i].Items) > len(optimizedServices[j].Items)
 		}
-	}
+		return getServiceName(&optimizedServices[i]) < getServiceName(&optimizedServices[j])
+	})
 
 	return optimizedServices
 }
@@ -3080,23 +3054,10 @@ func enhanceHomerConfigWithAggregation(config *HomerConfig, healthConfig *Servic
 		}
 	}
 
-	// Find and log dependencies
+	// Find dependencies and optimize layout
 	dependencies := findServiceDependencies(config.Services)
 	if len(dependencies) > 0 {
-		log.Printf("Found %d service dependencies", len(dependencies))
+		slog.Debug("found service dependencies", "count", len(dependencies))
 	}
-
-	// Optimize service layout
 	config.Services = optimizeServiceLayout(config.Services, dependencies)
-
-	// Add service metrics as comments or metadata (if Homer supports it)
-	for i := range config.Services {
-		metrics := aggregateServiceMetrics(&config.Services[i])
-		// Could add metrics to service description or as metadata
-		serviceName := getServiceName(&config.Services[i])
-		if serviceName != "" {
-			log.Printf("Service '%s': %d total items, %d with health checks",
-				serviceName, metrics.TotalItems, metrics.HealthyItems)
-		}
-	}
 }

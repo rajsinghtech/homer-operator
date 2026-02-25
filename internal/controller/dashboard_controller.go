@@ -203,9 +203,6 @@ func (r *DashboardReconciler) deploymentSpecsDiffer(ctx context.Context, desired
 	}
 
 	for i, container := range desired.Spec.Template.Spec.Containers {
-		if i >= len(existing.Spec.Template.Spec.Containers) {
-			return true
-		}
 		existingContainer := existing.Spec.Template.Spec.Containers[i]
 
 		// Compare container image

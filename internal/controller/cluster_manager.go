@@ -21,12 +21,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
 	homerv1alpha1 "github.com/rajsinghtech/homer-operator/api/v1alpha1"
+	"github.com/rajsinghtech/homer-operator/pkg/utils"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -277,8 +279,8 @@ func (m *ClusterManager) GetClusterStatuses() []homerv1alpha1.ClusterConnectionS
 
 // DiscoverIngresses discovers Ingress resources from all connected clusters
 func (m *ClusterManager) DiscoverIngresses(ctx context.Context, dashboard *homerv1alpha1.Dashboard) (map[string][]networkingv1.Ingress, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	results := make(map[string][]networkingv1.Ingress)
 	log := log.FromContext(ctx)
@@ -364,7 +366,7 @@ func (m *ClusterManager) discoverClusterIngresses(ctx context.Context, cluster *
 			if labelSelector.Matches(labels.Set(clusterIngresses.Items[i].Labels)) {
 				// Apply domain filters if specified
 				if len(domainFilters) > 0 {
-					if !matchesIngressDomainFilters(&clusterIngresses.Items[i], domainFilters) {
+					if !utils.MatchesIngressDomainFilters(&clusterIngresses.Items[i], domainFilters) {
 						continue
 					}
 				}
@@ -374,9 +376,7 @@ func (m *ClusterManager) discoverClusterIngresses(ctx context.Context, cluster *
 					if clusterIngresses.Items[i].Labels == nil {
 						clusterIngresses.Items[i].Labels = make(map[string]string)
 					}
-					for k, v := range cluster.ClusterCfg.ClusterLabels {
-						clusterIngresses.Items[i].Labels[k] = v
-					}
+					maps.Copy(clusterIngresses.Items[i].Labels, cluster.ClusterCfg.ClusterLabels)
 				}
 				// Add cluster annotation for identification
 				if clusterIngresses.Items[i].Annotations == nil {
@@ -400,7 +400,7 @@ func (m *ClusterManager) discoverClusterIngresses(ctx context.Context, cluster *
 
 		// Apply domain filters if specified
 		if len(domainFilters) > 0 {
-			if !matchesIngressDomainFilters(ingress, domainFilters) {
+			if !utils.MatchesIngressDomainFilters(ingress, domainFilters) {
 				continue
 			}
 		}
@@ -409,9 +409,7 @@ func (m *ClusterManager) discoverClusterIngresses(ctx context.Context, cluster *
 			if ingress.Labels == nil {
 				ingress.Labels = make(map[string]string)
 			}
-			for k, v := range cluster.ClusterCfg.ClusterLabels {
-				ingress.Labels[k] = v
-			}
+			maps.Copy(ingress.Labels, cluster.ClusterCfg.ClusterLabels)
 		}
 		// Add cluster annotation for identification
 		if ingress.Annotations == nil {
@@ -430,8 +428,8 @@ func (m *ClusterManager) discoverClusterIngresses(ctx context.Context, cluster *
 
 // DiscoverHTTPRoutes discovers HTTPRoute resources from all connected clusters
 func (m *ClusterManager) DiscoverHTTPRoutes(ctx context.Context, dashboard *homerv1alpha1.Dashboard) (map[string][]gatewayv1.HTTPRoute, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	results := make(map[string][]gatewayv1.HTTPRoute)
 	log := log.FromContext(ctx)
@@ -514,7 +512,7 @@ func (m *ClusterManager) discoverClusterHTTPRoutes(ctx context.Context, cluster 
 			selectorPassed++
 			// Apply domain filters if specified
 			if len(domainFilters) > 0 {
-				if !matchesHTTPRouteDomainFilters(&clusterHTTPRoutes.Items[i], domainFilters) {
+				if !utils.MatchesHTTPRouteDomainFilters(clusterHTTPRoutes.Items[i].Spec.Hostnames, domainFilters) {
 					m.log.V(1).Info("HTTPRoute filtered out by domain", "cluster", cluster.Name, "httproute", clusterHTTPRoutes.Items[i].Name, "hostnames", clusterHTTPRoutes.Items[i].Spec.Hostnames)
 					continue
 				}
@@ -526,9 +524,7 @@ func (m *ClusterManager) discoverClusterHTTPRoutes(ctx context.Context, cluster 
 				if clusterHTTPRoutes.Items[i].Labels == nil {
 					clusterHTTPRoutes.Items[i].Labels = make(map[string]string)
 				}
-				for k, v := range cluster.ClusterCfg.ClusterLabels {
-					clusterHTTPRoutes.Items[i].Labels[k] = v
-				}
+				maps.Copy(clusterHTTPRoutes.Items[i].Labels, cluster.ClusterCfg.ClusterLabels)
 			}
 			// Add cluster annotation for identification
 			if clusterHTTPRoutes.Items[i].Annotations == nil {
@@ -621,8 +617,8 @@ func (m *ClusterManager) shouldIncludeHTTPRoute(ctx context.Context, cluster *Cl
 
 // DiscoverServices discovers Service resources from all connected clusters
 func (m *ClusterManager) DiscoverServices(ctx context.Context, dashboard *homerv1alpha1.Dashboard) (map[string][]corev1.Service, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	results := make(map[string][]corev1.Service)
 	log := log.FromContext(ctx)
@@ -727,9 +723,7 @@ func (m *ClusterManager) discoverClusterServices(ctx context.Context, cluster *C
 			if svc.Labels == nil {
 				svc.Labels = make(map[string]string)
 			}
-			for k, v := range cluster.ClusterCfg.ClusterLabels {
-				svc.Labels[k] = v
-			}
+			maps.Copy(svc.Labels, cluster.ClusterCfg.ClusterLabels)
 		}
 
 		// Add cluster annotation
@@ -850,55 +844,6 @@ func (m *ClusterManager) getDomainFiltersForCluster(cluster *ClusterClient, dash
 	}
 	// Remote clusters with no explicit domain filters: no filtering (return empty)
 	return nil
-}
-
-// matchesIngressDomainFilters checks if an Ingress matches any of the domain filters
-func matchesIngressDomainFilters(ingress *networkingv1.Ingress, domainFilters []string) bool {
-	if len(domainFilters) == 0 {
-		return true
-	}
-
-	for _, rule := range ingress.Spec.Rules {
-		if rule.Host == "" {
-			continue
-		}
-		for _, filter := range domainFilters {
-			if matchesDomain(rule.Host, filter) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// matchesHTTPRouteDomainFilters checks if an HTTPRoute matches any of the domain filters
-func matchesHTTPRouteDomainFilters(httproute *gatewayv1.HTTPRoute, domainFilters []string) bool {
-	if len(domainFilters) == 0 {
-		return true
-	}
-
-	for _, hostname := range httproute.Spec.Hostnames {
-		host := string(hostname)
-		for _, filter := range domainFilters {
-			if matchesDomain(host, filter) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// matchesDomain checks if a host matches a domain filter
-// Supports exact matches and subdomain wildcards
-func matchesDomain(host, filter string) bool {
-	if host == filter {
-		return true
-	}
-	// Check if filter matches as subdomain (e.g., "example.com" matches "*.example.com")
-	if len(host) > len(filter) && host[len(host)-len(filter)-1:] == "."+filter {
-		return true
-	}
-	return false
 }
 
 // mergeNamespaceAnnotationsForIngress merges namespace annotations into an Ingress resource
