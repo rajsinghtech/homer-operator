@@ -322,9 +322,7 @@ func (m *ClusterManager) discoverClusterIngresses(ctx context.Context, cluster *
 	clusterIngresses := &networkingv1.IngressList{}
 
 	// Apply namespace filter if specified for remote clusters
-	listOpts := []client.ListOption{}
 	if cluster.ClusterCfg != nil && len(cluster.ClusterCfg.NamespaceFilter) > 0 {
-		// List ingresses from each specified namespace
 		filteredIngresses := []networkingv1.Ingress{}
 		for _, ns := range cluster.ClusterCfg.NamespaceFilter {
 			nsIngresses := &networkingv1.IngressList{}
@@ -338,8 +336,7 @@ func (m *ClusterManager) discoverClusterIngresses(ctx context.Context, cluster *
 		}
 		clusterIngresses.Items = filteredIngresses
 	} else {
-		// List from all namespaces
-		if err := cluster.Client.List(ctx, clusterIngresses, listOpts...); err != nil {
+		if err := cluster.Client.List(ctx, clusterIngresses); err != nil {
 			return nil, err
 		}
 	}
@@ -385,7 +382,7 @@ func (m *ClusterManager) discoverClusterIngresses(ctx context.Context, cluster *
 				clusterIngresses.Items[i].Annotations["homer.rajsingh.info/cluster"] = cluster.Name
 
 				// Merge namespace annotations from the source cluster
-				m.mergeNamespaceAnnotationsForIngress(ctx, cluster.Client, &clusterIngresses.Items[i])
+				m.mergeHomerAnnotationsFromNamespace(ctx, cluster.Client, clusterIngresses.Items[i].Namespace, clusterIngresses.Items[i].Annotations)
 
 				filtered = append(filtered, clusterIngresses.Items[i])
 			}
@@ -418,7 +415,7 @@ func (m *ClusterManager) discoverClusterIngresses(ctx context.Context, cluster *
 		ingress.Annotations["homer.rajsingh.info/cluster"] = cluster.Name
 
 		// Merge namespace annotations from the source cluster
-		m.mergeNamespaceAnnotationsForIngress(ctx, cluster.Client, ingress)
+		m.mergeHomerAnnotationsFromNamespace(ctx, cluster.Client, ingress.Namespace, ingress.Annotations)
 
 		filtered = append(filtered, *ingress)
 	}
@@ -538,7 +535,7 @@ func (m *ClusterManager) discoverClusterHTTPRoutes(ctx context.Context, cluster 
 			}
 
 			// Merge namespace annotations from the source cluster
-			m.mergeNamespaceAnnotationsForHTTPRoute(ctx, cluster.Client, &clusterHTTPRoutes.Items[i])
+			m.mergeHomerAnnotationsFromNamespace(ctx, cluster.Client, clusterHTTPRoutes.Items[i].Namespace, clusterHTTPRoutes.Items[i].Annotations)
 
 			filtered = append(filtered, clusterHTTPRoutes.Items[i])
 		}
@@ -733,7 +730,7 @@ func (m *ClusterManager) discoverClusterServices(ctx context.Context, cluster *C
 		svc.Annotations["homer.rajsingh.info/cluster"] = cluster.Name
 
 		// Merge namespace annotations
-		m.mergeNamespaceAnnotationsForService(ctx, cluster.Client, svc)
+		m.mergeHomerAnnotationsFromNamespace(ctx, cluster.Client, svc.Namespace, svc.Annotations)
 
 		filtered = append(filtered, *svc)
 	}
@@ -741,21 +738,19 @@ func (m *ClusterManager) discoverClusterServices(ctx context.Context, cluster *C
 	return filtered, nil
 }
 
-// mergeNamespaceAnnotationsForService merges namespace annotations into Service annotations
-func (m *ClusterManager) mergeNamespaceAnnotationsForService(ctx context.Context, clusterClient client.Client, svc *corev1.Service) {
+// mergeHomerAnnotationsFromNamespace fetches a namespace and merges its homer annotations
+// into the target annotations map as defaults (existing annotations take precedence).
+func (m *ClusterManager) mergeHomerAnnotationsFromNamespace(ctx context.Context, clusterClient client.Client, namespaceName string, target map[string]string) {
 	ns := &corev1.Namespace{}
-	if err := clusterClient.Get(ctx, client.ObjectKey{Name: svc.Namespace}, ns); err != nil {
+	if err := clusterClient.Get(ctx, client.ObjectKey{Name: namespaceName}, ns); err != nil {
+		m.log.V(2).Info("Could not fetch namespace for annotation merge", "namespace", namespaceName, "error", err)
 		return
-	}
-
-	if svc.Annotations == nil {
-		svc.Annotations = make(map[string]string)
 	}
 
 	for k, v := range ns.Annotations {
 		if strings.HasPrefix(k, serviceAnnotationPrefix) || strings.HasPrefix(k, itemAnnotationPrefix) {
-			if _, exists := svc.Annotations[k]; !exists {
-				svc.Annotations[k] = v
+			if _, exists := target[k]; !exists {
+				target[k] = v
 			}
 		}
 	}
@@ -844,64 +839,4 @@ func (m *ClusterManager) getDomainFiltersForCluster(cluster *ClusterClient, dash
 	}
 	// Remote clusters with no explicit domain filters: no filtering (return empty)
 	return nil
-}
-
-// mergeNamespaceAnnotationsForIngress merges namespace annotations into an Ingress resource
-// Namespace annotations serve as defaults, resource annotations override
-func (m *ClusterManager) mergeNamespaceAnnotationsForIngress(ctx context.Context, clusterClient client.Client, ingress *networkingv1.Ingress) {
-	// Fetch the namespace from the appropriate cluster
-	namespace := &corev1.Namespace{}
-	if err := clusterClient.Get(ctx, client.ObjectKey{Name: ingress.Namespace}, namespace); err != nil {
-		// If we can't get the namespace, just continue with existing annotations
-		m.log.V(2).Info("Could not fetch namespace for ingress", "namespace", ingress.Namespace, "ingress", ingress.Name, "error", err)
-		return
-	}
-
-	// Merge namespace annotations (namespace defaults, resource overrides)
-	if ingress.Annotations == nil {
-		ingress.Annotations = make(map[string]string)
-	}
-
-	// First, apply namespace annotations as defaults (only if not already set)
-	for key, value := range namespace.Annotations {
-		if len(key) > len(serviceAnnotationPrefix) && key[:len(serviceAnnotationPrefix)] == serviceAnnotationPrefix {
-			if _, exists := ingress.Annotations[key]; !exists {
-				ingress.Annotations[key] = value
-			}
-		} else if len(key) > len(itemAnnotationPrefix) && key[:len(itemAnnotationPrefix)] == itemAnnotationPrefix {
-			if _, exists := ingress.Annotations[key]; !exists {
-				ingress.Annotations[key] = value
-			}
-		}
-	}
-}
-
-// mergeNamespaceAnnotationsForHTTPRoute merges namespace annotations into an HTTPRoute resource
-// Namespace annotations serve as defaults, resource annotations override
-func (m *ClusterManager) mergeNamespaceAnnotationsForHTTPRoute(ctx context.Context, clusterClient client.Client, httproute *gatewayv1.HTTPRoute) {
-	// Fetch the namespace from the appropriate cluster
-	namespace := &corev1.Namespace{}
-	if err := clusterClient.Get(ctx, client.ObjectKey{Name: httproute.Namespace}, namespace); err != nil {
-		// If we can't get the namespace, just continue with existing annotations
-		m.log.V(2).Info("Could not fetch namespace for httproute", "namespace", httproute.Namespace, "httproute", httproute.Name, "error", err)
-		return
-	}
-
-	// Merge namespace annotations (namespace defaults, resource overrides)
-	if httproute.Annotations == nil {
-		httproute.Annotations = make(map[string]string)
-	}
-
-	// First, apply namespace annotations as defaults (only if not already set)
-	for key, value := range namespace.Annotations {
-		if len(key) > len(serviceAnnotationPrefix) && key[:len(serviceAnnotationPrefix)] == serviceAnnotationPrefix {
-			if _, exists := httproute.Annotations[key]; !exists {
-				httproute.Annotations[key] = value
-			}
-		} else if len(key) > len(itemAnnotationPrefix) && key[:len(itemAnnotationPrefix)] == itemAnnotationPrefix {
-			if _, exists := httproute.Annotations[key]; !exists {
-				httproute.Annotations[key] = value
-			}
-		}
-	}
 }

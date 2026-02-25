@@ -10,11 +10,11 @@ func TestSmartInferTypeJSONArray(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    string
-		expected interface{}
+		expected any
 	}{
-		{"json int array", `[200,301,404]`, []interface{}{float64(200), float64(301), float64(404)}},
-		{"json string array", `["vms","lxcs","disk"]`, []interface{}{"vms", "lxcs", "disk"}},
-		{"json mixed array", `["load",42,true]`, []interface{}{"load", float64(42), true}},
+		{"json int array", `[200,301,404]`, []any{float64(200), float64(301), float64(404)}},
+		{"json string array", `["vms","lxcs","disk"]`, []any{"vms", "lxcs", "disk"}},
+		{"json mixed array", `["load",42,true]`, []any{"load", float64(42), true}},
 		{"not an array", `[invalid`, "[invalid"},
 		{"plain string", "hello", "hello"},
 		{"integer still works", "42", 42},
@@ -25,8 +25,8 @@ func TestSmartInferTypeJSONArray(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := smartInferType(tt.input)
 			switch expected := tt.expected.(type) {
-			case []interface{}:
-				arr, ok := result.([]interface{})
+			case []any:
+				arr, ok := result.([]any)
 				if !ok {
 					t.Fatalf("expected array, got %T: %v", result, result)
 				}
@@ -70,7 +70,7 @@ func TestSmartInferTypeForParamKnownArrays(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := smartInferTypeForParam(tt.key, tt.value)
-			arr, isArray := result.([]interface{})
+			arr, isArray := result.([]any)
 			if tt.expectArray && !isArray {
 				t.Fatalf("expected array for key=%s value=%s, got %T: %v", tt.key, tt.value, result, result)
 			}
@@ -86,7 +86,7 @@ func TestSmartInferTypeForParamKnownArrays(t *testing.T) {
 
 func TestSmartInferTypeForParamIntArray(t *testing.T) {
 	result := smartInferTypeForParam("successCodes", "200,301,404")
-	arr, ok := result.([]interface{})
+	arr, ok := result.([]any)
 	if !ok {
 		t.Fatalf("expected array, got %T", result)
 	}
@@ -123,26 +123,26 @@ func TestArrayParamsInYAMLOutput(t *testing.T) {
 		t.Fatalf("marshal error: %v", err)
 	}
 
-	var parsed map[string]interface{}
+	var parsed map[string]any
 	if err := yaml.Unmarshal(yamlBytes, &parsed); err != nil {
 		t.Fatalf("unmarshal error: %v", err)
 	}
 
-	services, ok := parsed["services"].([]interface{})
+	services, ok := parsed["services"].([]any)
 	if !ok || len(services) == 0 {
 		t.Fatal("expected services in output")
 	}
 
-	svc := services[0].(map[interface{}]interface{})
-	items := svc["items"].([]interface{})
-	item := items[0].(map[interface{}]interface{})
+	svc := services[0].(map[any]any)
+	items := svc["items"].([]any)
+	item := items[0].(map[any]any)
 
 	// hide should be an array
 	hideVal, ok := item["hide"]
 	if !ok {
 		t.Fatal("expected hide field")
 	}
-	hideArr, ok := hideVal.([]interface{})
+	hideArr, ok := hideVal.([]any)
 	if !ok {
 		t.Fatalf("expected hide to be array, got %T: %v", hideVal, hideVal)
 	}
@@ -155,7 +155,7 @@ func TestArrayParamsInYAMLOutput(t *testing.T) {
 	if !ok {
 		t.Fatal("expected successCodes field")
 	}
-	scArr, ok := scVal.([]interface{})
+	scArr, ok := scVal.([]any)
 	if !ok {
 		t.Fatalf("expected successCodes to be array, got %T: %v", scVal, scVal)
 	}

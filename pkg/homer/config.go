@@ -1084,7 +1084,7 @@ func UpdateHomerConfigIngressWithGrouping(
 	}
 
 	// Remove existing items and process service annotations
-	removeItemsFromIngressSource(homerConfig, ingress.ObjectMeta.Name, ingress.ObjectMeta.Namespace)
+	removeItemsFromSource(homerConfig, ingress.ObjectMeta.Name, ingress.ObjectMeta.Namespace)
 	processServiceAnnotations(&service, ingress.ObjectMeta.Annotations)
 
 	// Create items from ingress rules
@@ -1109,7 +1109,7 @@ func UpdateHomerConfigServiceWithGrouping(
 ) {
 	serviceGroup := setupK8sServiceGroup(homerConfig, svc, groupingConfig)
 
-	removeItemsFromIngressSource(homerConfig, "svc/"+svc.Name, svc.Namespace)
+	removeItemsFromSource(homerConfig, "svc/"+svc.Name, svc.Namespace)
 	processServiceAnnotations(&serviceGroup, svc.Annotations)
 
 	item := createK8sServiceItem(svc)
@@ -1362,7 +1362,7 @@ func updateHomerConfigWithHTTPRoutes(
 	processServiceAnnotations(&service, httproute.ObjectMeta.Annotations)
 
 	// FIRST: Remove any existing items from this HTTPRoute source to ensure clean slate
-	removeItemsFromHTTPRouteSource(homerConfig, httproute.ObjectMeta.Name, httproute.ObjectMeta.Namespace)
+	removeItemsFromSource(homerConfig, httproute.ObjectMeta.Name, httproute.ObjectMeta.Namespace)
 
 	// Determine protocol based on parent Gateway listener configuration
 	protocol := determineProtocolFromHTTPRoute(httproute)
@@ -2970,60 +2970,23 @@ func optimizeServiceLayout(services []Service, _ []ServiceDependency) []Service 
 	return optimizedServices
 }
 
-// removeItemsFromHTTPRouteSource removes all items that originated from a specific HTTPRoute
-func removeItemsFromHTTPRouteSource(homerConfig *HomerConfig, sourceName, sourceNamespace string) {
+// removeItemsFromSource removes all items that originated from a specific source
+func removeItemsFromSource(homerConfig *HomerConfig, sourceName, sourceNamespace string) {
 	configMutex.Lock()
 	defer configMutex.Unlock()
 
 	for serviceIndex := range homerConfig.Services {
 		service := &homerConfig.Services[serviceIndex]
-
-		// Create a new slice for filtered items to avoid race conditions
 		filteredItems := make([]Item, 0, len(service.Items))
-
-		// Keep only items that did NOT come from the specified HTTPRoute source
 		for _, item := range service.Items {
-			// Remove items that match this HTTPRoute source
 			if item.Source == sourceName && item.Namespace == sourceNamespace {
-				// Skip this item (remove it)
 				continue
 			}
-			// Keep this item by creating a copy
 			filteredItems = append(filteredItems, item)
 		}
-
-		// Update the service with filtered items
 		service.Items = filteredItems
 	}
 
-	// Remove any services that now have no items
-	removeEmptyServices(homerConfig)
-}
-
-// removeItemsFromIngressSource removes all items that originated from a specific Ingress
-func removeItemsFromIngressSource(homerConfig *HomerConfig, sourceName, sourceNamespace string) {
-	configMutex.Lock()
-	defer configMutex.Unlock()
-
-	for serviceIndex := range homerConfig.Services {
-		service := &homerConfig.Services[serviceIndex]
-
-		// Create a new slice for filtered items to avoid race conditions
-		filteredItems := make([]Item, 0, len(service.Items))
-
-		// Keep items that did NOT come from the specified Ingress source
-		for _, item := range service.Items {
-			if !(item.Source == sourceName && item.Namespace == sourceNamespace) {
-				// Keep this item by creating a copy
-				filteredItems = append(filteredItems, item)
-			}
-		}
-
-		// Update the service with filtered items
-		service.Items = filteredItems
-	}
-
-	// Remove any services that now have no items
 	removeEmptyServices(homerConfig)
 }
 
