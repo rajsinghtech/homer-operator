@@ -452,6 +452,7 @@ type DeploymentConfig struct {
 	DNSPolicy           string
 	DNSConfig           string
 	Resources           *corev1.ResourceRequirements
+	HomerImage          string
 }
 
 func CreateDeployment(
@@ -470,7 +471,10 @@ func createDeploymentInternal(
 	if replicas == nil {
 		replicas = &defaultReplicas
 	}
-	image := "b4bz/homer"
+	image := config.HomerImage
+	if image == "" {
+		image = "b4bz/homer:latest"
+	}
 
 	// Base volumes
 	volumes := []corev1.Volume{

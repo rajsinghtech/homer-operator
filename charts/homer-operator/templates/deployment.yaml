@@ -61,6 +61,7 @@ spec:
         {{- if .Values.operator.enableGatewayAPI }}
         - --enable-gateway-api
         {{- end }}
+        - --homer-image={{ include "homer-operator.homerImage" . }}
         {{- $envVars := include "homer-operator.env" . }}
         {{- if $envVars }}
         env:

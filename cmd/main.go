@@ -61,6 +61,7 @@ func main() {
 	var enableHTTP2 bool
 	var enableGatewayAPI bool
 	var leaderElectionID string
+	var homerImage string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false, "Enable leader election")
@@ -68,6 +69,7 @@ func main() {
 	flag.BoolVar(&secureMetrics, "metrics-secure", false, "Serve metrics securely")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false, "Enable HTTP/2")
 	flag.BoolVar(&enableGatewayAPI, "enable-gateway-api", false, "Enable Gateway API support")
+	flag.StringVar(&homerImage, "homer-image", "b4bz/homer:latest", "Homer dashboard container image")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -109,6 +111,7 @@ func main() {
 		Client:           mgr.GetClient(),
 		Scheme:           mgr.GetScheme(),
 		EnableGatewayAPI: enableGatewayAPI,
+		HomerImage:       homerImage,
 		ClusterManager:   controller.NewClusterManager(mgr.GetClient(), mgr.GetScheme()),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Dashboard")

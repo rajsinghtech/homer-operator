@@ -7,6 +7,12 @@ image:
   pullPolicy: Always
   tag: ""
 
+homer:
+  image:
+    repository: b4bz/homer
+    tag: latest
+    pullPolicy: IfNotPresent
+
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""

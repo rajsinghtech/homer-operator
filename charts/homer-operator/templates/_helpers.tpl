@@ -137,6 +137,13 @@ Create the image name
 {{- end }}
 
 {{/*
+Create the homer dashboard image name
+*/}}
+{{- define "homer-operator.homerImage" -}}
+{{- printf "%s:%s" .Values.homer.image.repository .Values.homer.image.tag }}
+{{- end }}
+
+{{/*
 Create environment variables for the operator
 */}}
 {{- define "homer-operator.env" -}}

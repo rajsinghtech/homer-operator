@@ -50,6 +50,7 @@ type DashboardReconciler struct {
 	client.Client
 	Scheme           *runtime.Scheme
 	EnableGatewayAPI bool
+	HomerImage       string
 	ClusterManager   *ClusterManager
 }
 
@@ -455,6 +456,7 @@ func (r *DashboardReconciler) buildDeploymentConfig(dashboard *homerv1alpha1.Das
 	pwaManifest := r.generatePWAManifest(dashboard)
 	deploymentConfig := &homer.DeploymentConfig{
 		PWAManifest: pwaManifest,
+		HomerImage:  r.HomerImage,
 	}
 
 	if dashboard.Spec.Assets != nil && dashboard.Spec.Assets.ConfigMapRef != nil {
