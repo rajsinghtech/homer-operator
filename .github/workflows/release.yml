@@ -133,7 +133,7 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@v4
         with:
-          version: v3.17.4
+          version: v3.21.2
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
