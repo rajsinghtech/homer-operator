@@ -514,3 +514,167 @@ func verifyItemOrder(t *testing.T, items []Item, expectedOrder []string) {
 		}
 	}
 }
+
+func TestSortServicesByOrderAnnotation(t *testing.T) {
+	config := &HomerConfig{
+		Title: "Test Dashboard",
+		Services: []Service{
+			{
+				Parameters: map[string]string{
+					"name":  "Alpha Services",
+					"order": "5",
+				},
+				Items: []Item{},
+			},
+			{
+				Parameters: map[string]string{
+					"name": "Beta Services",
+					// no order annotation — defaults to 0
+				},
+				Items: []Item{},
+			},
+			{
+				Parameters: map[string]string{
+					"name":  "Gamma Services",
+					"order": "10",
+				},
+				Items: []Item{},
+			},
+		},
+	}
+
+	sortServicesAndItems(config)
+
+	// Gamma(10) > Alpha(5) > Beta(0)
+	expectedOrder := []string{"Gamma Services", "Alpha Services", "Beta Services"}
+	verifyServiceOrder(t, config, expectedOrder)
+}
+
+func TestSortItemsByOrderAnnotation(t *testing.T) {
+	config := &HomerConfig{
+		Title: "Test Dashboard",
+		Services: []Service{
+			{
+				Parameters: map[string]string{"name": "Dashboards"},
+				Items: []Item{
+					{
+						Parameters: map[string]string{
+							"name": "Grafana",
+							// no order — defaults to 0
+						},
+					},
+					{
+						Parameters: map[string]string{
+							"name":  "Homer",
+							"order": "5",
+						},
+					},
+					{
+						Parameters: map[string]string{
+							"name":  "Kibana",
+							"order": "3",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	sortServicesAndItems(config)
+
+	// Homer(5) > Kibana(3) > Grafana(0)
+	expectedOrder := []string{"Homer", "Kibana", "Grafana"}
+	verifyItemOrder(t, config.Services[0].Items, expectedOrder)
+}
+
+func TestSortOrderTieBreakAlphabetical(t *testing.T) {
+	config := &HomerConfig{
+		Title: "Test Dashboard",
+		Services: []Service{
+			{
+				Parameters: map[string]string{"name": "Dashboards"},
+				Items: []Item{
+					{
+						Parameters: map[string]string{
+							"name":  "Zebra",
+							"order": "1",
+						},
+					},
+					{
+						Parameters: map[string]string{
+							"name":  "Alpha",
+							"order": "1",
+						},
+					},
+					{
+						Parameters: map[string]string{
+							"name":  "Beta",
+							"order": "1",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	sortServicesAndItems(config)
+
+	// Same order(1) → alphabetical: Alpha, Beta, Zebra
+	expectedOrder := []string{"Alpha", "Beta", "Zebra"}
+	verifyItemOrder(t, config.Services[0].Items, expectedOrder)
+}
+
+func TestSortOrderInvalidValueFallsBackToZero(t *testing.T) {
+	config := &HomerConfig{
+		Title: "Test Dashboard",
+		Services: []Service{
+			{
+				Parameters: map[string]string{"name": "Dashboards"},
+				Items: []Item{
+					{
+						Parameters: map[string]string{
+							"name":  "Alpha",
+							"order": "not-a-number",
+						},
+					},
+					{
+						Parameters: map[string]string{
+							"name":  "Beta",
+							"order": "5",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	sortServicesAndItems(config)
+
+	// Beta(5) > Alpha(invalid→0)
+	expectedOrder := []string{"Beta", "Alpha"}
+	verifyItemOrder(t, config.Services[0].Items, expectedOrder)
+}
+
+func TestGetOrderAnnotation(t *testing.T) {
+	cases := []struct {
+		name     string
+		params   map[string]string
+		expected int
+	}{
+		{"nil params", nil, 0},
+		{"no order key", map[string]string{"name": "foo"}, 0},
+		{"valid order", map[string]string{"order": "7"}, 7},
+		{"order with spaces", map[string]string{"order": " 3 "}, 3},
+		{"invalid order", map[string]string{"order": "abc"}, 0},
+		{"zero order", map[string]string{"order": "0"}, 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := getOrderAnnotation(tc.params)
+			if got != tc.expected {
+				t.Errorf("expected %d, got %d", tc.expected, got)
+			}
+		})
+	}
+}

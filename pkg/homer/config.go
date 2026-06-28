@@ -2381,18 +2381,42 @@ func normalizeHomerConfig(config *HomerConfig) {
 	sortServicesAndItems(config)
 }
 
-// sortServicesAndItems sorts services and their items alphabetically by name
+// getOrderAnnotation returns the integer value of the "order" parameter.
+// Higher values sort first; unset or invalid defaults to 0.
+func getOrderAnnotation(params map[string]string) int {
+	if params == nil {
+		return 0
+	}
+	if v, ok := params["order"]; ok {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			return n
+		}
+	}
+	return 0
+}
+
+// sortServicesAndItems sorts services and their items.
+// Primary key: "order" annotation (higher value = appears first, default 0).
+// Tie-break: case-insensitive alphabetical by name.
 func sortServicesAndItems(config *HomerConfig) {
-	// Sort services alphabetically by name
-	sort.Slice(config.Services, func(i, j int) bool {
+	sort.SliceStable(config.Services, func(i, j int) bool {
+		orderI := getOrderAnnotation(config.Services[i].Parameters)
+		orderJ := getOrderAnnotation(config.Services[j].Parameters)
+		if orderI != orderJ {
+			return orderI > orderJ
+		}
 		nameI := getServiceName(&config.Services[i])
 		nameJ := getServiceName(&config.Services[j])
 		return strings.ToLower(nameI) < strings.ToLower(nameJ)
 	})
 
-	// Sort items within each service alphabetically by name
 	for i := range config.Services {
-		sort.Slice(config.Services[i].Items, func(x, y int) bool {
+		sort.SliceStable(config.Services[i].Items, func(x, y int) bool {
+			orderX := getOrderAnnotation(config.Services[i].Items[x].Parameters)
+			orderY := getOrderAnnotation(config.Services[i].Items[y].Parameters)
+			if orderX != orderY {
+				return orderX > orderY
+			}
 			nameX := getItemName(&config.Services[i].Items[x])
 			nameY := getItemName(&config.Services[i].Items[y])
 			return strings.ToLower(nameX) < strings.ToLower(nameY)
