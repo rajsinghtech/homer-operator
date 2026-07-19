@@ -116,3 +116,90 @@ jobs:
           helm template test charts/homer-operator --dry-run > /dev/null
           echo "Helm chart validation passed"
 
+  helm-e2e:
+    # helm lint/template never pull the images they reference, so a broken
+    # image reference in values.yaml (as happened with the kube-rbac-proxy
+    # sidecar after its registry was sunset) passes CI silently and only
+    # surfaces when a real user runs `helm install`. This job closes that
+    # gap by actually installing the chart on a kind cluster and waiting for
+    # the operator and a sample Dashboard's pods to become Ready.
+    name: Helm E2E (kind)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      NAMESPACE: homer-operator-system
+      DASHBOARD_NAMESPACE: public
+      IMG: homer-operator:e2e
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build operator image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ${{ env.IMG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: homer-operator-ci
+
+      - name: Load image into kind
+        run: kind load docker-image ${{ env.IMG }} --name homer-operator-ci
+
+      - name: Install chart (CRDs + operator)
+        run: |
+          helm install homer-operator charts/homer-operator \
+            --namespace ${{ env.NAMESPACE }} \
+            --create-namespace \
+            --set image.repository=homer-operator \
+            --set image.tag=e2e \
+            --set image.pullPolicy=Never \
+            --wait --timeout 120s
+
+      - name: Wait for operator rollout
+        run: |
+          kubectl rollout status deployment/homer-operator \
+            -n ${{ env.NAMESPACE }} --timeout=120s
+
+      - name: Deploy sample Dashboard
+        run: |
+          kubectl create namespace ${{ env.DASHBOARD_NAMESPACE }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          cat <<'EOF' | kubectl apply -f -
+          apiVersion: homer.rajsingh.info/v1alpha1
+          kind: Dashboard
+          metadata:
+            name: ci-dashboard
+            namespace: public
+          spec:
+            replicas: 1
+            homerConfig:
+              title: "CI Dashboard"
+              header: true
+          EOF
+
+      - name: Wait for Dashboard rollout
+        run: |
+          kubectl wait --for=condition=Available deployment/ci-dashboard-homer \
+            -n ${{ env.DASHBOARD_NAMESPACE }} --timeout=120s
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl describe pods -n ${{ env.NAMESPACE }} || true
+          kubectl describe pods -n ${{ env.DASHBOARD_NAMESPACE }} || true
+          kubectl logs -n ${{ env.NAMESPACE }} -l app.kubernetes.io/name=homer-operator --tail=-1 || true
+          kubectl logs -n ${{ env.DASHBOARD_NAMESPACE }} -l dashboard.homer.rajsingh.info/name=ci-dashboard --all-containers --tail=-1 || true
+
