@@ -677,9 +677,9 @@ func (r *DashboardReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	builder = builder.Watches(&corev1.Namespace{},
 		handler.EnqueueRequestsFromMapFunc(r.findDashboardsForNamespace))
 
-	// Watch referenced asset ConfigMaps, including source ConfigMaps in another
-	// namespace. This keeps owned mirrors and the resulting Dashboard current
-	// when users replace or edit their assets.
+	// Watch referenced ConfigMaps, including asset sources in another namespace.
+	// This keeps external Homer configuration, owned asset mirrors, and the
+	// resulting Dashboard current when users replace or edit their inputs.
 	builder = builder.Watches(&corev1.ConfigMap{},
 		handler.EnqueueRequestsFromMapFunc(r.findDashboardsForAssetConfigMap))
 
@@ -940,19 +940,35 @@ func (r *DashboardReconciler) findDashboardsForAssetConfigMap(ctx context.Contex
 	}
 
 	requests := make([]ctrl.Request, 0)
+	seen := make(map[client.ObjectKey]struct{})
 	for i := range dashboards.Items {
 		dashboard := &dashboards.Items[i]
+		requestKey := client.ObjectKeyFromObject(dashboard)
+
+		// External Homer configuration is always resolved from the Dashboard's
+		// namespace, so only a ConfigMap in that namespace can trigger it.
+		externalConfigMatches := dashboard.Spec.ConfigMap.Name != "" &&
+			dashboard.Spec.ConfigMap.Name == configMap.Name &&
+			dashboard.Namespace == configMap.Namespace
+
 		ref := dashboard.Spec.Assets
-		if ref == nil || ref.ConfigMapRef == nil || ref.ConfigMapRef.Name != configMap.Name {
+		assetMatches := false
+		if ref != nil && ref.ConfigMapRef != nil && ref.ConfigMapRef.Name == configMap.Name {
+			refNamespace := ref.ConfigMapRef.Namespace
+			if refNamespace == "" {
+				refNamespace = dashboard.Namespace
+			}
+			assetMatches = refNamespace == configMap.Namespace
+		}
+
+		if !externalConfigMatches && !assetMatches {
 			continue
 		}
-		refNamespace := ref.ConfigMapRef.Namespace
-		if refNamespace == "" {
-			refNamespace = dashboard.Namespace
+		if _, alreadyQueued := seen[requestKey]; alreadyQueued {
+			continue
 		}
-		if refNamespace == configMap.Namespace {
-			requests = append(requests, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(dashboard)})
-		}
+		seen[requestKey] = struct{}{}
+		requests = append(requests, ctrl.Request{NamespacedName: requestKey})
 	}
 	return requests
 }

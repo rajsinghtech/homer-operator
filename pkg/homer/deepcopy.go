@@ -44,12 +44,7 @@ func (c *HomerConfig) DeepCopyInto(out *HomerConfig) {
 	if c.Proxy.RawFields != nil {
 		out.Proxy.RawFields = cloneRawFields(c.Proxy.RawFields)
 	}
-	if c.Message.Mapping != nil {
-		out.Message.Mapping = cloneAnyMap(c.Message.Mapping)
-	}
-	if c.Message.RawFields != nil {
-		out.Message.RawFields = cloneRawFields(c.Message.RawFields)
-	}
+	c.Message.DeepCopyInto(&out.Message)
 	if c.Hotkey.RawFields != nil {
 		out.Hotkey.RawFields = cloneRawFields(c.Hotkey.RawFields)
 	}
@@ -121,6 +116,7 @@ func (i *Item) DeepCopyInto(out *Item) {
 		out.ArrayObjects = make(map[string][]map[string]string, len(i.ArrayObjects))
 		for key, values := range i.ArrayObjects {
 			if values == nil {
+				out.ArrayObjects[key] = nil
 				continue
 			}
 			out.ArrayObjects[key] = make([]map[string]string, len(values))
@@ -167,6 +163,7 @@ func (p *ProxyConfig) DeepCopy() *ProxyConfig {
 
 func (m *MessageConfig) DeepCopyInto(out *MessageConfig) {
 	*out = *m
+	out.RefreshInterval = deepCopyValue(m.RefreshInterval)
 	if m.Mapping != nil {
 		out.Mapping = cloneAnyMap(m.Mapping)
 	}

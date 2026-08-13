@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -88,12 +89,33 @@ func cleanupE2ETest(k8sClient client.Client, ctx context.Context, testNs string)
 	}, time.Minute, time.Second).Should(BeTrue())
 }
 
-func environmentValue(name, fallback string) string {
+func environmentValue(name string) string {
 	if value := os.Getenv(name); value != "" {
 		return value
 	}
-	return fallback
+
+	switch name {
+	case "E2E_OPERATOR_DEPLOYMENT":
+		return defaultOperatorDeployment
+	case "E2E_OPERATOR_NAMESPACE":
+		return defaultOperatorNamespace
+	default:
+		return ""
+	}
 }
+
+func hasUpdatedDashboardConfig(config string) bool {
+	return strings.Contains(config, "title: Updated Title") &&
+		strings.Contains(config, "subtitle: Updated Subtitle") &&
+		strings.Contains(config, "footer: Updated Footer")
+}
+
+const (
+	// The defaults match the documented Helm installation. Kustomize installs
+	// and CI can target their own deployment through E2E_OPERATOR_* overrides.
+	defaultOperatorDeployment = "homer-operator"
+	defaultOperatorNamespace  = "homer-operator"
+)
 
 var _ = Describe("Homer Operator E2E Tests", func() {
 	var (
@@ -115,16 +137,16 @@ var _ = Describe("Homer Operator E2E Tests", func() {
 			By("Checking that Homer Operator deployment exists")
 			deployment := &appsv1.Deployment{}
 			err := k8sClient.Get(ctx, types.NamespacedName{
-				Name:      environmentValue("E2E_OPERATOR_DEPLOYMENT", "homer-operator-controller-manager"),
-				Namespace: environmentValue("E2E_OPERATOR_NAMESPACE", "homer-operator-system"),
+				Name:      environmentValue("E2E_OPERATOR_DEPLOYMENT"),
+				Namespace: environmentValue("E2E_OPERATOR_NAMESPACE"),
 			}, deployment)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Checking that deployment is ready")
 			Eventually(func() bool {
 				err := k8sClient.Get(ctx, types.NamespacedName{
-					Name:      environmentValue("E2E_OPERATOR_DEPLOYMENT", "homer-operator-controller-manager"),
-					Namespace: environmentValue("E2E_OPERATOR_NAMESPACE", "homer-operator-system"),
+					Name:      environmentValue("E2E_OPERATOR_DEPLOYMENT"),
+					Namespace: environmentValue("E2E_OPERATOR_NAMESPACE"),
 				}, deployment)
 				if err != nil {
 					return false
@@ -228,8 +250,6 @@ var _ = Describe("Homer Operator E2E Tests", func() {
 				return err == nil
 			}, time.Minute*2, time.Second*5).Should(BeTrue())
 
-			originalConfig := configMap.Data["config.yml"]
-
 			By("Updating Dashboard configuration")
 			err = k8sClient.Get(ctx, types.NamespacedName{
 				Name:      "e2e-update-dashboard",
@@ -244,7 +264,7 @@ var _ = Describe("Homer Operator E2E Tests", func() {
 			err = k8sClient.Update(ctx, dashboard)
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Waiting for ConfigMap to be updated")
+			By("Waiting for updated Dashboard configuration")
 			Eventually(func() bool {
 				err := k8sClient.Get(ctx, types.NamespacedName{
 					Name:      "e2e-update-dashboard-homer",
@@ -253,7 +273,7 @@ var _ = Describe("Homer Operator E2E Tests", func() {
 				if err != nil {
 					return false
 				}
-				return configMap.Data["config.yml"] != originalConfig
+				return hasUpdatedDashboardConfig(configMap.Data["config.yml"])
 			}, time.Minute*2, time.Second*5).Should(BeTrue())
 
 			By("Verifying updated configuration")

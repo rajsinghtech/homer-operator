@@ -934,7 +934,10 @@ make deploy IMG=your-registry/homer-operator:dev
 # Run unit tests
 make test
 
-# Run the black-box suite against an installed operator
+# Run the black-box suite against the documented Helm installation
+make test-e2e
+
+# For the default Kustomize installation, override the operator location
 E2E_OPERATOR_NAMESPACE=homer-operator-system \
 E2E_OPERATOR_DEPLOYMENT=homer-operator-controller-manager \
 make test-e2e
