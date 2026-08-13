@@ -29,8 +29,9 @@ To create a Dashboard resource, apply:
     name: my-dashboard
     namespace: {{ include "homer-operator.namespace" . }}
   spec:
-    title: "My Homer Dashboard"
-    theme: "default"
+    homerConfig:
+      title: "My Homer Dashboard"
+      theme: "default"
     # Service discovery from Ingress resources
     ingressSelector:
       matchLabels:

@@ -172,6 +172,38 @@ spec:
       - "custom.css"
 ```
 
+### External Homer Configuration and Shared Assets
+
+Use `spec.configMap` when the complete Homer configuration should live in a
+ConfigMap rather than inline in the Dashboard resource. The ConfigMap must be
+in the Dashboard's namespace; `key` defaults to `config.yml`. Changes to the
+referenced ConfigMap are watched and trigger reconciliation.
+
+```yaml
+apiVersion: homer.rajsingh.info/v1alpha1
+kind: Dashboard
+metadata:
+  name: external-config-dashboard
+  namespace: default
+spec:
+  configMap:
+    name: homer-config
+    key: config.yml
+```
+
+Custom asset ConfigMaps can be shared from another namespace by setting
+`assets.configMapRef.namespace`. The operator watches the source and mirrors
+it into the Dashboard's namespace so the Dashboard pod can mount it. Omit the
+namespace for a same-namespace reference.
+
+```yaml
+spec:
+  assets:
+    configMapRef:
+      name: shared-homer-assets
+      namespace: platform-assets
+```
+
 ---
 
 ## Advanced Configuration
@@ -497,26 +529,26 @@ resources:
     memory: 256Mi
     cpu: 100m
 
-autoscaling:
-  enabled: true
-  minReplicas: 2
-  maxReplicas: 5
-  targetCPUUtilizationPercentage: 80
+highAvailability:
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 80
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
 
 serviceMonitor:
-  create: true
-  interval: 30s
-
-podDisruptionBudget:
   enabled: true
-  minAvailable: 1
+  interval: 30s
 ```
 
 ```bash
 kubectl create namespace homer-operator
 helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator \
   --namespace homer-operator \
-  --version 0.1.0 -f values.yaml
+  --version 1.2.1 -f values.yaml
 ```
 
 ---
@@ -533,7 +565,7 @@ kubectl create namespace homer-operator
 helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator \
   --namespace homer-operator \
   --set operator.metrics.enabled=true \
-  --set serviceMonitor.create=true
+  --set serviceMonitor.enabled=true
 ```
 
 **Available Metrics:**
@@ -545,7 +577,7 @@ helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/hom
 
 - **Liveness**: `GET /healthz`
 - **Readiness**: `GET /readyz`  
-- **Metrics**: `GET /metrics`
+- **Metrics**: `GET https://<operator-service>:8443/metrics` (authenticated)
 
 ---
 
@@ -861,7 +893,7 @@ kubectl create secret generic remote-cluster-kubeconfig \
 
 # Operator automatically detects the change and reconnects
 # Check logs to verify:
-kubectl logs -n homer-operator-system deployment/homer-operator-controller-manager
+kubectl logs -n <operator-namespace> deployment/<operator-deployment>
 ```
 
 ### Cluster Metadata
@@ -893,7 +925,7 @@ This allows filtering and grouping services by cluster in your dashboards.
 kubectl get dashboard <name> -o yaml
 
 # Check operator logs
-kubectl logs -n homer-operator-system deployment/homer-operator-controller-manager
+kubectl logs -n <operator-namespace> deployment/<operator-deployment>
 
 # Verify secret exists and is readable
 kubectl get secret <secret-name> -n <namespace> -o yaml

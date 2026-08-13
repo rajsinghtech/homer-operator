@@ -12,7 +12,8 @@ A Helm chart for deploying the Homer Operator on Kubernetes. The Homer Operator 
 ### Install from OCI Registry (Recommended)
 
 ```bash
-helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator --version 0.0.0-latest -n homer-operator --create-namespace
+helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator \
+  --version 1.2.1 -n homer-operator --create-namespace
 ```
 
 ### Install from Source
@@ -32,19 +33,25 @@ The following table lists the configurable parameters of the Homer Operator char
 | `replicaCount` | Number of operator replicas | `1` |
 | `image.repository` | Operator image repository | `ghcr.io/rajsinghtech/homer-operator` |
 | `image.tag` | Operator image tag | `Chart.appVersion` |
-| `image.pullPolicy` | Image pull policy | `IfNotPresent` |
+| `image.pullPolicy` | Image pull policy | `Always` |
 | `operator.enableGatewayAPI` | Enable Gateway API support | `false` |
+| `homer.image.repository` | Homer dashboard image repository | `b4bz/homer` |
+| `homer.image.tag` | Homer dashboard image tag | `latest` |
 | `homer.configSyncImage` | Image used to stage Dashboard ConfigMaps into Homer assets | `alpine:3.18` |
 | `operator.metrics.enabled` | Enable metrics collection | `true` |
 | `operator.metrics.secureMetrics` | Use secure metrics serving | `true` |
+| `operator.metrics.bindAddress` | Metrics bind address | `:8443` |
+| `operator.healthProbe.bindAddress` | Health probe bind address | `:8081` |
 | `serviceAccount.create` | Create service account | `true` |
 | `rbac.create` | Create RBAC resources | `true` |
 | `crd.create` | Create CustomResourceDefinitions | `true` |
-| `namespace.create` | Create namespace | `true` |
+| `serviceMonitor.enabled` | Create a Prometheus ServiceMonitor | `false` |
 | `resources.limits.memory` | Memory limit | `128Mi` |
-| `resources.limits.cpu` | CPU limit | `500m` |
+| `resources.limits.cpu` | CPU limit | `200m` |
 | `resources.requests.memory` | Memory request | `64Mi` |
-| `resources.requests.cpu` | CPU request | `10m` |
+| `resources.requests.cpu` | CPU request | `50m` |
+| `highAvailability.podDisruptionBudget.enabled` | Create a PodDisruptionBudget | `true` |
+| `highAvailability.autoscaling.enabled` | Create an HPA | `false` |
 
 ## Examples
 
@@ -83,7 +90,7 @@ resources:
     cpu: 100m
 
 serviceMonitor:
-  create: true
+  enabled: true
   interval: 60s
 ```
 
@@ -141,6 +148,17 @@ The checked-in sample at `config/samples/homer_v1alpha1_dashboard.yaml` is
 used by the Helm kind smoke test. It exercises direct Homer fields, a second
 page, and the generated `<page>.yml` asset.
 
+### External Configuration and Shared Assets
+
+Set `spec.configMap.name` to load the complete Homer configuration from a
+ConfigMap in the Dashboard's namespace. The default key is `config.yml`.
+ConfigMap updates are watched and reconcile the Dashboard automatically.
+
+For custom assets, `spec.assets.configMapRef.namespace` may point to a
+ConfigMap in another namespace. The operator watches that source and creates a
+namespace-local mirror for the Dashboard pod. Leaving `namespace` empty uses
+the Dashboard's namespace.
+
 ## Troubleshooting
 
 ### Namespace Creation Issues
@@ -157,7 +175,8 @@ To enable Gateway API support, set `operator.enableGatewayAPI=true`. This requir
 
 ## Monitoring
 
-The operator exposes Prometheus metrics on port 8080. To enable monitoring:
+The operator exposes authenticated HTTPS Prometheus metrics on port 8443. Its
+health and readiness probes listen on port 8081. To enable monitoring:
 
 ```yaml
 operator:
@@ -165,7 +184,7 @@ operator:
     enabled: true
 
 serviceMonitor:
-  create: true
+  enabled: true
   interval: 30s
 ```
 
@@ -173,7 +192,7 @@ serviceMonitor:
 
 The operator follows security best practices:
 
-- Runs as non-root user (UID 65532)
+- Runs as non-root user (UID 1000 in the Helm deployment)
 - Uses read-only root filesystem
 - Drops all capabilities
 - Implements least-privilege RBAC
