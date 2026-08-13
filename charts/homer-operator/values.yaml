@@ -12,6 +12,8 @@ homer:
     repository: b4bz/homer
     tag: latest
     pullPolicy: IfNotPresent
+  # Image used by Dashboard pods to copy ConfigMap content into Homer assets.
+  configSyncImage: alpine:3.18
 
 imagePullSecrets: []
 nameOverride: ""

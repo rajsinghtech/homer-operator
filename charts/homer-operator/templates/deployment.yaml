@@ -62,6 +62,7 @@ spec:
         - --enable-gateway-api
         {{- end }}
         - --homer-image={{ include "homer-operator.homerImage" . }}
+        - --config-sync-image={{ .Values.homer.configSyncImage }}
         {{- $envVars := include "homer-operator.env" . }}
         {{- if $envVars }}
         env:

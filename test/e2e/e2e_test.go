@@ -19,6 +19,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -40,7 +41,10 @@ import (
 // E2E test helper functions
 func setupE2ETest() (client.Client, context.Context, string) {
 	ctx := context.Background()
-	testNs := fmt.Sprintf("homer-e2e-%d", time.Now().Unix())
+	// Use nanoseconds because all specs create and delete namespaces in quick
+	// succession. A seconds-only name can collide while the previous namespace
+	// is still terminating, causing an unrelated BeforeEach failure.
+	testNs := fmt.Sprintf("homer-e2e-%d", time.Now().UnixNano())
 
 	cfg, err := config.GetConfig()
 	Expect(err).NotTo(HaveOccurred())
@@ -70,9 +74,25 @@ func setupE2ETest() (client.Client, context.Context, string) {
 func cleanupE2ETest(k8sClient client.Client, ctx context.Context, testNs string) {
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNs}}
 	err := k8sClient.Delete(ctx, ns)
+	if apierrors.IsNotFound(err) {
+		return
+	}
 	if err != nil {
 		GinkgoT().Logf("Warning: failed to delete test namespace %s: %v", testNs, err)
+		return
 	}
+
+	Eventually(func() bool {
+		err := k8sClient.Get(ctx, types.NamespacedName{Name: testNs}, ns)
+		return apierrors.IsNotFound(err)
+	}, time.Minute, time.Second).Should(BeTrue())
+}
+
+func environmentValue(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
 }
 
 var _ = Describe("Homer Operator E2E Tests", func() {
@@ -92,21 +112,19 @@ var _ = Describe("Homer Operator E2E Tests", func() {
 
 	Context("When deploying Homer Operator", func() {
 		It("should be running and healthy", func() {
-			Skip("Skipping operator deployment test - requires cluster with operator installed")
-
 			By("Checking that Homer Operator deployment exists")
 			deployment := &appsv1.Deployment{}
 			err := k8sClient.Get(ctx, types.NamespacedName{
-				Name:      "homer-operator-controller-manager",
-				Namespace: "homer-operator-system",
+				Name:      environmentValue("E2E_OPERATOR_DEPLOYMENT", "homer-operator-controller-manager"),
+				Namespace: environmentValue("E2E_OPERATOR_NAMESPACE", "homer-operator-system"),
 			}, deployment)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Checking that deployment is ready")
 			Eventually(func() bool {
 				err := k8sClient.Get(ctx, types.NamespacedName{
-					Name:      "homer-operator-controller-manager",
-					Namespace: "homer-operator-system",
+					Name:      environmentValue("E2E_OPERATOR_DEPLOYMENT", "homer-operator-controller-manager"),
+					Namespace: environmentValue("E2E_OPERATOR_NAMESPACE", "homer-operator-system"),
 				}, deployment)
 				if err != nil {
 					return false

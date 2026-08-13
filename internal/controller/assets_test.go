@@ -159,6 +159,9 @@ var _ = Describe("Asset Management Tests", func() {
 				}
 			}
 			Expect(sidecarContainer).ToNot(BeNil(), "config-sync sidecar should exist")
+			Expect(sidecarContainer.VolumeMounts).To(ContainElement(corev1.VolumeMount{
+				Name: "operator-state-volume", MountPath: "/operator-state",
+			}))
 
 			hasCustomAssetsMount := false
 			for _, mount := range sidecarContainer.VolumeMounts {
@@ -171,8 +174,8 @@ var _ = Describe("Asset Management Tests", func() {
 
 			// Check that sidecar command includes custom assets staging
 			sidecarCommand := sidecarContainer.Command[2] // sh -c "command"
-			Expect(sidecarCommand).To(ContainSubstring("echo 'Setting up custom assets...'"))
-			Expect(sidecarCommand).To(ContainSubstring("cp \"$file\" /www/assets/"))
+			Expect(sidecarCommand).To(ContainSubstring("stage_asset"))
+			Expect(sidecarCommand).To(ContainSubstring("/operator-state/.homer-operator-state"))
 		})
 	})
 
@@ -373,8 +376,8 @@ var _ = Describe("Asset Management Tests", func() {
 			Expect(sidecarCommand).To(ContainSubstring("Simple PWA"))
 
 			// Should use default icons since no custom icons provided
-			Expect(sidecarCommand).To(ContainSubstring("assets/icons/pwa-192x192.png"))
-			Expect(sidecarCommand).To(ContainSubstring("assets/icons/pwa-512x512.png"))
+			Expect(sidecarCommand).To(ContainSubstring("icons/pwa-192x192.png"))
+			Expect(sidecarCommand).To(ContainSubstring("icons/pwa-512x512.png"))
 		})
 	})
 
@@ -603,16 +606,19 @@ var _ = Describe("Asset Management Tests", func() {
 				return err == nil
 			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
 
-			// The volume should reference the ConfigMap name even if it's in a different namespace
-			// Note: In real scenarios, cross-namespace references may require additional RBAC
+			mirrorName := assetMirrorName(assetsConfigMapName, assetsNs.Name, dashboardNs.Name, dashboardName)
 			hasCustomAssetsVolume := false
 			for _, volume := range deployment.Spec.Template.Spec.Volumes {
-				if volume.Name == assetsConfigMapName && volume.ConfigMap != nil && volume.ConfigMap.Name == assetsConfigMapName {
+				if volume.Name == mirrorName && volume.ConfigMap != nil && volume.ConfigMap.Name == mirrorName {
 					hasCustomAssetsVolume = true
 					break
 				}
 			}
-			Expect(hasCustomAssetsVolume).To(BeTrue(), "Deployment should reference cross-namespace assets ConfigMap")
+			Expect(hasCustomAssetsVolume).To(BeTrue(), "Deployment should reference owned cross-namespace asset mirror")
+
+			mirror := &corev1.ConfigMap{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: mirrorName, Namespace: dashboardNs.Name}, mirror)).To(Succeed())
+			Expect(mirror.BinaryData).To(HaveKeyWithValue("cross-ns-logo.png", []byte("cross-namespace-logo-data")))
 		})
 	})
 })

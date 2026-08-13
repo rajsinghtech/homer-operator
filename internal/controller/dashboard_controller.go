@@ -18,9 +18,14 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"maps"
+	"net/url"
+	"path"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -51,6 +56,7 @@ type DashboardReconciler struct {
 	Scheme           *runtime.Scheme
 	EnableGatewayAPI bool
 	HomerImage       string
+	ConfigSyncImage  string
 	ClusterManager   *ClusterManager
 }
 
@@ -112,6 +118,9 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	if err := r.cleanupStaleAssetMirrors(ctx, &dashboard); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	// Check if resources need updating to avoid unnecessary API calls
 	if !r.resourcesNeedUpdate(ctx, resources) {
@@ -167,7 +176,8 @@ func (r *DashboardReconciler) resourcesNeedUpdate(ctx context.Context, resources
 		// For ConfigMaps, check if the data has changed
 		if configMap, ok := resource.(*corev1.ConfigMap); ok {
 			if existingCM, ok := existing.(*corev1.ConfigMap); ok {
-				if !reflect.DeepEqual(configMap.Data, existingCM.Data) {
+				if !reflect.DeepEqual(configMap.Data, existingCM.Data) ||
+					!reflect.DeepEqual(configMap.BinaryData, existingCM.BinaryData) {
 					log.V(1).Info("ConfigMap data changed, needs update")
 					return true
 				}
@@ -218,6 +228,11 @@ func (r *DashboardReconciler) deploymentSpecsDiffer(ctx context.Context, desired
 			log.V(1).Info("Container image differs", "index", i, "desired", container.Image, "existing", existingContainer.Image)
 			return true
 		}
+		if !reflect.DeepEqual(container.Command, existingContainer.Command) ||
+			!reflect.DeepEqual(container.Args, existingContainer.Args) {
+			log.V(1).Info("Container command or args differ", "index", i)
+			return true
+		}
 
 		// Compare container resources
 		if !reflect.DeepEqual(container.Resources, existingContainer.Resources) {
@@ -241,6 +256,13 @@ func (r *DashboardReconciler) deploymentSpecsDiffer(ctx context.Context, desired
 	// Check volume changes (comparing names and sources)
 	if !r.volumesEqual(desired.Spec.Template.Spec.Volumes, existing.Spec.Template.Spec.Volumes) {
 		log.V(1).Info("Volumes differ")
+		return true
+	}
+
+	if desired.Spec.Template.Spec.DNSPolicy != existing.Spec.Template.Spec.DNSPolicy ||
+		!reflect.DeepEqual(desired.Spec.Template.Spec.DNSConfig, existing.Spec.Template.Spec.DNSConfig) ||
+		!reflect.DeepEqual(desired.Spec.Template.Spec.SecurityContext, existing.Spec.Template.Spec.SecurityContext) {
+		log.V(1).Info("Pod DNS or security configuration differs")
 		return true
 	}
 
@@ -449,19 +471,37 @@ func (r *DashboardReconciler) prepareResources(ctx context.Context, dashboard *h
 		return nil, nil, err
 	}
 
-	return []client.Object{&deployment, &service, &configMap}, homerConfig, nil
+	resources := []client.Object{&deployment, &service, &configMap}
+	if assetMirror, err := r.buildAssetMirror(ctx, dashboard); err != nil {
+		return nil, nil, err
+	} else if assetMirror != nil {
+		resources = append(resources, assetMirror)
+	}
+
+	return resources, homerConfig, nil
 }
 
 func (r *DashboardReconciler) buildDeploymentConfig(dashboard *homerv1alpha1.Dashboard) *homer.DeploymentConfig {
 	pwaManifest := r.generatePWAManifest(dashboard)
 	deploymentConfig := &homer.DeploymentConfig{
-		PWAManifest: pwaManifest,
-		HomerImage:  r.HomerImage,
+		PWAManifest:     pwaManifest,
+		HomerImage:      r.HomerImage,
+		ConfigSyncImage: r.ConfigSyncImage,
 	}
 
 	if dashboard.Spec.Assets != nil && dashboard.Spec.Assets.ConfigMapRef != nil {
-		deploymentConfig.AssetsConfigMapName = dashboard.Spec.Assets.ConfigMapRef.Name
+		ref := dashboard.Spec.Assets.ConfigMapRef
+		deploymentConfig.AssetsConfigMapName = ref.Name
+		if ref.Namespace != "" && ref.Namespace != dashboard.Namespace {
+			deploymentConfig.AssetsConfigMapName = assetMirrorName(ref.Name, ref.Namespace, dashboard.Namespace, dashboard.Name)
+		}
 	}
+	deploymentConfig.PageConfigKeys = make([]string, 0, len(dashboard.Spec.Pages))
+	for pageName := range dashboard.Spec.Pages {
+		deploymentConfig.PageConfigKeys = append(deploymentConfig.PageConfigKeys, pageName+".yml")
+	}
+	slices.Sort(deploymentConfig.PageConfigKeys)
+	deploymentConfig.IconAliases = iconAliases(dashboard)
 
 	if dashboard.Spec.DNSPolicy != "" {
 		deploymentConfig.DNSPolicy = dashboard.Spec.DNSPolicy
@@ -636,6 +676,12 @@ func (r *DashboardReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Watch namespaces for annotation changes
 	builder = builder.Watches(&corev1.Namespace{},
 		handler.EnqueueRequestsFromMapFunc(r.findDashboardsForNamespace))
+
+	// Watch referenced asset ConfigMaps, including source ConfigMaps in another
+	// namespace. This keeps owned mirrors and the resulting Dashboard current
+	// when users replace or edit their assets.
+	builder = builder.Watches(&corev1.ConfigMap{},
+		handler.EnqueueRequestsFromMapFunc(r.findDashboardsForAssetConfigMap))
 
 	return builder.Complete(r)
 }
@@ -882,6 +928,35 @@ func (r *DashboardReconciler) findDashboardsForNamespace(ctx context.Context, ob
 	return requests
 }
 
+func (r *DashboardReconciler) findDashboardsForAssetConfigMap(ctx context.Context, obj client.Object) []ctrl.Request {
+	configMap, ok := obj.(*corev1.ConfigMap)
+	if !ok {
+		return nil
+	}
+
+	dashboards := &homerv1alpha1.DashboardList{}
+	if err := r.List(ctx, dashboards); err != nil {
+		return nil
+	}
+
+	requests := make([]ctrl.Request, 0)
+	for i := range dashboards.Items {
+		dashboard := &dashboards.Items[i]
+		ref := dashboard.Spec.Assets
+		if ref == nil || ref.ConfigMapRef == nil || ref.ConfigMapRef.Name != configMap.Name {
+			continue
+		}
+		refNamespace := ref.ConfigMapRef.Namespace
+		if refNamespace == "" {
+			refNamespace = dashboard.Namespace
+		}
+		if refNamespace == configMap.Namespace {
+			requests = append(requests, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(dashboard)})
+		}
+	}
+	return requests
+}
+
 // mergeNamespaceAnnotations merges namespace annotations with resource annotations
 // Namespace annotations serve as defaults, resource annotations override
 func (r *DashboardReconciler) mergeNamespaceAnnotations(ctx context.Context, resourceNamespace string, resourceAnnotations map[string]string) map[string]string {
@@ -1092,10 +1167,133 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 
 		// Pass domain filters for single-cluster mode (local cluster uses dashboard-level filters)
 		// Multi-cluster HTTPRoutes already have domain filters stored in annotations
-		return homer.CreateConfigMapWithHTTPRoutes(homerConfig, dashboard.Name, dashboard.Namespace, mergedIngressList, mergedHTTPRoutes, mergedServices, dashboard, dashboard.Spec.DomainFilters)
+		configMap, err := homer.CreateConfigMapWithHTTPRoutes(homerConfig, dashboard.Name, dashboard.Namespace, mergedIngressList, mergedHTTPRoutes, mergedServices, dashboard, dashboard.Spec.DomainFilters)
+		if err != nil {
+			return corev1.ConfigMap{}, err
+		}
+		if err := homer.AddPageConfigsToConfigMap(&configMap, dashboard.Spec.Pages); err != nil {
+			return corev1.ConfigMap{}, err
+		}
+		return configMap, nil
 	}
 
-	return homer.CreateConfigMap(homerConfig, dashboard.Name, dashboard.Namespace, mergedIngressList, mergedServices, dashboard)
+	configMap, err := homer.CreateConfigMap(homerConfig, dashboard.Name, dashboard.Namespace, mergedIngressList, mergedServices, dashboard)
+	if err != nil {
+		return corev1.ConfigMap{}, err
+	}
+	if err := homer.AddPageConfigsToConfigMap(&configMap, dashboard.Spec.Pages); err != nil {
+		return corev1.ConfigMap{}, err
+	}
+	return configMap, nil
+}
+
+func iconAliases(dashboard *homerv1alpha1.Dashboard) map[string][]string {
+	if dashboard.Spec.Assets == nil || dashboard.Spec.Assets.Icons == nil || dashboard.Spec.Assets.ConfigMapRef == nil {
+		return nil
+	}
+	icons := dashboard.Spec.Assets.Icons
+	aliases := make(map[string][]string)
+	if icons.Favicon != "" {
+		aliases[icons.Favicon] = append(aliases[icons.Favicon], "icons/favicon.ico")
+	}
+	if icons.AppleTouchIcon != "" {
+		aliases[icons.AppleTouchIcon] = append(aliases[icons.AppleTouchIcon], "icons/apple-touch-icon.png")
+	}
+	if icons.PWAIcon192 != "" {
+		aliases[icons.PWAIcon192] = append(aliases[icons.PWAIcon192], "icons/pwa-192x192.png")
+	}
+	if icons.PWAIcon512 != "" {
+		aliases[icons.PWAIcon512] = append(aliases[icons.PWAIcon512], "icons/pwa-512x512.png")
+	}
+	return aliases
+}
+
+func assetMirrorName(name, namespace, dashboardNamespace, dashboardName string) string {
+	digest := sha256.Sum256([]byte(namespace + "/" + name + "@" + dashboardNamespace + "/" + dashboardName))
+	suffix := "-homer-" + hex.EncodeToString(digest[:])[:8]
+	baseLength := 63 - len(suffix)
+	base := name
+	if len(base) > baseLength {
+		base = base[:baseLength]
+	}
+	base = strings.TrimRight(base, "-")
+	return base + suffix
+}
+
+// buildAssetMirror copies a ConfigMap from another namespace into the
+// Dashboard namespace. Kubernetes ConfigMap volumes are namespace-scoped, so
+// a direct cross-namespace volume reference cannot work.
+func (r *DashboardReconciler) buildAssetMirror(ctx context.Context, dashboard *homerv1alpha1.Dashboard) (*corev1.ConfigMap, error) {
+	ref := dashboard.Spec.Assets
+	if ref == nil || ref.ConfigMapRef == nil || ref.ConfigMapRef.Namespace == "" || ref.ConfigMapRef.Namespace == dashboard.Namespace {
+		return nil, nil
+	}
+
+	source := &corev1.ConfigMap{}
+	if err := r.Get(ctx, client.ObjectKey{Name: ref.ConfigMapRef.Name, Namespace: ref.ConfigMapRef.Namespace}, source); err != nil {
+		return nil, fmt.Errorf("failed to retrieve assets ConfigMap %s/%s: %w", ref.ConfigMapRef.Namespace, ref.ConfigMapRef.Name, err)
+	}
+
+	mirror := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      assetMirrorName(ref.ConfigMapRef.Name, ref.ConfigMapRef.Namespace, dashboard.Namespace, dashboard.Name),
+			Namespace: dashboard.Namespace,
+			Labels: map[string]string{
+				"managed-by":                         "homer-operator",
+				"dashboard.homer.rajsingh.info/name": dashboard.Name,
+				"homer.rajsingh.info/type":           "asset-mirror",
+			},
+		},
+		Data:       maps.Clone(source.Data),
+		BinaryData: cloneBinaryData(source.BinaryData),
+	}
+	if err := controllerutil.SetControllerReference(dashboard, mirror, r.Scheme); err != nil {
+		return nil, fmt.Errorf("set owner reference on asset mirror: %w", err)
+	}
+	return mirror, nil
+}
+
+// cleanupStaleAssetMirrors removes mirrors that belonged to an earlier asset
+// reference. A Dashboard can change from one source ConfigMap to another (or
+// back to a same-namespace ConfigMap), while owner references only clean up
+// when the Dashboard itself is deleted.
+func (r *DashboardReconciler) cleanupStaleAssetMirrors(ctx context.Context, dashboard *homerv1alpha1.Dashboard) error {
+	mirrors := &corev1.ConfigMapList{}
+	if err := r.List(ctx, mirrors, client.InNamespace(dashboard.Namespace), client.MatchingLabels{
+		"managed-by":                         "homer-operator",
+		"dashboard.homer.rajsingh.info/name": dashboard.Name,
+		"homer.rajsingh.info/type":           "asset-mirror",
+	}); err != nil {
+		return fmt.Errorf("list asset mirrors for Dashboard %s/%s: %w", dashboard.Namespace, dashboard.Name, err)
+	}
+
+	desiredName := ""
+	if assets := dashboard.Spec.Assets; assets != nil && assets.ConfigMapRef != nil &&
+		assets.ConfigMapRef.Namespace != "" && assets.ConfigMapRef.Namespace != dashboard.Namespace {
+		desiredName = assetMirrorName(assets.ConfigMapRef.Name, assets.ConfigMapRef.Namespace, dashboard.Namespace, dashboard.Name)
+	}
+
+	for i := range mirrors.Items {
+		mirror := &mirrors.Items[i]
+		if mirror.Name == desiredName || !isOwnedByDashboard(mirror, dashboard) {
+			continue
+		}
+		if err := r.Delete(ctx, mirror); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete stale asset mirror %s/%s: %w", mirror.Namespace, mirror.Name, err)
+		}
+	}
+	return nil
+}
+
+func cloneBinaryData(data map[string][]byte) map[string][]byte {
+	if data == nil {
+		return nil
+	}
+	clone := make(map[string][]byte, len(data))
+	for key, value := range data {
+		clone[key] = append([]byte(nil), value...)
+	}
+	return clone
 }
 
 // generatePWAManifest generates PWA manifest if enabled, returns empty string if disabled
@@ -1152,15 +1350,34 @@ func (r *DashboardReconciler) generatePWAManifest(dashboard *homerv1alpha1.Dashb
 	icons := make(map[string]string)
 	if dashboard.Spec.Assets.Icons != nil {
 		if dashboard.Spec.Assets.Icons.PWAIcon192 != "" {
-			icons["192"] = dashboard.Spec.Assets.Icons.PWAIcon192
+			icons["192"] = stagedIconPath(dashboard, dashboard.Spec.Assets.Icons.PWAIcon192, "icons/pwa-192x192.png")
 		}
 		if dashboard.Spec.Assets.Icons.PWAIcon512 != "" {
-			icons["512"] = dashboard.Spec.Assets.Icons.PWAIcon512
+			icons["512"] = stagedIconPath(dashboard, dashboard.Spec.Assets.Icons.PWAIcon512, "icons/pwa-512x512.png")
 		}
 	}
 
 	// Generate PWA manifest
 	return homer.GeneratePWAManifest(name, shortName, description, themeColor, backgroundColor, display, startURL, icons)
+}
+
+func stagedIconPath(dashboard *homerv1alpha1.Dashboard, source, destination string) string {
+	if dashboard.Spec.Assets == nil || dashboard.Spec.Assets.ConfigMapRef == nil || !isStageableAssetPath(source) {
+		return source
+	}
+	return destination
+}
+
+func isStageableAssetPath(value string) bool {
+	if value == "" || strings.HasPrefix(value, "/") || strings.HasPrefix(value, "#") || strings.Contains(value, "\\") {
+		return false
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.IsAbs() || strings.HasPrefix(value, "//") {
+		return false
+	}
+	clean := path.Clean(value)
+	return clean != "." && clean != ".." && !strings.HasPrefix(clean, "../")
 }
 
 // getExternalHomerConfig retrieves Homer configuration from an external ConfigMap
@@ -1257,7 +1474,8 @@ func (r *DashboardReconciler) cleanupResources(ctx context.Context, dashboard *h
 	}
 
 	// Clean up any custom assets ConfigMap if it exists
-	if dashboard.Spec.Assets != nil && dashboard.Spec.Assets.ConfigMapRef != nil {
+	if dashboard.Spec.Assets != nil && dashboard.Spec.Assets.ConfigMapRef != nil &&
+		(dashboard.Spec.Assets.ConfigMapRef.Namespace == "" || dashboard.Spec.Assets.ConfigMapRef.Namespace == dashboard.Namespace) {
 		assetsConfigMapName := dashboard.Spec.Assets.ConfigMapRef.Name
 		assetsConfigMap := &corev1.ConfigMap{}
 		if err := r.Get(ctx, client.ObjectKey{

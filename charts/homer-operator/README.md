@@ -34,6 +34,7 @@ The following table lists the configurable parameters of the Homer Operator char
 | `image.tag` | Operator image tag | `Chart.appVersion` |
 | `image.pullPolicy` | Image pull policy | `IfNotPresent` |
 | `operator.enableGatewayAPI` | Enable Gateway API support | `false` |
+| `homer.configSyncImage` | Image used to stage Dashboard ConfigMaps into Homer assets | `alpine:3.18` |
 | `operator.metrics.enabled` | Enable metrics collection | `true` |
 | `operator.metrics.secureMetrics` | Use secure metrics serving | `true` |
 | `serviceAccount.create` | Create service account | `true` |
@@ -123,7 +124,22 @@ spec:
             logo: "https://example.com/app-logo.png"
             url: "https://myapp.example.com"
             subtitle: "Main Application"
+  pages:
+    status:
+      subtitle: "Status page"
+      services:
+        - name: "Status"
+          items:
+            - name: "Example"
+              url: "https://example.com"
 ```
+
+The `services` and `pages` blocks follow upstream Homer's direct configuration
+format. Legacy `parameters` blocks remain supported for existing dashboards.
+
+The checked-in sample at `config/samples/homer_v1alpha1_dashboard.yaml` is
+used by the Helm kind smoke test. It exercises direct Homer fields, a second
+page, and the generated `<page>.yml` asset.
 
 ## Troubleshooting
 

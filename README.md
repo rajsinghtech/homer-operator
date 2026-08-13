@@ -53,11 +53,31 @@ spec:
     header: true
     footer: '<p>Powered by Homer Operator</p>'
     logo: "https://raw.githubusercontent.com/rajsinghtech/homer-operator/main/homer/Homer-Operator.png"
+    services:
+      - name: "Applications"
+        icon: "fas fa-cloud"
+        items:
+          - name: "Homer"
+            url: "https://github.com/bastienwirtz/homer"
+            target: "_blank"
+            subtitle: "Upstream Homer"
+  pages:
+    status:
+      subtitle: "A second Homer page"
+      services:
+        - name: "Status"
+          items:
+            - name: "Example"
+              url: "https://example.com"
 ```
 
 ```bash
 kubectl apply -f dashboard.yaml
 ```
+
+`homerConfig.services` and `pages` use the same direct field names as
+upstream Homer. The older `parameters`/annotation-oriented form remains
+supported for existing dashboards and discovery workflows.
 
 ---
 
@@ -914,8 +934,14 @@ make deploy IMG=your-registry/homer-operator:dev
 # Run unit tests
 make test
 
-# Run end-to-end tests
+# Run the black-box suite against an installed operator
+E2E_OPERATOR_NAMESPACE=homer-operator-system \
+E2E_OPERATOR_DEPLOYMENT=homer-operator-controller-manager \
 make test-e2e
+
+# CI installs the Helm chart, applies config/samples/
+# homer_v1alpha1_dashboard.yaml, verifies its generated page asset, and runs
+# the same black-box suite.
 
 # Generate manifests
 make manifests

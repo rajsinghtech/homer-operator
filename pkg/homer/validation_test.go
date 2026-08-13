@@ -21,10 +21,9 @@ func TestHomerConfigValidation(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name:        "empty title",
+			name:        "default title",
 			config:      HomerConfig{},
-			expectError: true,
-			errorMsg:    "title: required",
+			expectError: false,
 		},
 		{
 			name: "valid config with services",
@@ -91,9 +90,9 @@ func TestThemeValidation(t *testing.T) {
 			expectError: false, // Empty theme defaults to "default"
 		},
 		{
-			name:        "invalid theme",
-			theme:       "invalid-theme",
-			expectError: true,
+			name:        "custom theme",
+			theme:       "community-theme",
+			expectError: false,
 		},
 	}
 

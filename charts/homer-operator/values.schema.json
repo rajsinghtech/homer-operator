@@ -84,6 +84,15 @@
         }
       }
     },
+    "homer": {
+      "type": "object",
+      "properties": {
+        "configSyncImage": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
     "resources": {
       "type": "object",
       "properties": {
