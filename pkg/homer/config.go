@@ -106,18 +106,31 @@ type HomerConfig struct {
 	// (for example, 3 and "3").
 	// +kubebuilder:validation:Schemaless
 	// +kubebuilder:pruning:PreserveUnknownFields
-	Columns           any           `json:"columns,omitempty" yaml:"columns,omitempty"`
-	ConnectivityCheck *bool         `json:"connectivityCheck,omitempty" yaml:"connectivityCheck,omitempty"`
-	Hotkey            HotkeyConfig  `json:"hotkey,omitempty" yaml:"hotkey,omitempty"`
-	Theme             string        `json:"theme,omitempty" yaml:"theme,omitempty"`
-	Stylesheet        []string      `json:"stylesheet,omitempty" yaml:"stylesheet,omitempty"`
-	Colors            ColorConfig   `json:"colors,omitempty" yaml:"colors,omitempty"`
-	Defaults          DefaultConfig `json:"defaults,omitempty" yaml:"defaults,omitempty"`
-	Proxy             ProxyConfig   `json:"proxy,omitempty" yaml:"proxy,omitempty"`
-	Message           MessageConfig `json:"message,omitempty" yaml:"message,omitempty"`
-	Links             []Link        `json:"links,omitempty" yaml:"links,omitempty"`
-	Services          []Service     `json:"services,omitempty" yaml:"services,omitempty"`
-	ExternalConfig    string        `json:"externalConfig,omitempty" yaml:"externalConfig,omitempty"`
+	Columns any `json:"columns,omitempty" yaml:"columns,omitempty"`
+	// +nullable
+	ConnectivityCheck *bool `json:"connectivityCheck,omitempty" yaml:"connectivityCheck,omitempty"`
+	// +nullable
+	Hotkey HotkeyConfig `json:"hotkey,omitempty" yaml:"hotkey,omitempty"`
+	Theme  string       `json:"theme,omitempty" yaml:"theme,omitempty"`
+	// Stylesheet accepts either one path or an array of paths, matching
+	// upstream Homer. Keep the value open so both forms (and explicit null)
+	// survive CRD and external-config round trips.
+	// +kubebuilder:validation:Schemaless
+	// +kubebuilder:pruning:PreserveUnknownFields
+	Stylesheet any `json:"stylesheet,omitempty" yaml:"stylesheet,omitempty"`
+	// +nullable
+	Colors ColorConfig `json:"colors,omitempty" yaml:"colors,omitempty"`
+	// +nullable
+	Defaults DefaultConfig `json:"defaults,omitempty" yaml:"defaults,omitempty"`
+	// +nullable
+	Proxy ProxyConfig `json:"proxy,omitempty" yaml:"proxy,omitempty"`
+	// +nullable
+	Message MessageConfig `json:"message,omitempty" yaml:"message,omitempty"`
+	// +nullable
+	Links []Link `json:"links,omitempty" yaml:"links,omitempty"`
+	// +nullable
+	Services       []Service `json:"services,omitempty" yaml:"services,omitempty"`
+	ExternalConfig string    `json:"externalConfig,omitempty" yaml:"externalConfig,omitempty"`
 	// UpdateIntervalMs is the default refresh interval for Homer smart cards.
 	// A value of zero disables automatic refresh, as in upstream Homer.
 	// +kubebuilder:validation:Schemaless
@@ -352,7 +365,7 @@ func restoreExplicitRootCollectionFields(fields map[string]json.RawMessage, conf
 		empty bool
 		value any
 	}{
-		{"stylesheet", len(config.Stylesheet) == 0, []string{}},
+		{"stylesheet", isEmptyStylesheet(config.Stylesheet), []string{}},
 		{"links", len(config.Links) == 0, []Link{}},
 		{"services", len(config.Services) == 0, []Service{}},
 	}
@@ -420,6 +433,19 @@ func isZeroMessage(config MessageConfig) bool {
 		len(config.RawFields) == 0
 }
 
+func isEmptyStylesheet(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Array, reflect.Slice:
+		return reflected.Len() == 0
+	default:
+		return false
+	}
+}
+
 var homerConfigJSONFields = map[string]struct{}{
 	"title": {}, "subtitle": {}, "documentTitle": {}, "logo": {}, "icon": {},
 	"header": {}, "footer": {}, "columns": {}, "connectivityCheck": {},
@@ -435,6 +461,7 @@ func hasYAMLKey(raw map[string]any, key string) bool {
 
 // ProxyConfig contains configuration for proxy settings.
 // +kubebuilder:object:generate=false
+// +kubebuilder:pruning:PreserveUnknownFields
 type ProxyConfig struct {
 	UseCredentials bool `json:"useCredentials,omitempty" yaml:"useCredentials,omitempty"`
 	// +kubebuilder:validation:Schemaless
@@ -478,6 +505,8 @@ func (p *ProxyConfig) UnmarshalYAML(unmarshal func(any) error) error {
 	return captureYAMLFields(raw, &p.RawFields)
 }
 
+// DefaultConfig contains optional Homer default settings.
+// +kubebuilder:pruning:PreserveUnknownFields
 type DefaultConfig struct {
 	Layout     string                     `json:"layout,omitempty" yaml:"layout,omitempty"`
 	ColorTheme string                     `json:"colorTheme,omitempty" yaml:"colorTheme,omitempty"`
@@ -536,10 +565,11 @@ func (d DefaultConfig) MarshalYAML() (any, error) {
 // and backwards compatibility with earlier operator releases.
 // +kubebuilder:pruning:PreserveUnknownFields
 type Service struct {
-	Name             string                       `json:"name,omitempty" yaml:"name,omitempty"`
-	Icon             string                       `json:"icon,omitempty" yaml:"icon,omitempty"`
-	Logo             string                       `json:"logo,omitempty" yaml:"logo,omitempty"`
-	Class            string                       `json:"class,omitempty" yaml:"class,omitempty"`
+	Name  string `json:"name,omitempty" yaml:"name,omitempty"`
+	Icon  string `json:"icon,omitempty" yaml:"icon,omitempty"`
+	Logo  string `json:"logo,omitempty" yaml:"logo,omitempty"`
+	Class string `json:"class,omitempty" yaml:"class,omitempty"`
+	// +nullable
 	Items            []Item                       `json:"items,omitempty" yaml:"items,omitempty"`
 	Parameters       map[string]string            `json:"parameters,omitempty" yaml:"parameters,omitempty"`
 	NestedObjects    map[string]map[string]string `json:"nestedObjects,omitempty" yaml:"nestedObjects,omitempty"`
@@ -548,6 +578,7 @@ type Service struct {
 }
 
 // QuickLink is an upstream Homer quick link entry.
+// +kubebuilder:pruning:PreserveUnknownFields
 type QuickLink struct {
 	Name      string                     `json:"name,omitempty" yaml:"name,omitempty"`
 	Icon      string                     `json:"icon,omitempty" yaml:"icon,omitempty"`
@@ -633,11 +664,13 @@ type Item struct {
 	UseCredentials *bool  `json:"useCredentials,omitempty" yaml:"useCredentials,omitempty"`
 	// +kubebuilder:validation:Schemaless
 	// +kubebuilder:pruning:PreserveUnknownFields
-	Headers      map[string]any `json:"headers,omitempty" yaml:"headers,omitempty"`
-	SuccessCodes []int          `json:"successCodes,omitempty" yaml:"successCodes,omitempty"`
+	Headers map[string]any `json:"headers,omitempty" yaml:"headers,omitempty"`
+	// +nullable
+	SuccessCodes []int `json:"successCodes,omitempty" yaml:"successCodes,omitempty"`
 	// +kubebuilder:validation:Schemaless
 	// +kubebuilder:pruning:PreserveUnknownFields
-	UpdateIntervalMs   any                            `json:"updateIntervalMs,omitempty" yaml:"updateIntervalMs,omitempty"`
+	UpdateIntervalMs any `json:"updateIntervalMs,omitempty" yaml:"updateIntervalMs,omitempty"`
+	// +nullable
 	Quick              []QuickLink                    `json:"quick,omitempty" yaml:"quick,omitempty"`
 	Parameters         map[string]string              `json:"parameters,omitempty" yaml:"parameters,omitempty"`
 	NestedObjects      map[string]map[string]string   `json:"nestedObjects,omitempty" yaml:"nestedObjects,omitempty"`
@@ -848,6 +881,8 @@ func decodeRawField(value json.RawMessage) any {
 	return decoded
 }
 
+// Link describes a link in a Homer service configuration.
+// +kubebuilder:pruning:PreserveUnknownFields
 type Link struct {
 	Name      string                     `json:"name,omitempty" yaml:"name,omitempty"`
 	Icon      string                     `json:"icon,omitempty" yaml:"icon,omitempty"`
@@ -1125,6 +1160,8 @@ func itemHasConfiguration(item *Item) bool {
 		len(item.Parameters) > 0 || len(item.NestedObjects) > 0 || len(item.ArrayObjects) > 0
 }
 
+// HotkeyConfig contains Homer keyboard shortcut settings.
+// +kubebuilder:pruning:PreserveUnknownFields
 type HotkeyConfig struct {
 	Search    string                     `json:"search,omitempty" yaml:"search,omitempty"`
 	RawFields map[string]json.RawMessage `json:"-" yaml:"-"`
@@ -1163,7 +1200,8 @@ func (h *HotkeyConfig) UnmarshalYAML(unmarshal func(any) error) error {
 	return captureYAMLFields(raw, &h.RawFields)
 }
 
-// ColorConfig contains color scheme configuration
+// ColorConfig contains color scheme configuration.
+// +kubebuilder:pruning:PreserveUnknownFields
 type ColorConfig struct {
 	Light     ThemeColors                `json:"light,omitempty" yaml:"light,omitempty"`
 	Dark      ThemeColors                `json:"dark,omitempty" yaml:"dark,omitempty"`
@@ -1203,7 +1241,8 @@ func (c *ColorConfig) UnmarshalYAML(unmarshal func(any) error) error {
 	return captureYAMLFields(raw, &c.RawFields)
 }
 
-// ThemeColors contains color definitions for a theme
+// ThemeColors contains color definitions for a theme.
+// +kubebuilder:pruning:PreserveUnknownFields
 type ThemeColors struct {
 	HighlightPrimary   string                     `json:"highlight-primary,omitempty" yaml:"highlight-primary,omitempty"`
 	HighlightSecondary string                     `json:"highlight-secondary,omitempty" yaml:"highlight-secondary,omitempty"`
@@ -1256,6 +1295,7 @@ func (c *ThemeColors) UnmarshalYAML(unmarshal func(any) error) error {
 
 // MessageConfig contains dynamic message configuration.
 // +kubebuilder:object:generate=false
+// +kubebuilder:pruning:PreserveUnknownFields
 type MessageConfig struct {
 	Url string `json:"url,omitempty" yaml:"url,omitempty"`
 	// Mapping is an open object in upstream Homer. Values are normally string
@@ -3834,7 +3874,7 @@ func addBasicFields(configMap map[string]any, config *HomerConfig) {
 	if config.Theme != "" {
 		configMap["theme"] = config.Theme
 	}
-	if len(config.Stylesheet) > 0 {
+	if !isEmptyStylesheet(config.Stylesheet) {
 		configMap["stylesheet"] = config.Stylesheet
 	}
 	if config.ExternalConfig != "" {
@@ -3847,7 +3887,9 @@ func addBasicFields(configMap map[string]any, config *HomerConfig) {
 
 // AddPageConfigsToConfigMap stores additional Homer page configurations in
 // the same ConfigMap as config.yml. Homer loads a page named "foo" from
-// assets/foo.yml when the browser URL contains #foo.
+// assets/foo.yml when the browser URL contains #foo. Page names are limited
+// to safe single-path components because they become ConfigMap keys and
+// projected asset filenames.
 func AddPageConfigsToConfigMap(configMap *corev1.ConfigMap, pages map[string]apiextensionsv1.JSON) error {
 	if configMap == nil || len(pages) == 0 {
 		return nil

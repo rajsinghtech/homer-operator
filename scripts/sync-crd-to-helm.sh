@@ -42,7 +42,7 @@ metadata:
   labels:
     {{- include "homer-operator.labels" . | nindent 4 }}
   annotations:
-    controller-gen.kubebuilder.io/version: v0.14.0
+    controller-gen.kubebuilder.io/version: v0.19.0
     {{- with .Values.crd.annotations }}
     {{- toYaml . | nindent 4 }}
     {{- end }}

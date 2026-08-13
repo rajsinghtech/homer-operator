@@ -7,7 +7,7 @@ metadata:
   labels:
     {{- include "homer-operator.labels" . | nindent 4 }}
   annotations:
-    controller-gen.kubebuilder.io/version: v0.14.0
+    controller-gen.kubebuilder.io/version: v0.19.0
     {{- with .Values.crd.annotations }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
@@ -247,11 +247,12 @@ spec:
                 description: HomerConfig is base/default Homer configuration.
                 properties:
                   colors:
-                    description: ColorConfig contains color scheme configuration
+                    description: ColorConfig contains color scheme configuration.
+                    nullable: true
                     properties:
                       dark:
                         description: ThemeColors contains color definitions for a
-                          theme
+                          theme.
                         properties:
                           background:
                             type: string
@@ -280,9 +281,10 @@ spec:
                           text-title:
                             type: string
                         type: object
+                        x-kubernetes-preserve-unknown-fields: true
                       light:
                         description: ThemeColors contains color definitions for a
-                          theme
+                          theme.
                         properties:
                           background:
                             type: string
@@ -311,21 +313,27 @@ spec:
                           text-title:
                             type: string
                         type: object
+                        x-kubernetes-preserve-unknown-fields: true
                     type: object
+                    x-kubernetes-preserve-unknown-fields: true
                   columns:
                     description: |-
                       Columns accepts both the numeric and string forms supported by Homer
                       (for example, 3 and "3").
                     x-kubernetes-preserve-unknown-fields: true
                   connectivityCheck:
+                    nullable: true
                     type: boolean
                   defaults:
+                    description: DefaultConfig contains optional Homer default settings.
+                    nullable: true
                     properties:
                       colorTheme:
                         type: string
                       layout:
                         type: string
                     type: object
+                    x-kubernetes-preserve-unknown-fields: true
                   documentTitle:
                     type: string
                   externalConfig:
@@ -337,14 +345,18 @@ spec:
                   header:
                     type: boolean
                   hotkey:
+                    description: HotkeyConfig contains Homer keyboard shortcut settings.
+                    nullable: true
                     properties:
                       search:
                         type: string
                     type: object
+                    x-kubernetes-preserve-unknown-fields: true
                   icon:
                     type: string
                   links:
                     items:
+                      description: Link describes a link in a Homer service configuration.
                       properties:
                         icon:
                           type: string
@@ -355,11 +367,14 @@ spec:
                         url:
                           type: string
                       type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    nullable: true
                     type: array
                   logo:
                     type: string
                   message:
                     description: MessageConfig contains dynamic message configuration.
+                    nullable: true
                     properties:
                       content:
                         type: string
@@ -383,14 +398,17 @@ spec:
                       url:
                         type: string
                     type: object
+                    x-kubernetes-preserve-unknown-fields: true
                   proxy:
                     description: ProxyConfig contains configuration for proxy settings.
+                    nullable: true
                     properties:
                       headers:
                         x-kubernetes-preserve-unknown-fields: true
                       useCredentials:
                         type: boolean
                     type: object
+                    x-kubernetes-preserve-unknown-fields: true
                   services:
                     items:
                       description: |-
@@ -458,12 +476,15 @@ spec:
                                     url:
                                       type: string
                                   type: object
+                                  x-kubernetes-preserve-unknown-fields: true
+                                nullable: true
                                 type: array
                               subtitle:
                                 type: string
                               successCodes:
                                 items:
                                   type: integer
+                                nullable: true
                                 type: array
                               tag:
                                 type: string
@@ -481,6 +502,7 @@ spec:
                                 type: boolean
                             type: object
                             x-kubernetes-preserve-unknown-fields: true
+                          nullable: true
                           type: array
                         logo:
                           type: string
@@ -498,11 +520,14 @@ spec:
                           type: object
                       type: object
                       x-kubernetes-preserve-unknown-fields: true
+                    nullable: true
                     type: array
                   stylesheet:
-                    items:
-                      type: string
-                    type: array
+                    description: |-
+                      Stylesheet accepts either one path or an array of paths, matching
+                      upstream Homer. Keep the value open so both forms (and explicit null)
+                      survive CRD and external-config round trips.
+                    x-kubernetes-preserve-unknown-fields: true
                   subtitle:
                     type: string
                   theme:

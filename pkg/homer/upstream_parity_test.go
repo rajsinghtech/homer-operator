@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -64,6 +65,163 @@ services:
 	} {
 		if !strings.Contains(output, expected) {
 			t.Errorf("generated config does not contain %q:\n%s", expected, output)
+		}
+	}
+}
+
+func TestStylesheetAcceptsUpstreamScalarAndArrayForms(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		want     any
+		wantYAML string
+	}{
+		{
+			name:     "yaml scalar",
+			input:    "stylesheet: assets/custom.css\n",
+			want:     "assets/custom.css",
+			wantYAML: "stylesheet: assets/custom.css",
+		},
+		{
+			name:     "json scalar",
+			input:    `{"stylesheet":"assets/custom.css"}`,
+			want:     "assets/custom.css",
+			wantYAML: "stylesheet: assets/custom.css",
+		},
+		{
+			name:     "json array",
+			input:    `{"stylesheet":["assets/one.css","assets/two.css"]}`,
+			want:     []any{"assets/one.css", "assets/two.css"},
+			wantYAML: "stylesheet:\n- assets/one.css\n- assets/two.css",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var config HomerConfig
+			var err error
+			if strings.HasPrefix(tt.input, "{") {
+				err = json.Unmarshal([]byte(tt.input), &config)
+			} else {
+				err = yaml.Unmarshal([]byte(tt.input), &config)
+			}
+			if err != nil {
+				t.Fatalf("unmarshal stylesheet: %v", err)
+			}
+
+			encoded, err := json.Marshal(config)
+			if err != nil {
+				t.Fatalf("marshal stylesheet as JSON: %v", err)
+			}
+			var roundTripped HomerConfig
+			if err := json.Unmarshal(encoded, &roundTripped); err != nil {
+				t.Fatalf("unmarshal stylesheet JSON: %v", err)
+			}
+			if !reflect.DeepEqual(roundTripped.Stylesheet, tt.want) {
+				t.Fatalf("stylesheet JSON round trip = %#v, want %#v", roundTripped.Stylesheet, tt.want)
+			}
+
+			cm, err := CreateConfigMap(&config, "stylesheet", "default", networkingv1.IngressList{}, nil, nil)
+			if err != nil {
+				t.Fatalf("create config map: %v", err)
+			}
+			if !strings.Contains(cm.Data["config.yml"], tt.wantYAML) {
+				t.Fatalf("stylesheet was not emitted in upstream form:\n%s", cm.Data["config.yml"])
+			}
+		})
+	}
+}
+
+func TestUpstreamSmartCardFieldsAndEmptyGroupsSurviveConfigMapEmission(t *testing.T) {
+	input := `
+services:
+  - name: Empty group
+    tagstyle: is-info
+    items: null
+  - name: Smart cards
+    items:
+      - name: Card
+        type: Proxmox
+        apikey: legacy-key
+        apiKey: modern-key
+        apiVersion: 6
+        api_token: token
+        auth: user:password
+        basic_auth: user:password
+        password: password
+        token: token
+        device: ups
+        display: text
+        endpoint: https://api.example.com
+        environments: [prod, staging]
+        groups: [Services, External]
+        hide: false
+        hide_decimals: true
+        hideaverages: true
+        items: [name, version]
+        legacyApi: false
+        libraryType: movies
+        limit: 5
+        location: Lille
+        locationId: 123
+        mapping: {status: health.status}
+        method: HEAD
+        node: node1
+        query: homer
+        separator: ' / '
+        slug: default
+        small_font_on_desktop: true
+        small_font_on_small_screens: true
+        stats: [cpu, memory]
+        things: [temperature]
+        timeout: 2000
+        units: metric
+        warning_value: 50
+        danger_value: 80
+        xmlrpc: http://api.example.com/RPC2
+        headers: {X-Test: one}
+`
+
+	var config HomerConfig
+	if err := yaml.Unmarshal([]byte(input), &config); err != nil {
+		t.Fatalf("unmarshal smart-card fixture: %v", err)
+	}
+	cm, err := CreateConfigMap(&config, "smart-cards", "default", networkingv1.IngressList{}, nil, nil)
+	if err != nil {
+		t.Fatalf("create config map: %v", err)
+	}
+
+	var output map[any]any
+	if err := yaml.Unmarshal([]byte(cm.Data["config.yml"]), &output); err != nil {
+		t.Fatalf("unmarshal emitted config: %v\n%s", err, cm.Data["config.yml"])
+	}
+	services, ok := output["services"].([]any)
+	if !ok || len(services) != 2 {
+		t.Fatalf("emitted services = %#v", output["services"])
+	}
+	emptyGroup, ok := services[0].(map[any]any)
+	if !ok {
+		t.Fatalf("empty group = %#v", services[0])
+	}
+	if _, ok := emptyGroup["items"]; !ok || emptyGroup["items"] != nil {
+		t.Fatalf("empty group items = %#v, want explicit null", emptyGroup["items"])
+	}
+	if emptyGroup["tagstyle"] != "is-info" {
+		t.Fatalf("empty group tagstyle = %#v", emptyGroup["tagstyle"])
+	}
+
+	cards := services[1].(map[any]any)
+	items := cards["items"].([]any)
+	card := items[0].(map[any]any)
+	for _, key := range []string{
+		"apikey", "apiKey", "apiVersion", "api_token", "auth", "basic_auth", "password", "token",
+		"device", "display", "endpoint", "environments", "groups", "hide", "hide_decimals", "hideaverages",
+		"items", "legacyApi", "libraryType", "limit", "location", "locationId", "mapping", "method", "node",
+		"query", "separator", "slug", "small_font_on_desktop", "small_font_on_small_screens", "stats", "things",
+		"timeout", "units", "warning_value", "danger_value", "xmlrpc", "headers",
+	} {
+		if _, ok := card[key]; !ok {
+			t.Errorf("emitted smart-card item dropped %q", key)
 		}
 	}
 }

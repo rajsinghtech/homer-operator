@@ -34,9 +34,7 @@ func (c *HomerConfig) DeepCopyInto(out *HomerConfig) {
 		out.ConnectivityCheck = new(bool)
 		*out.ConnectivityCheck = *c.ConnectivityCheck
 	}
-	if c.Stylesheet != nil {
-		out.Stylesheet = append([]string(nil), c.Stylesheet...)
-	}
+	out.Stylesheet = deepCopyValue(c.Stylesheet)
 	c.Hotkey.DeepCopyInto(&out.Hotkey)
 	c.Defaults.DeepCopyInto(&out.Defaults)
 	c.Colors.DeepCopyInto(&out.Colors)
