@@ -78,7 +78,7 @@ spec:
           protocol: TCP
         {{- if .Values.operator.metrics.enabled }}
         - containerPort: {{ .Values.operator.metrics.bindAddress | replace ":" "" | int }}
-          name: metrics
+          name: https
           protocol: TCP
         {{- end }}
         livenessProbe:
@@ -97,23 +97,6 @@ spec:
         volumeMounts:
           {{- toYaml . | nindent 10 }}
         {{- end }}
-      {{- if .Values.operator.metrics.enabled }}
-      - name: kube-rbac-proxy
-        image: {{ .Values.operator.metrics.rbacProxy.image.repository }}:{{ .Values.operator.metrics.rbacProxy.image.tag }}
-        imagePullPolicy: {{ .Values.operator.metrics.rbacProxy.image.pullPolicy }}
-        args:
-        - --secure-listen-address=0.0.0.0:{{ .Values.services.metrics.port }}
-        - --upstream=http://127.0.0.1:{{ .Values.operator.metrics.bindAddress | replace ":" "" }}/
-        - --v=0
-        ports:
-        - containerPort: {{ .Values.services.metrics.port }}
-          name: https
-          protocol: TCP
-        resources:
-          {{- toYaml .Values.operator.metrics.rbacProxy.resources | nindent 10 }}
-        securityContext:
-          {{- toYaml .Values.securityContext | nindent 10 }}
-      {{- end }}
       {{- with .Values.volumes }}
       volumes:
         {{- toYaml . | nindent 8 }}

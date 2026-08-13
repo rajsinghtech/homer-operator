@@ -31,26 +31,14 @@ operator:
     leaseDuration: "15s"
     renewDeadline: "10s"
     retryPeriod: "2s"
-  # Metrics configuration
+  # Metrics configuration. Secured directly by controller-runtime's built-in
+  # authn/authz filter (TokenReview/SubjectAccessReview) - no sidecar proxy.
   metrics:
     enabled: true
     # Bind address for metrics server
-    bindAddress: ":8080"
+    bindAddress: ":8443"
     # Secure metrics serving
     secureMetrics: true
-    # Kube RBAC Proxy configuration for secure metrics
-    rbacProxy:
-      image:
-        repository: gcr.io/kubebuilder/kube-rbac-proxy
-        tag: v0.16.0
-        pullPolicy: Always
-      resources:
-        limits:
-          cpu: 500m
-          memory: 128Mi
-        requests:
-          cpu: 5m
-          memory: 64Mi
   healthProbe:
     bindAddress: ":8081"
 
