@@ -227,7 +227,7 @@ func TestDirectFieldsParticipateInOperatorFeatures(t *testing.T) {
 	if item.Type != GenericType || item.Endpoint != "https://direct.example.com/health" {
 		t.Fatalf("direct health enhancement = %#v", item)
 	}
-	if item.Headers["X-Health"] != "true" {
+	if item.Headers["X-Health"] != BooleanTrue {
 		t.Fatalf("direct health headers = %#v", item.Headers)
 	}
 }

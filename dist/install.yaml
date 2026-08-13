@@ -352,6 +352,7 @@ spec:
                   logo:
                     type: string
                   message:
+                    description: MessageConfig contains dynamic message configuration.
                     properties:
                       content:
                         type: string
@@ -1598,6 +1599,7 @@ spec:
                   logo:
                     type: string
                   message:
+                    description: MessageConfig contains dynamic message configuration.
                     properties:
                       content:
                         type: string

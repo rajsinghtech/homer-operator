@@ -45,11 +45,23 @@ const (
 	CRDSource           = "crd"
 	LocalCluster        = "local"
 	NameField           = "name"
+	IconField           = "icon"
+	LogoField           = "logo"
+	ClassField          = "class"
+	SubtitleField       = "subtitle"
+	TagField            = "tag"
+	KeywordsField       = "keywords"
 	URLField            = "url"
+	TargetField         = "target"
+	TagStyleField       = "tagstyle"
+	TypeField           = "type"
+	BackgroundField     = "background"
+	EndpointField       = "endpoint"
 	WarningValueField   = "warning_value"
 	DangerValueField    = "danger_value"
 	BooleanTrue         = "true"
 	BooleanFalse        = "false"
+	JSONNullValue       = "null"
 	FooterHidden        = "__FOOTER_HIDDEN__"
 	ProtocolHTTPS       = "https"
 	ProtocolHTTP        = "http"
@@ -260,7 +272,7 @@ func (c HomerConfig) MarshalJSON() ([]byte, error) {
 		fields["footer"] = value
 	}
 	if c.headerSet {
-		if raw, ok := c.presentFields["header"]; ok && strings.TrimSpace(string(raw)) == "null" {
+		if raw, ok := c.presentFields["header"]; ok && strings.TrimSpace(string(raw)) == JSONNullValue {
 			fields["header"] = append(json.RawMessage(nil), raw...)
 		} else {
 			value, err := json.Marshal(c.Header)
@@ -272,12 +284,12 @@ func (c HomerConfig) MarshalJSON() ([]byte, error) {
 	}
 	if c.proxySet {
 		if _, exists := fields["proxy"]; !exists {
-			fields["proxy"] = json.RawMessage("null")
+			fields["proxy"] = json.RawMessage(JSONNullValue)
 		}
 	}
 	if c.messageSet {
 		if _, exists := fields["message"]; !exists {
-			fields["message"] = json.RawMessage("null")
+			fields["message"] = json.RawMessage(JSONNullValue)
 		}
 	}
 	if c.updateIntervalSet {
@@ -299,71 +311,89 @@ func (c HomerConfig) MarshalJSON() ([]byte, error) {
 }
 
 func restoreExplicitRootJSONFields(fields map[string]json.RawMessage, config HomerConfig) {
-	if config.rootFieldPresent("title") && config.Title == "" {
-		fields["title"] = explicitZeroJSONValue(config, "title", "")
+	restoreExplicitRootStringFields(fields, config)
+	restoreExplicitRootNullableFields(fields, config)
+	restoreExplicitRootCollectionFields(fields, config)
+	restoreExplicitRootObjectFields(fields, config)
+}
+
+func restoreExplicitRootStringFields(fields map[string]json.RawMessage, config HomerConfig) {
+	values := []struct {
+		key   string
+		value string
+	}{
+		{"title", config.Title},
+		{"subtitle", config.Subtitle},
+		{"documentTitle", config.DocumentTitle},
+		{"logo", config.Logo},
+		{"icon", config.Icon},
+		{"theme", config.Theme},
+		{"externalConfig", config.ExternalConfig},
 	}
-	if config.rootFieldPresent("subtitle") && config.Subtitle == "" {
-		fields["subtitle"] = explicitZeroJSONValue(config, "subtitle", "")
+	for _, field := range values {
+		if config.rootFieldPresent(field.key) && field.value == "" {
+			fields[field.key] = explicitZeroJSONValue(config, field.key, field.value)
+		}
 	}
-	if config.rootFieldPresent("documentTitle") && config.DocumentTitle == "" {
-		fields["documentTitle"] = explicitZeroJSONValue(config, "documentTitle", "")
-	}
-	if config.rootFieldPresent("logo") && config.Logo == "" {
-		fields["logo"] = explicitZeroJSONValue(config, "logo", "")
-	}
-	if config.rootFieldPresent("icon") && config.Icon == "" {
-		fields["icon"] = explicitZeroJSONValue(config, "icon", "")
-	}
-	if config.rootFieldPresent("theme") && config.Theme == "" {
-		fields["theme"] = explicitZeroJSONValue(config, "theme", "")
-	}
-	if config.rootFieldPresent("externalConfig") && config.ExternalConfig == "" {
-		fields["externalConfig"] = explicitZeroJSONValue(config, "externalConfig", "")
-	}
+}
+
+func restoreExplicitRootNullableFields(fields map[string]json.RawMessage, config HomerConfig) {
 	if config.rootFieldPresent("columns") && config.Columns == nil {
 		fields["columns"] = explicitZeroJSONValue(config, "columns", nil)
 	}
 	if config.rootFieldPresent("connectivityCheck") && config.ConnectivityCheck == nil {
 		fields["connectivityCheck"] = explicitZeroJSONValue(config, "connectivityCheck", nil)
 	}
-	if config.rootFieldPresent("stylesheet") && len(config.Stylesheet) == 0 {
-		fields["stylesheet"] = explicitZeroJSONValue(config, "stylesheet", []string{})
+}
+
+func restoreExplicitRootCollectionFields(fields map[string]json.RawMessage, config HomerConfig) {
+	collections := []struct {
+		key   string
+		empty bool
+		value any
+	}{
+		{"stylesheet", len(config.Stylesheet) == 0, []string{}},
+		{"links", len(config.Links) == 0, []Link{}},
+		{"services", len(config.Services) == 0, []Service{}},
 	}
-	if config.rootFieldPresent("links") && len(config.Links) == 0 {
-		fields["links"] = explicitZeroJSONValue(config, "links", []Link{})
-	}
-	if config.rootFieldPresent("services") && len(config.Services) == 0 {
-		fields["services"] = explicitZeroJSONValue(config, "services", []Service{})
-	}
-	if config.rootFieldPresent("hotkey") && isZeroHotkey(config.Hotkey) {
-		fields["hotkey"] = explicitZeroJSONValue(config, "hotkey", map[string]any{})
-	}
-	if config.rootFieldPresent("colors") && isZeroColors(config.Colors) {
-		fields["colors"] = explicitZeroJSONValue(config, "colors", map[string]any{})
-	}
-	if config.rootFieldPresent("defaults") && isZeroDefaults(config.Defaults) {
-		fields["defaults"] = explicitZeroJSONValue(config, "defaults", map[string]any{})
-	}
-	if config.rootFieldPresent("proxy") && isZeroProxy(config.Proxy) {
-		fields["proxy"] = explicitZeroJSONValue(config, "proxy", map[string]any{})
-	}
-	if config.rootFieldPresent("message") && isZeroMessage(config.Message) {
-		fields["message"] = explicitZeroJSONValue(config, "message", map[string]any{})
+	for _, field := range collections {
+		if config.rootFieldPresent(field.key) && field.empty {
+			fields[field.key] = explicitZeroJSONValue(config, field.key, field.value)
+		}
 	}
 }
 
-func (config HomerConfig) rootFieldPresent(key string) bool {
-	_, ok := config.presentFields[key]
+func restoreExplicitRootObjectFields(fields map[string]json.RawMessage, config HomerConfig) {
+	objects := []struct {
+		key   string
+		zero  bool
+		value any
+	}{
+		{"hotkey", isZeroHotkey(config.Hotkey), map[string]any{}},
+		{"colors", isZeroColors(config.Colors), map[string]any{}},
+		{"defaults", isZeroDefaults(config.Defaults), map[string]any{}},
+		{"proxy", isZeroProxy(config.Proxy), map[string]any{}},
+		{"message", isZeroMessage(config.Message), map[string]any{}},
+	}
+	for _, field := range objects {
+		if config.rootFieldPresent(field.key) && field.zero {
+			fields[field.key] = explicitZeroJSONValue(config, field.key, field.value)
+		}
+	}
+}
+
+func (c HomerConfig) rootFieldPresent(key string) bool {
+	_, ok := c.presentFields[key]
 	return ok
 }
 
 func explicitZeroJSONValue(config HomerConfig, key string, current any) json.RawMessage {
-	if raw, ok := config.presentFields[key]; ok && strings.TrimSpace(string(raw)) == "null" {
+	if raw, ok := config.presentFields[key]; ok && strings.TrimSpace(string(raw)) == JSONNullValue {
 		return append(json.RawMessage(nil), raw...)
 	}
 	value, err := json.Marshal(current)
 	if err != nil {
-		return json.RawMessage("null")
+		return json.RawMessage(JSONNullValue)
 	}
 	return value
 }
@@ -630,7 +660,7 @@ func (s *Service) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*s = Service(decoded)
-	if _, ok := rawJSONField(data, "parameters"); ok {
+	if jsonFieldPresent(data, "parameters") {
 		s.legacyParameters = true
 	}
 	return captureJSONFields(data, &s.RawFields)
@@ -671,10 +701,10 @@ func (i *Item) UnmarshalJSON(data []byte) error {
 	if err := captureJSONFields(data, &i.RawFields); err != nil {
 		return err
 	}
-	if _, ok := rawJSONField(data, "updateIntervalMs"); ok {
+	if jsonFieldPresent(data, "updateIntervalMs") {
 		i.updateIntervalSet = true
 	}
-	if _, ok := rawJSONField(data, "parameters"); ok {
+	if jsonFieldPresent(data, "parameters") {
 		i.legacyParameters = true
 	}
 	return nil
@@ -744,26 +774,13 @@ func (i *Item) UnmarshalYAML(unmarshal func(any) error) error {
 	return nil
 }
 
-var serviceJSONFields = map[string]struct{}{
-	"name": {}, "icon": {}, "logo": {}, "class": {}, "items": {},
-	"parameters": {}, "nestedObjects": {},
-}
-
-var itemJSONFields = map[string]struct{}{
-	"name": {}, "logo": {}, "icon": {}, "subtitle": {}, "tag": {},
-	"keywords": {}, "url": {}, "target": {}, "tagstyle": {}, "type": {},
-	"background": {}, "class": {}, "endpoint": {}, "useCredentials": {},
-	"headers": {}, "successCodes": {}, "updateIntervalMs": {}, "quick": {},
-	"parameters": {}, "nestedObjects": {}, "arrayObjects": {},
-}
-
-func rawJSONField(data []byte, field string) (json.RawMessage, bool) {
+func jsonFieldPresent(data []byte, field string) bool {
 	var raw map[string]json.RawMessage
 	if json.Unmarshal(data, &raw) != nil {
-		return nil, false
+		return false
 	}
-	value, ok := raw[field]
-	return value, ok
+	_, ok := raw[field]
+	return ok
 }
 
 func captureUnknownJSONFields(data []byte, known map[string]struct{}, target *map[string]json.RawMessage) error {
@@ -998,13 +1015,13 @@ func getItemEndpoint(item *Item) string {
 func setServiceParameter(service *Service, key, value string) {
 	service.legacyParameters = true
 	switch strings.ToLower(key) {
-	case "name":
+	case NameField:
 		service.Name = value
-	case "icon":
+	case IconField:
 		service.Icon = value
-	case "logo":
+	case LogoField:
 		service.Logo = value
-	case "class":
+	case ClassField:
 		service.Class = value
 	}
 	if service.Parameters == nil {
@@ -1016,31 +1033,31 @@ func setServiceParameter(service *Service, key, value string) {
 func setItemParameter(item *Item, key, value string) {
 	item.legacyParameters = true
 	switch strings.ToLower(key) {
-	case "name":
+	case NameField:
 		item.Name = value
-	case "logo":
+	case LogoField:
 		item.Logo = value
-	case "icon":
+	case IconField:
 		item.Icon = value
-	case "subtitle":
+	case SubtitleField:
 		item.Subtitle = value
-	case "tag":
+	case TagField:
 		item.Tag = value
-	case "keywords":
+	case KeywordsField:
 		item.Keywords = value
-	case "url":
+	case URLField:
 		item.URL = value
-	case "target":
+	case TargetField:
 		item.Target = value
-	case "tagstyle":
+	case TagStyleField:
 		item.TagStyle = value
-	case "type":
+	case TypeField:
 		item.Type = value
-	case "background":
+	case BackgroundField:
 		item.Background = value
-	case "class":
+	case ClassField:
 		item.Class = value
-	case "endpoint":
+	case EndpointField:
 		item.Endpoint = value
 	}
 	if item.Parameters == nil {
@@ -1237,6 +1254,7 @@ func (c *ThemeColors) UnmarshalYAML(unmarshal func(any) error) error {
 	return captureYAMLFields(raw, &c.RawFields)
 }
 
+// MessageConfig contains dynamic message configuration.
 // +kubebuilder:object:generate=false
 type MessageConfig struct {
 	Url string `json:"url,omitempty" yaml:"url,omitempty"`
@@ -2657,7 +2675,6 @@ func updateOrAddServiceItems(homerConfig *HomerConfig, service Service, items []
 
 // smartMergeItems intelligently merges items prioritizing CRD foundation with discovered enhancements
 func smartMergeItems(existingItem, newItem *Item) {
-	// Initialize maps if they don't exist
 	if existingItem.Parameters == nil {
 		existingItem.Parameters = make(map[string]string)
 	}
@@ -2665,42 +2682,49 @@ func smartMergeItems(existingItem, newItem *Item) {
 		existingItem.NestedObjects = make(map[string]map[string]string)
 	}
 
-	// Smart merging rules based on item source
 	isCRDExisting := existingItem.Source == CRDSource
 	isDiscoveredNew := newItem.Source != CRDSource && newItem.Source != ""
+	mergeLegacyItemParameters(existingItem, newItem, isCRDExisting, isDiscoveredNew)
+	mergeDirectItemFields(existingItem, newItem, isCRDExisting, isDiscoveredNew)
+	mergeNestedItemObjects(existingItem, newItem, isCRDExisting)
+	mergeItemHeaders(existingItem, newItem, isCRDExisting)
+	mergeQuickLinks(existingItem, newItem)
+	mergeItemTypedFields(existingItem, newItem, isCRDExisting)
+	mergeItemRawFields(existingItem, newItem)
 
+	if isDiscoveredNew {
+		existingItem.LastUpdate = newItem.LastUpdate
+		if !isCRDExisting {
+			existingItem.Source = newItem.Source
+			existingItem.Namespace = newItem.Namespace
+		}
+	}
+}
+
+func mergeLegacyItemParameters(existingItem, newItem *Item, isCRDExisting, isDiscoveredNew bool) {
 	if newItem.Parameters != nil {
 		for key, value := range newItem.Parameters {
 			existingValue := itemFieldValue(existingItem, key)
-			// Smart precedence rules
 			switch key {
 			case NameField:
-				// CRD name always wins (foundation principle)
 				if !isCRDExisting {
 					setItemParameter(existingItem, key, value)
 				}
-			case URLField, "subtitle":
-				// Discovered items provide runtime URLs and subtitles (they know the actual endpoints)
-				if isDiscoveredNew {
-					setItemParameter(existingItem, key, value)
-				} else if existingValue == "" || !isCRDExisting {
-					// Fill in if empty OR if existing item is not from CRD (allow updates)
+			case URLField, SubtitleField:
+				if isDiscoveredNew || existingValue == "" || !isCRDExisting {
 					setItemParameter(existingItem, key, value)
 				}
 			default:
-				// For other fields, CRD takes precedence, discovered fills gaps
 				if isCRDExisting && existingValue != "" {
-					// Keep CRD value
 					continue
 				}
-				// Use new value (either CRD is empty or new item is CRD)
 				setItemParameter(existingItem, key, value)
 			}
 		}
 	}
+}
 
-	// A direct upstream item may not have a legacy Parameters map. Merge its
-	// modeled fields too, applying the same CRD-foundation/discovery rules.
+func mergeDirectItemFields(existingItem, newItem *Item, isCRDExisting, isDiscoveredNew bool) {
 	for key, value := range directItemStringFields(*newItem) {
 		if value == "" {
 			continue
@@ -2709,7 +2733,7 @@ func smartMergeItems(existingItem, newItem *Item) {
 		if key == NameField && isCRDExisting {
 			continue
 		}
-		if (key == URLField || key == "subtitle") && isDiscoveredNew {
+		if (key == URLField || key == SubtitleField) && isDiscoveredNew {
 			setItemParameter(existingItem, key, value)
 			continue
 		}
@@ -2717,8 +2741,9 @@ func smartMergeItems(existingItem, newItem *Item) {
 			setItemParameter(existingItem, key, value)
 		}
 	}
+}
 
-	// Merge nested objects (additive - both sources contribute)
+func mergeNestedItemObjects(existingItem, newItem *Item, isCRDExisting bool) {
 	if newItem.NestedObjects != nil {
 		for objectName, objectMap := range newItem.NestedObjects {
 			if existingItem.NestedObjects[objectName] == nil {
@@ -2733,7 +2758,9 @@ func smartMergeItems(existingItem, newItem *Item) {
 			}
 		}
 	}
+}
 
+func mergeItemHeaders(existingItem, newItem *Item, isCRDExisting bool) {
 	if newItem.Headers != nil {
 		if existingItem.Headers == nil {
 			existingItem.Headers = make(map[string]any)
@@ -2744,20 +2771,28 @@ func smartMergeItems(existingItem, newItem *Item) {
 			}
 		}
 	}
+}
+
+func mergeQuickLinks(existingItem, newItem *Item) {
 	if newItem.Quick != nil {
 		for _, quickLink := range newItem.Quick {
-			duplicate := false
-			for _, existingQuickLink := range existingItem.Quick {
-				if reflect.DeepEqual(existingQuickLink, quickLink) {
-					duplicate = true
-					break
-				}
-			}
-			if !duplicate {
+			if !quickLinkExists(existingItem.Quick, quickLink) {
 				existingItem.Quick = append(existingItem.Quick, *quickLink.DeepCopy())
 			}
 		}
 	}
+}
+
+func quickLinkExists(quickLinks []QuickLink, candidate QuickLink) bool {
+	for _, quickLink := range quickLinks {
+		if reflect.DeepEqual(quickLink, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func mergeItemTypedFields(existingItem, newItem *Item, isCRDExisting bool) {
 	if newItem.SuccessCodes != nil && (len(existingItem.SuccessCodes) == 0 || !isCRDExisting) {
 		existingItem.SuccessCodes = append([]int(nil), newItem.SuccessCodes...)
 	}
@@ -2769,6 +2804,9 @@ func smartMergeItems(existingItem, newItem *Item) {
 		existingItem.UseCredentials = new(bool)
 		*existingItem.UseCredentials = *newItem.UseCredentials
 	}
+}
+
+func mergeItemRawFields(existingItem, newItem *Item) {
 	for key, value := range newItem.RawFields {
 		if _, exists := existingItem.RawFields[key]; !exists {
 			if existingItem.RawFields == nil {
@@ -2777,46 +2815,35 @@ func smartMergeItems(existingItem, newItem *Item) {
 			existingItem.RawFields[key] = append(json.RawMessage(nil), value...)
 		}
 	}
-
-	// Update metadata intelligently
-	if isDiscoveredNew {
-		// Discovered items bring fresh runtime data
-		existingItem.LastUpdate = newItem.LastUpdate
-		// But preserve the fact that this was originally from CRD if applicable
-		if !isCRDExisting {
-			existingItem.Source = newItem.Source
-			existingItem.Namespace = newItem.Namespace
-		}
-	}
 }
 
 func itemFieldValue(item *Item, key string) string {
 	switch strings.ToLower(key) {
-	case "name":
+	case NameField:
 		return item.Name
-	case "logo":
+	case LogoField:
 		return item.Logo
-	case "icon":
+	case IconField:
 		return item.Icon
-	case "subtitle":
+	case SubtitleField:
 		return item.Subtitle
-	case "tag":
+	case TagField:
 		return item.Tag
-	case "keywords":
+	case KeywordsField:
 		return item.Keywords
-	case "url":
+	case URLField:
 		return item.URL
-	case "target":
+	case TargetField:
 		return item.Target
-	case "tagstyle":
+	case TagStyleField:
 		return item.TagStyle
-	case "type":
+	case TypeField:
 		return item.Type
-	case "background":
+	case BackgroundField:
 		return item.Background
-	case "class":
+	case ClassField:
 		return item.Class
-	case "endpoint":
+	case EndpointField:
 		return item.Endpoint
 	default:
 		return getParameter(item.Parameters, key)
@@ -2825,19 +2852,19 @@ func itemFieldValue(item *Item, key string) string {
 
 func directItemStringFields(item Item) map[string]string {
 	return map[string]string{
-		"name":       item.Name,
-		"logo":       item.Logo,
-		"icon":       item.Icon,
-		"subtitle":   item.Subtitle,
-		"tag":        item.Tag,
-		"keywords":   item.Keywords,
-		"url":        item.URL,
-		"target":     item.Target,
-		"tagstyle":   item.TagStyle,
-		"type":       item.Type,
-		"background": item.Background,
-		"class":      item.Class,
-		"endpoint":   item.Endpoint,
+		NameField:       item.Name,
+		LogoField:       item.Logo,
+		IconField:       item.Icon,
+		SubtitleField:   item.Subtitle,
+		TagField:        item.Tag,
+		KeywordsField:   item.Keywords,
+		URLField:        item.URL,
+		TargetField:     item.Target,
+		TagStyleField:   item.TagStyle,
+		TypeField:       item.Type,
+		BackgroundField: item.Background,
+		ClassField:      item.Class,
+		EndpointField:   item.Endpoint,
 	}
 }
 
@@ -2979,7 +3006,7 @@ func processDynamicParameter(item *Item, fieldName, value string, validationLeve
 			value = strings.TrimSpace(value)
 		}
 		setKnownItemParameterOrStore(item, fieldName, value)
-	case "url", "target", WarningValueField, DangerValueField:
+	case URLField, TargetField, WarningValueField, DangerValueField:
 		// Handle validation for these fields
 		if err := validateAnnotationValue(fieldName, value, validationLevel); err != nil &&
 			validationLevel == ValidationLevelStrict {
@@ -2997,7 +3024,7 @@ func processDynamicParameter(item *Item, fieldName, value string, validationLeve
 
 func setKnownItemParameterOrStore(item *Item, fieldName, value string) {
 	switch fieldName {
-	case "name", "logo", "icon", "subtitle", "tag", "keywords", "url", "target", "tagstyle", "type", "background", "class", "endpoint":
+	case NameField, LogoField, IconField, SubtitleField, TagField, KeywordsField, URLField, TargetField, TagStyleField, TypeField, BackgroundField, ClassField, EndpointField:
 		setItemParameter(item, fieldName, value)
 	default:
 		item.Parameters[fieldName] = value
@@ -3336,7 +3363,7 @@ func getNamespaceOrDefault(namespace string) string {
 func getServiceNameFromAnnotations(annotations map[string]string) string {
 	for key, value := range annotations {
 		if fieldName, ok := strings.CutPrefix(key, "service.homer.rajsingh.info/"); ok {
-			if strings.ToLower(fieldName) == "name" && value != "" {
+			if strings.ToLower(fieldName) == NameField && value != "" {
 				return value
 			}
 		}
@@ -3783,7 +3810,7 @@ func addBasicFields(configMap map[string]any, config *HomerConfig) {
 		configMap["icon"] = config.Icon
 	}
 	if config.Header || config.headerSet {
-		if raw, ok := config.presentFields["header"]; ok && strings.TrimSpace(string(raw)) == "null" {
+		if raw, ok := config.presentFields["header"]; ok && strings.TrimSpace(string(raw)) == JSONNullValue {
 			configMap["header"] = nil
 		} else {
 			configMap["header"] = config.Header
@@ -3880,7 +3907,7 @@ func addHotkeyConfig(configMap map[string]any, config *HomerConfig) {
 // addColorsConfig adds colors configuration
 func addColorsConfig(configMap map[string]any, config *HomerConfig) {
 	if themeColorsConfigured(config.Colors.Light) || themeColorsConfigured(config.Colors.Dark) || len(config.Colors.RawFields) > 0 {
-		if raw, ok := config.presentFields["colors"]; ok && strings.TrimSpace(string(raw)) == "null" {
+		if raw, ok := config.presentFields["colors"]; ok && strings.TrimSpace(string(raw)) == JSONNullValue {
 			configMap["colors"] = nil
 			return
 		}
@@ -3929,7 +3956,7 @@ func themeColorsConfigured(colors ThemeColors) bool {
 // addDefaultsConfig adds defaults configuration
 func addDefaultsConfig(configMap map[string]any, config *HomerConfig) {
 	if config.Defaults.ColorTheme != "" || config.Defaults.Layout != "" || len(config.Defaults.RawFields) > 0 {
-		if raw, ok := config.presentFields["defaults"]; ok && strings.TrimSpace(string(raw)) == "null" {
+		if raw, ok := config.presentFields["defaults"]; ok && strings.TrimSpace(string(raw)) == JSONNullValue {
 			configMap["defaults"] = nil
 			return
 		}
@@ -3952,7 +3979,7 @@ func addDefaultsConfig(configMap map[string]any, config *HomerConfig) {
 // addProxyConfig adds proxy configuration
 func addProxyConfig(configMap map[string]any, config *HomerConfig) {
 	if config.Proxy.UseCredentials || len(config.Proxy.Headers) > 0 || len(config.Proxy.RawFields) > 0 || config.proxySet {
-		if raw, ok := config.presentFields["proxy"]; ok && strings.TrimSpace(string(raw)) == "null" {
+		if raw, ok := config.presentFields["proxy"]; ok && strings.TrimSpace(string(raw)) == JSONNullValue {
 			configMap["proxy"] = nil
 			return
 		}
@@ -3976,7 +4003,7 @@ func addMessageConfig(configMap map[string]any, config *HomerConfig) {
 		config.Message.Icon != "" || config.Message.Style != "" ||
 		config.Message.RefreshInterval != nil || len(config.Message.Mapping) > 0 ||
 		len(config.Message.RawFields) > 0 || config.messageSet {
-		if raw, ok := config.presentFields["message"]; ok && strings.TrimSpace(string(raw)) == "null" {
+		if raw, ok := config.presentFields["message"]; ok && strings.TrimSpace(string(raw)) == JSONNullValue {
 			configMap["message"] = nil
 			return
 		}

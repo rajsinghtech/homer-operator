@@ -24,104 +24,104 @@ import (
 // DeepCopyInto is kept handwritten because controller-gen cannot generate a
 // safe copy for interface-valued upstream Homer fields. The generated copier
 // for Dashboard calls this method when it copies HomerConfig.
-func (in *HomerConfig) DeepCopyInto(out *HomerConfig) {
-	*out = *in
-	out.Columns = deepCopyValue(in.Columns)
-	out.UpdateIntervalMs = deepCopyValue(in.UpdateIntervalMs)
-	out.footerValue = deepCopyValue(in.footerValue)
+func (c *HomerConfig) DeepCopyInto(out *HomerConfig) {
+	*out = *c
+	out.Columns = deepCopyValue(c.Columns)
+	out.UpdateIntervalMs = deepCopyValue(c.UpdateIntervalMs)
+	out.footerValue = deepCopyValue(c.footerValue)
 
-	if in.ConnectivityCheck != nil {
+	if c.ConnectivityCheck != nil {
 		out.ConnectivityCheck = new(bool)
-		*out.ConnectivityCheck = *in.ConnectivityCheck
+		*out.ConnectivityCheck = *c.ConnectivityCheck
 	}
-	if in.Stylesheet != nil {
-		out.Stylesheet = append([]string(nil), in.Stylesheet...)
+	if c.Stylesheet != nil {
+		out.Stylesheet = append([]string(nil), c.Stylesheet...)
 	}
-	in.Hotkey.DeepCopyInto(&out.Hotkey)
-	in.Defaults.DeepCopyInto(&out.Defaults)
-	in.Colors.DeepCopyInto(&out.Colors)
-	if in.Proxy.Headers != nil {
-		out.Proxy.Headers = cloneAnyMap(in.Proxy.Headers)
+	c.Hotkey.DeepCopyInto(&out.Hotkey)
+	c.Defaults.DeepCopyInto(&out.Defaults)
+	c.Colors.DeepCopyInto(&out.Colors)
+	if c.Proxy.Headers != nil {
+		out.Proxy.Headers = cloneAnyMap(c.Proxy.Headers)
 	}
-	if in.Proxy.RawFields != nil {
-		out.Proxy.RawFields = cloneRawFields(in.Proxy.RawFields)
+	if c.Proxy.RawFields != nil {
+		out.Proxy.RawFields = cloneRawFields(c.Proxy.RawFields)
 	}
-	if in.Message.Mapping != nil {
-		out.Message.Mapping = cloneAnyMap(in.Message.Mapping)
+	if c.Message.Mapping != nil {
+		out.Message.Mapping = cloneAnyMap(c.Message.Mapping)
 	}
-	if in.Message.RawFields != nil {
-		out.Message.RawFields = cloneRawFields(in.Message.RawFields)
+	if c.Message.RawFields != nil {
+		out.Message.RawFields = cloneRawFields(c.Message.RawFields)
 	}
-	if in.Hotkey.RawFields != nil {
-		out.Hotkey.RawFields = cloneRawFields(in.Hotkey.RawFields)
+	if c.Hotkey.RawFields != nil {
+		out.Hotkey.RawFields = cloneRawFields(c.Hotkey.RawFields)
 	}
-	if in.Links != nil {
-		out.Links = make([]Link, len(in.Links))
-		for index := range in.Links {
-			out.Links[index] = in.Links[index]
-			out.Links[index].RawFields = cloneRawFields(in.Links[index].RawFields)
+	if c.Links != nil {
+		out.Links = make([]Link, len(c.Links))
+		for index := range c.Links {
+			out.Links[index] = c.Links[index]
+			out.Links[index].RawFields = cloneRawFields(c.Links[index].RawFields)
 		}
 	}
-	if in.Services != nil {
-		out.Services = make([]Service, len(in.Services))
-		for i := range in.Services {
-			in.Services[i].DeepCopyInto(&out.Services[i])
+	if c.Services != nil {
+		out.Services = make([]Service, len(c.Services))
+		for i := range c.Services {
+			c.Services[i].DeepCopyInto(&out.Services[i])
 		}
 	}
-	if in.RawFields != nil {
-		out.RawFields = cloneRawFields(in.RawFields)
+	if c.RawFields != nil {
+		out.RawFields = cloneRawFields(c.RawFields)
 	}
-	if in.presentFields != nil {
-		out.presentFields = cloneRawFields(in.presentFields)
+	if c.presentFields != nil {
+		out.presentFields = cloneRawFields(c.presentFields)
 	}
 }
 
 // DeepCopy creates an independent copy of HomerConfig.
-func (in *HomerConfig) DeepCopy() *HomerConfig {
-	if in == nil {
+func (c *HomerConfig) DeepCopy() *HomerConfig {
+	if c == nil {
 		return nil
 	}
 	out := new(HomerConfig)
-	in.DeepCopyInto(out)
+	c.DeepCopyInto(out)
 	return out
 }
 
 // DeepCopyInto is handwritten for the same reason as HomerConfig.DeepCopyInto:
 // updateIntervalMs is intentionally open-ended so it can match upstream
 // Homer’s numeric, string, boolean, and null forms.
-func (in *Item) DeepCopyInto(out *Item) {
-	*out = *in
-	out.UpdateIntervalMs = deepCopyValue(in.UpdateIntervalMs)
+func (i *Item) DeepCopyInto(out *Item) {
+	*out = *i
+	out.UpdateIntervalMs = deepCopyValue(i.UpdateIntervalMs)
 
-	if in.UseCredentials != nil {
+	if i.UseCredentials != nil {
 		out.UseCredentials = new(bool)
-		*out.UseCredentials = *in.UseCredentials
+		*out.UseCredentials = *i.UseCredentials
 	}
-	if in.Headers != nil {
-		out.Headers = cloneAnyMap(in.Headers)
+	if i.Headers != nil {
+		out.Headers = cloneAnyMap(i.Headers)
 	}
-	if in.SuccessCodes != nil {
-		out.SuccessCodes = append([]int(nil), in.SuccessCodes...)
+	if i.SuccessCodes != nil {
+		out.SuccessCodes = append([]int(nil), i.SuccessCodes...)
 	}
-	if in.Quick != nil {
-		out.Quick = make([]QuickLink, len(in.Quick))
-		for index := range in.Quick {
-			out.Quick[index] = in.Quick[index]
-			out.Quick[index].RawFields = cloneRawFields(in.Quick[index].RawFields)
+	if i.Quick != nil {
+		out.Quick = make([]QuickLink, len(i.Quick))
+		for index := range i.Quick {
+			out.Quick[index] = i.Quick[index]
+			out.Quick[index].RawFields = cloneRawFields(i.Quick[index].RawFields)
 		}
 	}
-	if in.Parameters != nil {
-		out.Parameters = cloneStringMap(in.Parameters)
+	if i.Parameters != nil {
+		out.Parameters = cloneStringMap(i.Parameters)
 	}
-	if in.NestedObjects != nil {
-		out.NestedObjects = make(map[string]map[string]string, len(in.NestedObjects))
-		for key, value := range in.NestedObjects {
+	if i.NestedObjects != nil {
+		out.NestedObjects = make(map[string]map[string]string, len(i.NestedObjects))
+		for key, value := range i.NestedObjects {
 			out.NestedObjects[key] = cloneStringMap(value)
 		}
 	}
-	if in.ArrayObjects != nil {
-		out.ArrayObjects = make(map[string][]map[string]string, len(in.ArrayObjects))
-		for key, values := range in.ArrayObjects {
+	if i.ArrayObjects != nil {
+		out.ArrayObjects = make(map[string][]map[string]string, len(i.ArrayObjects))
+		for key, values := range i.ArrayObjects {
 			if values == nil {
 				continue
 			}
@@ -131,58 +131,58 @@ func (in *Item) DeepCopyInto(out *Item) {
 			}
 		}
 	}
-	if in.RawFields != nil {
-		out.RawFields = cloneRawFields(in.RawFields)
+	if i.RawFields != nil {
+		out.RawFields = cloneRawFields(i.RawFields)
 	}
 }
 
 // DeepCopy creates an independent copy of Item.
-func (in *Item) DeepCopy() *Item {
-	if in == nil {
+func (i *Item) DeepCopy() *Item {
+	if i == nil {
 		return nil
 	}
 	out := new(Item)
-	in.DeepCopyInto(out)
+	i.DeepCopyInto(out)
 	return out
 }
 
 // DeepCopyInto is handwritten because the open header/mapping values use
 // interface-backed JSON values that controller-gen cannot copy safely.
-func (in *ProxyConfig) DeepCopyInto(out *ProxyConfig) {
-	*out = *in
-	if in.Headers != nil {
-		out.Headers = cloneAnyMap(in.Headers)
+func (p *ProxyConfig) DeepCopyInto(out *ProxyConfig) {
+	*out = *p
+	if p.Headers != nil {
+		out.Headers = cloneAnyMap(p.Headers)
 	}
-	if in.RawFields != nil {
-		out.RawFields = cloneRawFields(in.RawFields)
+	if p.RawFields != nil {
+		out.RawFields = cloneRawFields(p.RawFields)
 	}
 }
 
-func (in *ProxyConfig) DeepCopy() *ProxyConfig {
-	if in == nil {
+func (p *ProxyConfig) DeepCopy() *ProxyConfig {
+	if p == nil {
 		return nil
 	}
 	out := new(ProxyConfig)
-	in.DeepCopyInto(out)
+	p.DeepCopyInto(out)
 	return out
 }
 
-func (in *MessageConfig) DeepCopyInto(out *MessageConfig) {
-	*out = *in
-	if in.Mapping != nil {
-		out.Mapping = cloneAnyMap(in.Mapping)
+func (m *MessageConfig) DeepCopyInto(out *MessageConfig) {
+	*out = *m
+	if m.Mapping != nil {
+		out.Mapping = cloneAnyMap(m.Mapping)
 	}
-	if in.RawFields != nil {
-		out.RawFields = cloneRawFields(in.RawFields)
+	if m.RawFields != nil {
+		out.RawFields = cloneRawFields(m.RawFields)
 	}
 }
 
-func (in *MessageConfig) DeepCopy() *MessageConfig {
-	if in == nil {
+func (m *MessageConfig) DeepCopy() *MessageConfig {
+	if m == nil {
 		return nil
 	}
 	out := new(MessageConfig)
-	in.DeepCopyInto(out)
+	m.DeepCopyInto(out)
 	return out
 }
 
