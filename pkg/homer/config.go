@@ -92,31 +92,41 @@ var (
 
 // HomerConfig contains base configuration for Homer dashboard.
 type HomerConfig struct {
-	Title         string `json:"title,omitempty" yaml:"title,omitempty"`
-	Subtitle      string `json:"subtitle,omitempty" yaml:"subtitle,omitempty"`
+	// +nullable
+	Title string `json:"title,omitempty" yaml:"title,omitempty"`
+	// +nullable
+	Subtitle string `json:"subtitle,omitempty" yaml:"subtitle,omitempty"`
+	// +nullable
 	DocumentTitle string `json:"documentTitle,omitempty" yaml:"documentTitle,omitempty"`
-	Logo          string `json:"logo,omitempty" yaml:"logo,omitempty"`
-	Icon          string `json:"icon,omitempty" yaml:"icon,omitempty"`
-	Header        bool   `json:"header,omitempty" yaml:"header,omitempty"`
+	// +nullable
+	Logo string `json:"logo,omitempty" yaml:"logo,omitempty"`
+	// +nullable
+	Icon string `json:"icon,omitempty" yaml:"icon,omitempty"`
+	// +nullable
+	Header bool `json:"header,omitempty" yaml:"header,omitempty"`
 	// Footer can be false to hide the footer or a string containing HTML content.
 	// +kubebuilder:validation:Type=""
 	// +kubebuilder:pruning:PreserveUnknownFields
+	// +nullable
 	Footer string `json:"footer,omitempty" yaml:"footer,omitempty"`
 	// Columns accepts both the numeric and string forms supported by Homer
 	// (for example, 3 and "3").
 	// +kubebuilder:validation:Schemaless
 	// +kubebuilder:pruning:PreserveUnknownFields
+	// +nullable
 	Columns any `json:"columns,omitempty" yaml:"columns,omitempty"`
 	// +nullable
 	ConnectivityCheck *bool `json:"connectivityCheck,omitempty" yaml:"connectivityCheck,omitempty"`
 	// +nullable
 	Hotkey HotkeyConfig `json:"hotkey,omitempty" yaml:"hotkey,omitempty"`
-	Theme  string       `json:"theme,omitempty" yaml:"theme,omitempty"`
+	// +nullable
+	Theme string `json:"theme,omitempty" yaml:"theme,omitempty"`
 	// Stylesheet accepts either one path or an array of paths, matching
 	// upstream Homer. Keep the value open so both forms (and explicit null)
 	// survive CRD and external-config round trips.
 	// +kubebuilder:validation:Schemaless
 	// +kubebuilder:pruning:PreserveUnknownFields
+	// +nullable
 	Stylesheet any `json:"stylesheet,omitempty" yaml:"stylesheet,omitempty"`
 	// +nullable
 	Colors ColorConfig `json:"colors,omitempty" yaml:"colors,omitempty"`
@@ -129,12 +139,14 @@ type HomerConfig struct {
 	// +nullable
 	Links []Link `json:"links,omitempty" yaml:"links,omitempty"`
 	// +nullable
-	Services       []Service `json:"services,omitempty" yaml:"services,omitempty"`
-	ExternalConfig string    `json:"externalConfig,omitempty" yaml:"externalConfig,omitempty"`
+	Services []Service `json:"services,omitempty" yaml:"services,omitempty"`
+	// +nullable
+	ExternalConfig string `json:"externalConfig,omitempty" yaml:"externalConfig,omitempty"`
 	// UpdateIntervalMs is the default refresh interval for Homer smart cards.
 	// A value of zero disables automatic refresh, as in upstream Homer.
 	// +kubebuilder:validation:Schemaless
 	// +kubebuilder:pruning:PreserveUnknownFields
+	// +nullable
 	UpdateIntervalMs any `json:"updateIntervalMs,omitempty" yaml:"updateIntervalMs,omitempty"`
 
 	// RawFields preserves root-level Homer options that are newer than the
@@ -463,9 +475,11 @@ func hasYAMLKey(raw map[string]any, key string) bool {
 // +kubebuilder:object:generate=false
 // +kubebuilder:pruning:PreserveUnknownFields
 type ProxyConfig struct {
+	// +nullable
 	UseCredentials bool `json:"useCredentials,omitempty" yaml:"useCredentials,omitempty"`
 	// +kubebuilder:validation:Schemaless
 	// +kubebuilder:pruning:PreserveUnknownFields
+	// +nullable
 	Headers map[string]any `json:"headers,omitempty" yaml:"headers,omitempty"`
 	// RawFields retains explicit empty/false values and newer proxy options
 	// that upstream Homer may add before the operator models them.
@@ -508,7 +522,9 @@ func (p *ProxyConfig) UnmarshalYAML(unmarshal func(any) error) error {
 // DefaultConfig contains optional Homer default settings.
 // +kubebuilder:pruning:PreserveUnknownFields
 type DefaultConfig struct {
-	Layout     string                     `json:"layout,omitempty" yaml:"layout,omitempty"`
+	// +nullable
+	Layout string `json:"layout,omitempty" yaml:"layout,omitempty"`
+	// +nullable
 	ColorTheme string                     `json:"colorTheme,omitempty" yaml:"colorTheme,omitempty"`
 	RawFields  map[string]json.RawMessage `json:"-" yaml:"-"`
 }
@@ -565,27 +581,40 @@ func (d DefaultConfig) MarshalYAML() (any, error) {
 // and backwards compatibility with earlier operator releases.
 // +kubebuilder:pruning:PreserveUnknownFields
 type Service struct {
-	Name  string `json:"name,omitempty" yaml:"name,omitempty"`
-	Icon  string `json:"icon,omitempty" yaml:"icon,omitempty"`
-	Logo  string `json:"logo,omitempty" yaml:"logo,omitempty"`
+	// +nullable
+	Name string `json:"name,omitempty" yaml:"name,omitempty"`
+	// +nullable
+	Icon string `json:"icon,omitempty" yaml:"icon,omitempty"`
+	// +nullable
+	Logo string `json:"logo,omitempty" yaml:"logo,omitempty"`
+	// +nullable
 	Class string `json:"class,omitempty" yaml:"class,omitempty"`
 	// +nullable
-	Items            []Item                       `json:"items,omitempty" yaml:"items,omitempty"`
-	Parameters       map[string]string            `json:"parameters,omitempty" yaml:"parameters,omitempty"`
+	Items []Item `json:"items,omitempty" yaml:"items,omitempty"`
+	// +nullable
+	Parameters map[string]string `json:"parameters,omitempty" yaml:"parameters,omitempty"`
+	// +nullable
 	NestedObjects    map[string]map[string]string `json:"nestedObjects,omitempty" yaml:"nestedObjects,omitempty"`
 	RawFields        map[string]json.RawMessage   `json:"-" yaml:"-"`
 	legacyParameters bool                         `json:"-" yaml:"-"`
+	objectSet        bool                         `json:"-" yaml:"-"`
 }
 
 // QuickLink is an upstream Homer quick link entry.
 // +kubebuilder:pruning:PreserveUnknownFields
 type QuickLink struct {
-	Name      string                     `json:"name,omitempty" yaml:"name,omitempty"`
-	Icon      string                     `json:"icon,omitempty" yaml:"icon,omitempty"`
-	URL       string                     `json:"url,omitempty" yaml:"url,omitempty"`
-	Target    string                     `json:"target,omitempty" yaml:"target,omitempty"`
+	// +nullable
+	Name string `json:"name,omitempty" yaml:"name,omitempty"`
+	// +nullable
+	Icon string `json:"icon,omitempty" yaml:"icon,omitempty"`
+	// +nullable
+	URL string `json:"url,omitempty" yaml:"url,omitempty"`
+	// +nullable
+	Target string `json:"target,omitempty" yaml:"target,omitempty"`
+	// +nullable
 	Color     string                     `json:"color,omitempty" yaml:"color,omitempty"`
 	RawFields map[string]json.RawMessage `json:"-" yaml:"-"`
+	objectSet bool                       `json:"-" yaml:"-"`
 }
 
 func (q *QuickLink) UnmarshalJSON(data []byte) error {
@@ -595,6 +624,7 @@ func (q *QuickLink) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*q = QuickLink(decoded)
+	q.objectSet = true
 	return captureJSONFields(data, &q.RawFields)
 }
 
@@ -614,6 +644,7 @@ func (q *QuickLink) UnmarshalYAML(unmarshal func(any) error) error {
 		return err
 	}
 	*q = QuickLink(decoded)
+	q.objectSet = true
 	var raw map[string]any
 	if err := unmarshal(&raw); err != nil {
 		return err
@@ -648,32 +679,51 @@ func (q QuickLink) MarshalYAML() (any, error) {
 // directly; RawFields preserves smart-card-specific and future Homer fields.
 // +kubebuilder:pruning:PreserveUnknownFields
 type Item struct {
-	Name           string `json:"name,omitempty" yaml:"name,omitempty"`
-	Logo           string `json:"logo,omitempty" yaml:"logo,omitempty"`
-	Icon           string `json:"icon,omitempty" yaml:"icon,omitempty"`
-	Subtitle       string `json:"subtitle,omitempty" yaml:"subtitle,omitempty"`
-	Tag            string `json:"tag,omitempty" yaml:"tag,omitempty"`
-	Keywords       string `json:"keywords,omitempty" yaml:"keywords,omitempty"`
-	URL            string `json:"url,omitempty" yaml:"url,omitempty"`
-	Target         string `json:"target,omitempty" yaml:"target,omitempty"`
-	TagStyle       string `json:"tagstyle,omitempty" yaml:"tagstyle,omitempty"`
-	Type           string `json:"type,omitempty" yaml:"type,omitempty"`
-	Background     string `json:"background,omitempty" yaml:"background,omitempty"`
-	Class          string `json:"class,omitempty" yaml:"class,omitempty"`
-	Endpoint       string `json:"endpoint,omitempty" yaml:"endpoint,omitempty"`
-	UseCredentials *bool  `json:"useCredentials,omitempty" yaml:"useCredentials,omitempty"`
+	// +nullable
+	Name string `json:"name,omitempty" yaml:"name,omitempty"`
+	// +nullable
+	Logo string `json:"logo,omitempty" yaml:"logo,omitempty"`
+	// +nullable
+	Icon string `json:"icon,omitempty" yaml:"icon,omitempty"`
+	// +nullable
+	Subtitle string `json:"subtitle,omitempty" yaml:"subtitle,omitempty"`
+	// +nullable
+	Tag string `json:"tag,omitempty" yaml:"tag,omitempty"`
+	// +nullable
+	Keywords string `json:"keywords,omitempty" yaml:"keywords,omitempty"`
+	// +nullable
+	URL string `json:"url,omitempty" yaml:"url,omitempty"`
+	// +nullable
+	Target string `json:"target,omitempty" yaml:"target,omitempty"`
+	// +nullable
+	TagStyle string `json:"tagstyle,omitempty" yaml:"tagstyle,omitempty"`
+	// +nullable
+	Type string `json:"type,omitempty" yaml:"type,omitempty"`
+	// +nullable
+	Background string `json:"background,omitempty" yaml:"background,omitempty"`
+	// +nullable
+	Class string `json:"class,omitempty" yaml:"class,omitempty"`
+	// +nullable
+	Endpoint string `json:"endpoint,omitempty" yaml:"endpoint,omitempty"`
+	// +nullable
+	UseCredentials *bool `json:"useCredentials,omitempty" yaml:"useCredentials,omitempty"`
 	// +kubebuilder:validation:Schemaless
 	// +kubebuilder:pruning:PreserveUnknownFields
+	// +nullable
 	Headers map[string]any `json:"headers,omitempty" yaml:"headers,omitempty"`
 	// +nullable
 	SuccessCodes []int `json:"successCodes,omitempty" yaml:"successCodes,omitempty"`
 	// +kubebuilder:validation:Schemaless
 	// +kubebuilder:pruning:PreserveUnknownFields
+	// +nullable
 	UpdateIntervalMs any `json:"updateIntervalMs,omitempty" yaml:"updateIntervalMs,omitempty"`
 	// +nullable
-	Quick              []QuickLink                    `json:"quick,omitempty" yaml:"quick,omitempty"`
-	Parameters         map[string]string              `json:"parameters,omitempty" yaml:"parameters,omitempty"`
-	NestedObjects      map[string]map[string]string   `json:"nestedObjects,omitempty" yaml:"nestedObjects,omitempty"`
+	Quick []QuickLink `json:"quick,omitempty" yaml:"quick,omitempty"`
+	// +nullable
+	Parameters map[string]string `json:"parameters,omitempty" yaml:"parameters,omitempty"`
+	// +nullable
+	NestedObjects map[string]map[string]string `json:"nestedObjects,omitempty" yaml:"nestedObjects,omitempty"`
+	// +nullable
 	ArrayObjects       map[string][]map[string]string `json:"arrayObjects,omitempty" yaml:"arrayObjects,omitempty"`
 	RawFields          map[string]json.RawMessage     `json:"-" yaml:"-"`
 	Source             string                         `json:"-" yaml:"-"`
@@ -682,6 +732,7 @@ type Item struct {
 	updateIntervalSet  bool                           `json:"-" yaml:"-"`
 	legacyParameters   bool                           `json:"-" yaml:"-"`
 	parametersInjected bool                           `json:"-" yaml:"-"`
+	objectSet          bool                           `json:"-" yaml:"-"`
 }
 
 // UnmarshalJSON captures unknown upstream item fields so Kubernetes and
@@ -693,6 +744,7 @@ func (s *Service) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*s = Service(decoded)
+	s.objectSet = true
 	if jsonFieldPresent(data, "parameters") {
 		s.legacyParameters = true
 	}
@@ -708,6 +760,7 @@ func (s *Service) UnmarshalYAML(unmarshal func(any) error) error {
 		return err
 	}
 	*s = Service(decoded)
+	s.objectSet = true
 	var rawKeys map[string]any
 	if err := unmarshal(&rawKeys); err != nil {
 		return err
@@ -731,6 +784,7 @@ func (i *Item) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*i = Item(decoded)
+	i.objectSet = true
 	if err := captureJSONFields(data, &i.RawFields); err != nil {
 		return err
 	}
@@ -791,6 +845,7 @@ func (i *Item) UnmarshalYAML(unmarshal func(any) error) error {
 		return err
 	}
 	*i = Item(decoded)
+	i.objectSet = true
 	var raw map[string]any
 	if err := unmarshal(&raw); err != nil {
 		return err
@@ -884,11 +939,16 @@ func decodeRawField(value json.RawMessage) any {
 // Link describes a link in a Homer service configuration.
 // +kubebuilder:pruning:PreserveUnknownFields
 type Link struct {
-	Name      string                     `json:"name,omitempty" yaml:"name,omitempty"`
-	Icon      string                     `json:"icon,omitempty" yaml:"icon,omitempty"`
-	Url       string                     `json:"url,omitempty" yaml:"url,omitempty"`
+	// +nullable
+	Name string `json:"name,omitempty" yaml:"name,omitempty"`
+	// +nullable
+	Icon string `json:"icon,omitempty" yaml:"icon,omitempty"`
+	// +nullable
+	Url string `json:"url,omitempty" yaml:"url,omitempty"`
+	// +nullable
 	Target    string                     `json:"target,omitempty" yaml:"target,omitempty"`
 	RawFields map[string]json.RawMessage `json:"-" yaml:"-"`
+	objectSet bool                       `json:"-" yaml:"-"`
 }
 
 func (l *Link) UnmarshalJSON(data []byte) error {
@@ -898,6 +958,7 @@ func (l *Link) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*l = Link(decoded)
+	l.objectSet = true
 	return captureJSONFields(data, &l.RawFields)
 }
 
@@ -917,6 +978,7 @@ func (l *Link) UnmarshalYAML(unmarshal func(any) error) error {
 		return err
 	}
 	*l = Link(decoded)
+	l.objectSet = true
 	var raw map[string]any
 	if err := unmarshal(&raw); err != nil {
 		return err
@@ -1127,7 +1189,7 @@ func cleanupHomerConfig(config *HomerConfig) {
 		if len(service.Items) == 0 {
 			// Keep an explicitly configured empty service group. Homer permits
 			// groups without a name and treats the items key as optional.
-			if len(service.RawFields) == 0 && service.Name == "" && getParameter(service.Parameters, "name") == "" {
+			if !service.objectSet && len(service.RawFields) == 0 && service.Name == "" && getParameter(service.Parameters, "name") == "" {
 				continue
 			}
 		}
@@ -1150,7 +1212,7 @@ func itemHasConfiguration(item *Item) bool {
 	if item == nil {
 		return false
 	}
-	return item.Logo != "" || item.Icon != "" || item.Subtitle != "" ||
+	return item.objectSet || item.Logo != "" || item.Icon != "" || item.Subtitle != "" ||
 		item.Tag != "" || item.Keywords != "" || item.URL != "" ||
 		item.Target != "" || item.TagStyle != "" || item.Type != "" ||
 		item.Background != "" || item.Class != "" || item.Endpoint != "" ||
@@ -1163,6 +1225,7 @@ func itemHasConfiguration(item *Item) bool {
 // HotkeyConfig contains Homer keyboard shortcut settings.
 // +kubebuilder:pruning:PreserveUnknownFields
 type HotkeyConfig struct {
+	// +nullable
 	Search    string                     `json:"search,omitempty" yaml:"search,omitempty"`
 	RawFields map[string]json.RawMessage `json:"-" yaml:"-"`
 }
@@ -1203,7 +1266,9 @@ func (h *HotkeyConfig) UnmarshalYAML(unmarshal func(any) error) error {
 // ColorConfig contains color scheme configuration.
 // +kubebuilder:pruning:PreserveUnknownFields
 type ColorConfig struct {
-	Light     ThemeColors                `json:"light,omitempty" yaml:"light,omitempty"`
+	// +nullable
+	Light ThemeColors `json:"light,omitempty" yaml:"light,omitempty"`
+	// +nullable
 	Dark      ThemeColors                `json:"dark,omitempty" yaml:"dark,omitempty"`
 	RawFields map[string]json.RawMessage `json:"-" yaml:"-"`
 }
@@ -1244,20 +1309,33 @@ func (c *ColorConfig) UnmarshalYAML(unmarshal func(any) error) error {
 // ThemeColors contains color definitions for a theme.
 // +kubebuilder:pruning:PreserveUnknownFields
 type ThemeColors struct {
-	HighlightPrimary   string                     `json:"highlight-primary,omitempty" yaml:"highlight-primary,omitempty"`
-	HighlightSecondary string                     `json:"highlight-secondary,omitempty" yaml:"highlight-secondary,omitempty"`
-	HighlightHover     string                     `json:"highlight-hover,omitempty" yaml:"highlight-hover,omitempty"`
-	Background         string                     `json:"background,omitempty" yaml:"background,omitempty"`
-	CardBackground     string                     `json:"card-background,omitempty" yaml:"card-background,omitempty"`
-	Text               string                     `json:"text,omitempty" yaml:"text,omitempty"`
-	TextHeader         string                     `json:"text-header,omitempty" yaml:"text-header,omitempty"`
-	TextTitle          string                     `json:"text-title,omitempty" yaml:"text-title,omitempty"`
-	TextSubtitle       string                     `json:"text-subtitle,omitempty" yaml:"text-subtitle,omitempty"`
-	CardShadow         string                     `json:"card-shadow,omitempty" yaml:"card-shadow,omitempty"`
-	Link               string                     `json:"link,omitempty" yaml:"link,omitempty"`
-	LinkHover          string                     `json:"link-hover,omitempty" yaml:"link-hover,omitempty"`
-	BackgroundImage    string                     `json:"background-image,omitempty" yaml:"background-image,omitempty"`
-	RawFields          map[string]json.RawMessage `json:"-" yaml:"-"`
+	// +nullable
+	HighlightPrimary string `json:"highlight-primary,omitempty" yaml:"highlight-primary,omitempty"`
+	// +nullable
+	HighlightSecondary string `json:"highlight-secondary,omitempty" yaml:"highlight-secondary,omitempty"`
+	// +nullable
+	HighlightHover string `json:"highlight-hover,omitempty" yaml:"highlight-hover,omitempty"`
+	// +nullable
+	Background string `json:"background,omitempty" yaml:"background,omitempty"`
+	// +nullable
+	CardBackground string `json:"card-background,omitempty" yaml:"card-background,omitempty"`
+	// +nullable
+	Text string `json:"text,omitempty" yaml:"text,omitempty"`
+	// +nullable
+	TextHeader string `json:"text-header,omitempty" yaml:"text-header,omitempty"`
+	// +nullable
+	TextTitle string `json:"text-title,omitempty" yaml:"text-title,omitempty"`
+	// +nullable
+	TextSubtitle string `json:"text-subtitle,omitempty" yaml:"text-subtitle,omitempty"`
+	// +nullable
+	CardShadow string `json:"card-shadow,omitempty" yaml:"card-shadow,omitempty"`
+	// +nullable
+	Link string `json:"link,omitempty" yaml:"link,omitempty"`
+	// +nullable
+	LinkHover string `json:"link-hover,omitempty" yaml:"link-hover,omitempty"`
+	// +nullable
+	BackgroundImage string                     `json:"background-image,omitempty" yaml:"background-image,omitempty"`
+	RawFields       map[string]json.RawMessage `json:"-" yaml:"-"`
 }
 
 func (c *ThemeColors) UnmarshalJSON(data []byte) error {
@@ -1297,22 +1375,29 @@ func (c *ThemeColors) UnmarshalYAML(unmarshal func(any) error) error {
 // +kubebuilder:object:generate=false
 // +kubebuilder:pruning:PreserveUnknownFields
 type MessageConfig struct {
+	// +nullable
 	Url string `json:"url,omitempty" yaml:"url,omitempty"`
 	// Mapping is an open object in upstream Homer. Values are normally string
 	// property names, but preserving arbitrary JSON keeps newer mappings valid.
 	// +kubebuilder:validation:Schemaless
 	// +kubebuilder:pruning:PreserveUnknownFields
+	// +nullable
 	Mapping map[string]any `json:"mapping,omitempty" yaml:"mapping,omitempty"`
 	// RefreshInterval is intentionally open-ended. Homer passes this value to
 	// JavaScript's setTimeout, so numeric, numeric-string, false, and null
 	// values all have meaningful upstream behavior.
 	// +kubebuilder:validation:Schemaless
 	// +kubebuilder:pruning:PreserveUnknownFields
-	RefreshInterval any    `json:"refreshInterval,omitempty" yaml:"refreshInterval,omitempty"`
-	Style           string `json:"style,omitempty" yaml:"style,omitempty"`
-	Title           string `json:"title,omitempty" yaml:"title,omitempty"`
-	Icon            string `json:"icon,omitempty" yaml:"icon,omitempty"`
-	Content         string `json:"content,omitempty" yaml:"content,omitempty"`
+	// +nullable
+	RefreshInterval any `json:"refreshInterval,omitempty" yaml:"refreshInterval,omitempty"`
+	// +nullable
+	Style string `json:"style,omitempty" yaml:"style,omitempty"`
+	// +nullable
+	Title string `json:"title,omitempty" yaml:"title,omitempty"`
+	// +nullable
+	Icon string `json:"icon,omitempty" yaml:"icon,omitempty"`
+	// +nullable
+	Content string `json:"content,omitempty" yaml:"content,omitempty"`
 	// RawFields retains explicit empty/zero values and newer message options
 	// that upstream Homer may add before the operator models them.
 	RawFields map[string]json.RawMessage `json:"-" yaml:"-"`
@@ -3594,9 +3679,14 @@ func ValidateHomerConfig(config *HomerConfig) error {
 }
 
 func isValidColor(color string) bool {
+	color = strings.TrimSpace(color)
+	if color == "" || strings.ContainsAny(color, "\r\n;{}") {
+		return false
+	}
+
 	if strings.HasPrefix(color, "#") {
 		hex := color[1:]
-		if len(hex) != 3 && len(hex) != 6 {
+		if len(hex) != 3 && len(hex) != 4 && len(hex) != 6 && len(hex) != 8 {
 			return false
 		}
 		for _, c := range hex {
@@ -3607,18 +3697,34 @@ func isValidColor(color string) bool {
 		return true
 	}
 
-	commonColors := map[string]bool{
-		"red": true, "blue": true, "green": true, "yellow": true,
-		"orange": true, "purple": true, "pink": true, "brown": true,
-		"black": true, "white": true, "gray": true, "grey": true,
-	}
-
 	lowerColor := strings.ToLower(color)
-	if commonColors[lowerColor] {
+	if lowerColor == "transparent" || lowerColor == "inherit" || lowerColor == "initial" ||
+		lowerColor == "unset" || lowerColor == "revert" || lowerColor == "currentcolor" || lowerColor == "none" {
 		return true
 	}
 
-	return strings.HasPrefix(lowerColor, "rgb")
+	// Homer injects these values directly into CSS custom properties. Accept
+	// CSS identifiers (including named colors and custom-property references)
+	// and function forms such as rgb(), hsl(), var(), and linear-gradient().
+	if isCSSIdentifier(lowerColor) {
+		return true
+	}
+	open := strings.IndexByte(lowerColor, '(')
+	return open > 0 && strings.HasSuffix(lowerColor, ")") && isCSSIdentifier(lowerColor[:open])
+}
+
+func isCSSIdentifier(value string) bool {
+	if value == "" {
+		return false
+	}
+	for index, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9' && index > 0) || r == '-' || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func isValidURL(url string) bool {
@@ -4184,7 +4290,7 @@ func flattenServicesForYAML(services []Service) []map[string]any {
 			}
 		}
 
-		if len(serviceMap) > 0 {
+		if len(serviceMap) > 0 || service.objectSet {
 			result = append(result, serviceMap)
 		}
 	}
@@ -4238,7 +4344,7 @@ func flattenItemsForYAML(items []Item) []map[string]any {
 			}
 		}
 
-		if len(itemMap) > 0 {
+		if len(itemMap) > 0 || item.objectSet {
 			result = append(result, itemMap)
 		}
 	}

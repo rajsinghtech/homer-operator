@@ -137,6 +137,10 @@ spec:
 The `services` and `pages` blocks follow upstream Homer's direct configuration
 format. Legacy `parameters` blocks remain supported for existing dashboards.
 
+The checked-in sample at `config/samples/homer_v1alpha1_dashboard.yaml` is
+used by the Helm kind smoke test. It exercises direct Homer fields, a second
+page, and the generated `<page>.yml` asset.
+
 ## Troubleshooting
 
 ### Namespace Creation Issues

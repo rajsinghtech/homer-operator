@@ -247,64 +247,92 @@ spec:
                       dark:
                         description: ThemeColors contains color definitions for a
                           theme.
+                        nullable: true
                         properties:
                           background:
+                            nullable: true
                             type: string
                           background-image:
+                            nullable: true
                             type: string
                           card-background:
+                            nullable: true
                             type: string
                           card-shadow:
+                            nullable: true
                             type: string
                           highlight-hover:
+                            nullable: true
                             type: string
                           highlight-primary:
+                            nullable: true
                             type: string
                           highlight-secondary:
+                            nullable: true
                             type: string
                           link:
+                            nullable: true
                             type: string
                           link-hover:
+                            nullable: true
                             type: string
                           text:
+                            nullable: true
                             type: string
                           text-header:
+                            nullable: true
                             type: string
                           text-subtitle:
+                            nullable: true
                             type: string
                           text-title:
+                            nullable: true
                             type: string
                         type: object
                         x-kubernetes-preserve-unknown-fields: true
                       light:
                         description: ThemeColors contains color definitions for a
                           theme.
+                        nullable: true
                         properties:
                           background:
+                            nullable: true
                             type: string
                           background-image:
+                            nullable: true
                             type: string
                           card-background:
+                            nullable: true
                             type: string
                           card-shadow:
+                            nullable: true
                             type: string
                           highlight-hover:
+                            nullable: true
                             type: string
                           highlight-primary:
+                            nullable: true
                             type: string
                           highlight-secondary:
+                            nullable: true
                             type: string
                           link:
+                            nullable: true
                             type: string
                           link-hover:
+                            nullable: true
                             type: string
                           text:
+                            nullable: true
                             type: string
                           text-header:
+                            nullable: true
                             type: string
                           text-subtitle:
+                            nullable: true
                             type: string
                           text-title:
+                            nullable: true
                             type: string
                         type: object
                         x-kubernetes-preserve-unknown-fields: true
@@ -314,6 +342,7 @@ spec:
                     description: |-
                       Columns accepts both the numeric and string forms supported by Homer
                       (for example, 3 and "3").
+                    nullable: true
                     x-kubernetes-preserve-unknown-fields: true
                   connectivityCheck:
                     nullable: true
@@ -323,73 +352,93 @@ spec:
                     nullable: true
                     properties:
                       colorTheme:
+                        nullable: true
                         type: string
                       layout:
+                        nullable: true
                         type: string
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
                   documentTitle:
+                    nullable: true
                     type: string
                   externalConfig:
+                    nullable: true
                     type: string
                   footer:
                     description: Footer can be false to hide the footer or a string
                       containing HTML content.
+                    nullable: true
                     x-kubernetes-preserve-unknown-fields: true
                   header:
+                    nullable: true
                     type: boolean
                   hotkey:
                     description: HotkeyConfig contains Homer keyboard shortcut settings.
                     nullable: true
                     properties:
                       search:
+                        nullable: true
                         type: string
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
                   icon:
+                    nullable: true
                     type: string
                   links:
                     items:
                       description: Link describes a link in a Homer service configuration.
                       properties:
                         icon:
+                          nullable: true
                           type: string
                         name:
+                          nullable: true
                           type: string
                         target:
+                          nullable: true
                           type: string
                         url:
+                          nullable: true
                           type: string
                       type: object
                       x-kubernetes-preserve-unknown-fields: true
                     nullable: true
                     type: array
                   logo:
+                    nullable: true
                     type: string
                   message:
                     description: MessageConfig contains dynamic message configuration.
                     nullable: true
                     properties:
                       content:
+                        nullable: true
                         type: string
                       icon:
+                        nullable: true
                         type: string
                       mapping:
                         description: |-
                           Mapping is an open object in upstream Homer. Values are normally string
                           property names, but preserving arbitrary JSON keeps newer mappings valid.
+                        nullable: true
                         x-kubernetes-preserve-unknown-fields: true
                       refreshInterval:
                         description: |-
                           RefreshInterval is intentionally open-ended. Homer passes this value to
                           JavaScript's setTimeout, so numeric, numeric-string, false, and null
                           values all have meaningful upstream behavior.
+                        nullable: true
                         x-kubernetes-preserve-unknown-fields: true
                       style:
+                        nullable: true
                         type: string
                       title:
+                        nullable: true
                         type: string
                       url:
+                        nullable: true
                         type: string
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
@@ -398,8 +447,10 @@ spec:
                     nullable: true
                     properties:
                       headers:
+                        nullable: true
                         x-kubernetes-preserve-unknown-fields: true
                       useCredentials:
+                        nullable: true
                         type: boolean
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
@@ -411,8 +462,10 @@ spec:
                         and backwards compatibility with earlier operator releases.
                       properties:
                         class:
+                          nullable: true
                           type: string
                         icon:
+                          nullable: true
                           type: string
                         items:
                           items:
@@ -427,32 +480,43 @@ spec:
                                       type: string
                                     type: object
                                   type: array
+                                nullable: true
                                 type: object
                               background:
+                                nullable: true
                                 type: string
                               class:
+                                nullable: true
                                 type: string
                               endpoint:
+                                nullable: true
                                 type: string
                               headers:
+                                nullable: true
                                 x-kubernetes-preserve-unknown-fields: true
                               icon:
+                                nullable: true
                                 type: string
                               keywords:
+                                nullable: true
                                 type: string
                               logo:
+                                nullable: true
                                 type: string
                               name:
+                                nullable: true
                                 type: string
                               nestedObjects:
                                 additionalProperties:
                                   additionalProperties:
                                     type: string
                                   type: object
+                                nullable: true
                                 type: object
                               parameters:
                                 additionalProperties:
                                   type: string
+                                nullable: true
                                 type: object
                               quick:
                                 items:
@@ -460,20 +524,26 @@ spec:
                                     link entry.
                                   properties:
                                     color:
+                                      nullable: true
                                       type: string
                                     icon:
+                                      nullable: true
                                       type: string
                                     name:
+                                      nullable: true
                                       type: string
                                     target:
+                                      nullable: true
                                       type: string
                                     url:
+                                      nullable: true
                                       type: string
                                   type: object
                                   x-kubernetes-preserve-unknown-fields: true
                                 nullable: true
                                 type: array
                               subtitle:
+                                nullable: true
                                 type: string
                               successCodes:
                                 items:
@@ -481,36 +551,47 @@ spec:
                                 nullable: true
                                 type: array
                               tag:
+                                nullable: true
                                 type: string
                               tagstyle:
+                                nullable: true
                                 type: string
                               target:
+                                nullable: true
                                 type: string
                               type:
+                                nullable: true
                                 type: string
                               updateIntervalMs:
+                                nullable: true
                                 x-kubernetes-preserve-unknown-fields: true
                               url:
+                                nullable: true
                                 type: string
                               useCredentials:
+                                nullable: true
                                 type: boolean
                             type: object
                             x-kubernetes-preserve-unknown-fields: true
                           nullable: true
                           type: array
                         logo:
+                          nullable: true
                           type: string
                         name:
+                          nullable: true
                           type: string
                         nestedObjects:
                           additionalProperties:
                             additionalProperties:
                               type: string
                             type: object
+                          nullable: true
                           type: object
                         parameters:
                           additionalProperties:
                             type: string
+                          nullable: true
                           type: object
                       type: object
                       x-kubernetes-preserve-unknown-fields: true
@@ -521,17 +602,22 @@ spec:
                       Stylesheet accepts either one path or an array of paths, matching
                       upstream Homer. Keep the value open so both forms (and explicit null)
                       survive CRD and external-config round trips.
+                    nullable: true
                     x-kubernetes-preserve-unknown-fields: true
                   subtitle:
+                    nullable: true
                     type: string
                   theme:
+                    nullable: true
                     type: string
                   title:
+                    nullable: true
                     type: string
                   updateIntervalMs:
                     description: |-
                       UpdateIntervalMs is the default refresh interval for Homer smart cards.
                       A value of zero disables automatic refresh, as in upstream Homer.
+                    nullable: true
                     x-kubernetes-preserve-unknown-fields: true
                 type: object
                 x-kubernetes-preserve-unknown-fields: true

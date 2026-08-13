@@ -142,14 +142,30 @@ services:
     items:
       - name: Card
         type: Proxmox
+        logo: https://example.com/card.png
+        icon: fas fa-server
+        subtitle: Card subtitle
+        keywords: monitoring, infrastructure
+        url: https://example.com/card
+        background: circle
+        class: highlight-purple
         apikey: legacy-key
         apiKey: modern-key
         apiVersion: 6
         api_token: token
         auth: user:password
         basic_auth: user:password
+        clipboard: copy me
+        checkInterval: 1000
+        downloadInterval: 1100
+        rateInterval: 1200
+        torrentInterval: 1300
+        updateInterval: 1400
+        updateIntervalMs: 1500
         password: password
         token: token
+        username: user
+        useCredentials: false
         device: ups
         display: text
         endpoint: https://api.example.com
@@ -168,11 +184,20 @@ services:
         method: HEAD
         node: node1
         query: homer
+        refreshInterval: 1600
+        quick:
+          - name: Docs
+            url: https://example.com/docs
+            color: '#123456'
         separator: ' / '
         slug: default
         small_font_on_desktop: true
         small_font_on_small_screens: true
         stats: [cpu, memory]
+        successCodes: [200, 204]
+        tag: smart
+        tagstyle: is-info
+        target: _blank
         things: [temperature]
         timeout: 2000
         units: metric
@@ -214,11 +239,13 @@ services:
 	items := cards["items"].([]any)
 	card := items[0].(map[any]any)
 	for _, key := range []string{
-		"apikey", "apiKey", "apiVersion", "api_token", "auth", "basic_auth", "password", "token",
-		"device", "display", "endpoint", "environments", "groups", "hide", "hide_decimals", "hideaverages",
-		"items", "legacyApi", "libraryType", "limit", "location", "locationId", "mapping", "method", "node",
-		"query", "separator", "slug", "small_font_on_desktop", "small_font_on_small_screens", "stats", "things",
-		"timeout", "units", "warning_value", "danger_value", "xmlrpc", "headers",
+		"apikey", "apiKey", "apiVersion", "api_token", "auth", "basic_auth", "clipboard", "checkInterval",
+		"downloadInterval", "rateInterval", "torrentInterval", "updateInterval", "updateIntervalMs", "password",
+		"token", "username", "useCredentials", "device", "display", "endpoint", "environments", "groups", "hide",
+		"hide_decimals", "hideaverages", "items", "legacyApi", "libraryType", "limit", "location", "locationId",
+		"mapping", "method", "node", "query", "quick", "separator", "slug", "small_font_on_desktop",
+		"small_font_on_small_screens", "stats", "successCodes", "tag", "tagstyle", "target", "things", "timeout",
+		"logo", "icon", "subtitle", "keywords", "url", "background", "class", "units", "warning_value", "danger_value", "xmlrpc", "headers",
 	} {
 		if _, ok := card[key]; !ok {
 			t.Errorf("emitted smart-card item dropped %q", key)
@@ -520,6 +547,58 @@ func TestUpstreamNestedFalsyValuesSurviveRoundTrip(t *testing.T) {
 		if !strings.Contains(output, expected) {
 			t.Errorf("nested upstream value %q was dropped:\n%s", expected, output)
 		}
+	}
+}
+
+func TestExplicitEmptyServiceAndItemObjectsSurviveYAMLEmission(t *testing.T) {
+	input := []byte(`{"services":[{}, {"items":[{}]}]}`)
+	var config HomerConfig
+	if err := json.Unmarshal(input, &config); err != nil {
+		t.Fatal(err)
+	}
+	output, err := marshalHomerConfigToYAML(&config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[any]any
+	if err := yaml.Unmarshal(output, &got); err != nil {
+		t.Fatalf("generated YAML is invalid: %v\n%s", err, output)
+	}
+	services, ok := got["services"].([]any)
+	if !ok || len(services) != 2 {
+		t.Fatalf("services = %#v, want two explicit objects", got["services"])
+	}
+	if service, ok := services[0].(map[any]any); !ok || len(service) != 0 {
+		t.Fatalf("first service = %#v, want empty object", services[0])
+	}
+	service, ok := services[1].(map[any]any)
+	if !ok {
+		t.Fatalf("second service = %#v", services[1])
+	}
+	items, ok := service["items"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("second service items = %#v, want one explicit object", service["items"])
+	}
+	if item, ok := items[0].(map[any]any); !ok || len(item) != 0 {
+		t.Fatalf("first item = %#v, want empty object", items[0])
+	}
+}
+
+func TestUpstreamCSSColorValuesValidate(t *testing.T) {
+	for _, value := range []string{
+		"transparent",
+		"inherit",
+		"var(--custom-background)",
+		"hsl(210 50% 40% / 0.5)",
+		"linear-gradient(90deg, #5c2483, #0095db)",
+	} {
+		config := &HomerConfig{Colors: ColorConfig{Light: ThemeColors{Background: value}}}
+		if err := ValidateHomerConfig(config); err != nil {
+			t.Errorf("CSS color %q rejected: %v", value, err)
+		}
+	}
+	if err := ValidateHomerConfig(&HomerConfig{Colors: ColorConfig{Light: ThemeColors{Background: "red; body { display:none }"}}}); err == nil {
+		t.Fatal("CSS declaration injection should be rejected")
 	}
 }
 

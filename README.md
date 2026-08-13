@@ -934,8 +934,14 @@ make deploy IMG=your-registry/homer-operator:dev
 # Run unit tests
 make test
 
-# Run end-to-end tests
+# Run the black-box suite against an installed operator
+E2E_OPERATOR_NAMESPACE=homer-operator-system \
+E2E_OPERATOR_DEPLOYMENT=homer-operator-controller-manager \
 make test-e2e
+
+# CI installs the Helm chart, applies config/samples/
+# homer_v1alpha1_dashboard.yaml, verifies its generated page asset, and runs
+# the same black-box suite.
 
 # Generate manifests
 make manifests
