@@ -303,7 +303,7 @@ var _ = Describe("Dashboard Controller", func() {
 		})
 	})
 
-	Context("When reconciling a Dashboard with invalid theme", func() {
+	Context("When reconciling a Dashboard with a custom theme", func() {
 		const resourceName = "test-dashboard-invalid-theme"
 		const namespaceName = "default"
 
@@ -323,8 +323,8 @@ var _ = Describe("Dashboard Controller", func() {
 				},
 				Spec: homerv1alpha1.DashboardSpec{
 					HomerConfig: homer.HomerConfig{
-						Title: "Invalid Theme Test",
-						Theme: "invalid-theme",
+						Title: "Custom Theme Test",
+						Theme: "community-theme",
 					},
 				},
 			}
@@ -339,7 +339,7 @@ var _ = Describe("Dashboard Controller", func() {
 			}
 		})
 
-		It("should return error for invalid theme", func() {
+		It("should preserve a custom upstream theme", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &DashboardReconciler{
 				Client: k8sClient,
@@ -352,12 +352,16 @@ var _ = Describe("Dashboard Controller", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			// Second reconcile: actually processes validation and should fail
+			// Second reconcile: actually processes validation and should succeed
 			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("unsupported theme"))
+			Expect(err).NotTo(HaveOccurred())
+			configMap := &corev1.ConfigMap{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: resourceName + "-homer", Namespace: namespaceName,
+			}, configMap)).To(Succeed())
+			Expect(configMap.Data["config.yml"]).To(ContainSubstring("theme: community-theme"))
 		})
 	})
 

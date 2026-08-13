@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	homer "github.com/rajsinghtech/homer-operator/pkg/homer"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -29,7 +30,14 @@ type DashboardSpec struct {
 	ConfigMap ConfigMap `json:"configMap,omitempty"`
 
 	// HomerConfig is base/default Homer configuration.
+	// +kubebuilder:pruning:PreserveUnknownFields
 	HomerConfig homer.HomerConfig `json:"homerConfig,omitempty"`
+
+	// Pages contains additional Homer page configurations. A page named "foo"
+	// is written as assets/foo.yml and can be opened with #foo. Values follow
+	// upstream Homer's page configuration format and override the base config.
+	// +kubebuilder:pruning:PreserveUnknownFields
+	Pages map[string]apiextensionsv1.JSON `json:"pages,omitempty"`
 
 	// Replicas is the number of desired pods for the Homer dashboard deployment.
 	// +kubebuilder:validation:Minimum=0

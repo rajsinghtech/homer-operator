@@ -53,11 +53,31 @@ spec:
     header: true
     footer: '<p>Powered by Homer Operator</p>'
     logo: "https://raw.githubusercontent.com/rajsinghtech/homer-operator/main/homer/Homer-Operator.png"
+    services:
+      - name: "Applications"
+        icon: "fas fa-cloud"
+        items:
+          - name: "Homer"
+            url: "https://github.com/bastienwirtz/homer"
+            target: "_blank"
+            subtitle: "Upstream Homer"
+  pages:
+    status:
+      subtitle: "A second Homer page"
+      services:
+        - name: "Status"
+          items:
+            - name: "Example"
+              url: "https://example.com"
 ```
 
 ```bash
 kubectl apply -f dashboard.yaml
 ```
+
+`homerConfig.services` and `pages` use the same direct field names as
+upstream Homer. The older `parameters`/annotation-oriented form remains
+supported for existing dashboards and discovery workflows.
 
 ---
 

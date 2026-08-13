@@ -86,9 +86,20 @@ spec:
       icon: "fas fa-dharmachakra"
       url: "https://kubernetes.io/docs/tasks/access-application-cluster/web-ui-dashboard/"
       target: "_blank"
-    
-    # Comprehensive service catalog
+
+    # Direct upstream Homer fields are supported in the CRD.
+    # The legacy parameters form remains supported for annotation/discovery
+    # workflows; see the other samples for that compatibility form.
     services:
+    - name: "Direct Applications"
+      icon: "fas fa-cloud"
+      items:
+      - name: "Homer"
+        subtitle: "Upstream-style service entry"
+        url: "https://github.com/bastienwirtz/homer"
+        target: "_blank"
+
+    # Comprehensive service catalog (legacy parameters form)
     - parameters:
         name: "Infrastructure"
         icon: "fas fa-server"
@@ -132,6 +143,16 @@ spec:
           logo: "https://raw.githubusercontent.com/blakeblackshear/frigate/dev/docs/static/img/logo.svg"
           tag: "home"
           keywords: "security, camera, nvr, ai, monitoring"
+
+  # Each page is stored as <name>.yml and loaded by Homer with #<name>.
+  pages:
+    status:
+      subtitle: "A second Homer page"
+      services:
+      - name: "Status"
+        items:
+        - name: "Example"
+          url: "https://example.com"
   
   # Custom assets and PWA configuration
   # Enables custom branding, icons, and Progressive Web App features

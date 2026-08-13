@@ -1,17 +1,17 @@
 ---
-# Test dashboard with invalid theme (should fail validation)
+# Test dashboard with a custom theme (upstream Homer permits community themes)
 apiVersion: homer.rajsingh.info/v1alpha1
 kind: Dashboard
 metadata:
-  name: dashboard-invalid-theme
+  name: dashboard-custom-theme
   namespace: homer-test
 spec:
   replicas: 1
   homerConfig:
-    title: "Invalid Theme Dashboard"
-    subtitle: "This should fail validation"
+    title: "Custom Theme Dashboard"
+    subtitle: "This should pass validation"
     header: true  # Required field
-    theme: "nonexistent-theme"  # This should cause validation error
+    theme: "community-theme"  # Custom/community themes are valid upstream
     services:
       - parameters:
           name: "Test Services"

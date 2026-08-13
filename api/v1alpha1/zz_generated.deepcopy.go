@@ -21,8 +21,9 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -169,6 +170,13 @@ func (in *DashboardSpec) DeepCopyInto(out *DashboardSpec) {
 	*out = *in
 	out.ConfigMap = in.ConfigMap
 	in.HomerConfig.DeepCopyInto(&out.HomerConfig)
+	if in.Pages != nil {
+		in, out := &in.Pages, &out.Pages
+		*out = make(map[string]v1.JSON, len(*in))
+		for key, val := range *in {
+			(*out)[key] = *val.DeepCopy()
+		}
+	}
 	if in.Replicas != nil {
 		in, out := &in.Replicas, &out.Replicas
 		*out = new(int32)
@@ -191,22 +199,22 @@ func (in *DashboardSpec) DeepCopyInto(out *DashboardSpec) {
 	}
 	if in.GatewaySelector != nil {
 		in, out := &in.GatewaySelector, &out.GatewaySelector
-		*out = new(v1.LabelSelector)
+		*out = new(metav1.LabelSelector)
 		(*in).DeepCopyInto(*out)
 	}
 	if in.HTTPRouteSelector != nil {
 		in, out := &in.HTTPRouteSelector, &out.HTTPRouteSelector
-		*out = new(v1.LabelSelector)
+		*out = new(metav1.LabelSelector)
 		(*in).DeepCopyInto(*out)
 	}
 	if in.IngressSelector != nil {
 		in, out := &in.IngressSelector, &out.IngressSelector
-		*out = new(v1.LabelSelector)
+		*out = new(metav1.LabelSelector)
 		(*in).DeepCopyInto(*out)
 	}
 	if in.ServiceSelector != nil {
 		in, out := &in.ServiceSelector, &out.ServiceSelector
-		*out = new(v1.LabelSelector)
+		*out = new(metav1.LabelSelector)
 		(*in).DeepCopyInto(*out)
 	}
 	if in.DomainFilters != nil {
@@ -248,7 +256,7 @@ func (in *DashboardStatus) DeepCopyInto(out *DashboardStatus) {
 	*out = *in
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
-		*out = make([]v1.Condition, len(*in))
+		*out = make([]metav1.Condition, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
@@ -357,22 +365,22 @@ func (in *RemoteCluster) DeepCopyInto(out *RemoteCluster) {
 	}
 	if in.IngressSelector != nil {
 		in, out := &in.IngressSelector, &out.IngressSelector
-		*out = new(v1.LabelSelector)
+		*out = new(metav1.LabelSelector)
 		(*in).DeepCopyInto(*out)
 	}
 	if in.HTTPRouteSelector != nil {
 		in, out := &in.HTTPRouteSelector, &out.HTTPRouteSelector
-		*out = new(v1.LabelSelector)
+		*out = new(metav1.LabelSelector)
 		(*in).DeepCopyInto(*out)
 	}
 	if in.ServiceSelector != nil {
 		in, out := &in.ServiceSelector, &out.ServiceSelector
-		*out = new(v1.LabelSelector)
+		*out = new(metav1.LabelSelector)
 		(*in).DeepCopyInto(*out)
 	}
 	if in.GatewaySelector != nil {
 		in, out := &in.GatewaySelector, &out.GatewaySelector
-		*out = new(v1.LabelSelector)
+		*out = new(metav1.LabelSelector)
 		(*in).DeepCopyInto(*out)
 	}
 	if in.DomainFilters != nil {

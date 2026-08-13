@@ -313,7 +313,10 @@ spec:
                         type: object
                     type: object
                   columns:
-                    type: string
+                    description: |-
+                      Columns accepts both the numeric and string forms supported by Homer
+                      (for example, 3 and "3").
+                    x-kubernetes-preserve-unknown-fields: true
                   connectivityCheck:
                     type: boolean
                   defaults:
@@ -362,11 +365,16 @@ spec:
                       icon:
                         type: string
                       mapping:
-                        additionalProperties:
-                          type: string
-                        type: object
+                        description: |-
+                          Mapping is an open object in upstream Homer. Values are normally string
+                          property names, but preserving arbitrary JSON keeps newer mappings valid.
+                        x-kubernetes-preserve-unknown-fields: true
                       refreshInterval:
-                        type: integer
+                        description: |-
+                          RefreshInterval is intentionally open-ended. Homer passes this value to
+                          JavaScript's setTimeout, so numeric, numeric-string, false, and null
+                          values all have meaningful upstream behavior.
+                        x-kubernetes-preserve-unknown-fields: true
                       style:
                         type: string
                       title:
@@ -378,17 +386,26 @@ spec:
                     description: ProxyConfig contains configuration for proxy settings.
                     properties:
                       headers:
-                        additionalProperties:
-                          type: string
-                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
                       useCredentials:
                         type: boolean
                     type: object
                   services:
                     items:
+                      description: |-
+                        Service represents a Homer service group. The direct fields mirror
+                        upstream Homer. Parameters/NestedObjects remain supported for annotations
+                        and backwards compatibility with earlier operator releases.
                       properties:
+                        class:
+                          type: string
+                        icon:
+                          type: string
                         items:
                           items:
+                            description: |-
+                              Item represents a Homer service item. Common upstream fields are modeled
+                              directly; RawFields preserves smart-card-specific and future Homer fields.
                             properties:
                               arrayObjects:
                                 additionalProperties:
@@ -398,6 +415,22 @@ spec:
                                     type: object
                                   type: array
                                 type: object
+                              background:
+                                type: string
+                              class:
+                                type: string
+                              endpoint:
+                                type: string
+                              headers:
+                                x-kubernetes-preserve-unknown-fields: true
+                              icon:
+                                type: string
+                              keywords:
+                                type: string
+                              logo:
+                                type: string
+                              name:
+                                type: string
                               nestedObjects:
                                 additionalProperties:
                                   additionalProperties:
@@ -408,8 +441,50 @@ spec:
                                 additionalProperties:
                                   type: string
                                 type: object
+                              quick:
+                                items:
+                                  description: QuickLink is an upstream Homer quick
+                                    link entry.
+                                  properties:
+                                    color:
+                                      type: string
+                                    icon:
+                                      type: string
+                                    name:
+                                      type: string
+                                    target:
+                                      type: string
+                                    url:
+                                      type: string
+                                  type: object
+                                type: array
+                              subtitle:
+                                type: string
+                              successCodes:
+                                items:
+                                  type: integer
+                                type: array
+                              tag:
+                                type: string
+                              tagstyle:
+                                type: string
+                              target:
+                                type: string
+                              type:
+                                type: string
+                              updateIntervalMs:
+                                x-kubernetes-preserve-unknown-fields: true
+                              url:
+                                type: string
+                              useCredentials:
+                                type: boolean
                             type: object
+                            x-kubernetes-preserve-unknown-fields: true
                           type: array
+                        logo:
+                          type: string
+                        name:
+                          type: string
                         nestedObjects:
                           additionalProperties:
                             additionalProperties:
@@ -421,6 +496,7 @@ spec:
                             type: string
                           type: object
                       type: object
+                      x-kubernetes-preserve-unknown-fields: true
                     type: array
                   stylesheet:
                     items:
@@ -432,9 +508,13 @@ spec:
                     type: string
                   title:
                     type: string
-                required:
-                - header
+                  updateIntervalMs:
+                    description: |-
+                      UpdateIntervalMs is the default refresh interval for Homer smart cards.
+                      A value of zero disables automatic refresh, as in upstream Homer.
+                    x-kubernetes-preserve-unknown-fields: true
                 type: object
+                x-kubernetes-preserve-unknown-fields: true
               httpRouteSelector:
                 description: HTTPRouteSelector optionally filters HTTPRoutes by labels.
                   If not specified, all HTTPRoutes are included.
@@ -529,6 +609,15 @@ spec:
                     type: object
                 type: object
                 x-kubernetes-map-type: atomic
+              pages:
+                additionalProperties:
+                  x-kubernetes-preserve-unknown-fields: true
+                description: |-
+                  Pages contains additional Homer page configurations. A page named "foo"
+                  is written as assets/foo.yml and can be opened with #foo. Values follow
+                  upstream Homer's page configuration format and override the base config.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
               remoteClusters:
                 description: |-
                   RemoteClusters configures discovery from additional Kubernetes clusters.

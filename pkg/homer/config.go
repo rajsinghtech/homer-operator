@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"maps"
+	neturl "net/url"
 	"os"
+	"path"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -20,6 +22,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -82,12 +85,16 @@ type HomerConfig struct {
 	DocumentTitle string `json:"documentTitle,omitempty" yaml:"documentTitle,omitempty"`
 	Logo          string `json:"logo,omitempty" yaml:"logo,omitempty"`
 	Icon          string `json:"icon,omitempty" yaml:"icon,omitempty"`
-	Header        bool   `json:"header" yaml:"header"`
+	Header        bool   `json:"header,omitempty" yaml:"header,omitempty"`
 	// Footer can be false to hide the footer or a string containing HTML content.
 	// +kubebuilder:validation:Type=""
 	// +kubebuilder:pruning:PreserveUnknownFields
-	Footer            string        `json:"footer,omitempty" yaml:"footer,omitempty"`
-	Columns           string        `json:"columns,omitempty" yaml:"columns,omitempty"`
+	Footer string `json:"footer,omitempty" yaml:"footer,omitempty"`
+	// Columns accepts both the numeric and string forms supported by Homer
+	// (for example, 3 and "3").
+	// +kubebuilder:validation:Schemaless
+	// +kubebuilder:pruning:PreserveUnknownFields
+	Columns           any           `json:"columns,omitempty" yaml:"columns,omitempty"`
 	ConnectivityCheck *bool         `json:"connectivityCheck,omitempty" yaml:"connectivityCheck,omitempty"`
 	Hotkey            HotkeyConfig  `json:"hotkey,omitempty" yaml:"hotkey,omitempty"`
 	Theme             string        `json:"theme,omitempty" yaml:"theme,omitempty"`
@@ -99,36 +106,95 @@ type HomerConfig struct {
 	Links             []Link        `json:"links,omitempty" yaml:"links,omitempty"`
 	Services          []Service     `json:"services,omitempty" yaml:"services,omitempty"`
 	ExternalConfig    string        `json:"externalConfig,omitempty" yaml:"externalConfig,omitempty"`
+	// UpdateIntervalMs is the default refresh interval for Homer smart cards.
+	// A value of zero disables automatic refresh, as in upstream Homer.
+	// +kubebuilder:validation:Schemaless
+	// +kubebuilder:pruning:PreserveUnknownFields
+	UpdateIntervalMs any `json:"updateIntervalMs,omitempty" yaml:"updateIntervalMs,omitempty"`
+
+	// RawFields preserves root-level Homer options that are newer than the
+	// operator's typed model. Homer intentionally treats configuration as an
+	// open-ended document, so dropping an unknown field would be a parity bug.
+	RawFields map[string]json.RawMessage `json:"-" yaml:"-"`
+	// presentFields retains the complete input document's root fields. Unlike
+	// RawFields, it includes modeled fields so explicit empty arrays, empty
+	// strings, and null values can be emitted again when the config is written
+	// as Homer YAML.
+	presentFields map[string]json.RawMessage `json:"-" yaml:"-"`
+
+	// These flags retain whether a value was explicitly present in YAML/JSON.
+	// They are intentionally private so they do not become CRD fields. This is
+	// needed for fields whose zero value is meaningful, such as header: false
+	// and updateIntervalMs: 0.
+	headerSet         bool `json:"-" yaml:"-"`
+	updateIntervalSet bool `json:"-" yaml:"-"`
+	footerSet         bool `json:"-" yaml:"-"`
+	footerValueSet    bool `json:"-" yaml:"-"`
+	footerValue       any  `json:"-" yaml:"-"`
+	proxySet          bool `json:"-" yaml:"-"`
+	messageSet        bool `json:"-" yaml:"-"`
 }
 
 // UnmarshalYAML custom unmarshaler to handle footer: false
 func (c *HomerConfig) UnmarshalYAML(unmarshal func(any) error) error {
 	type Alias HomerConfig
 	aux := &struct {
-		Footer any `yaml:"footer,omitempty"`
+		Footer         any   `yaml:"footer,omitempty"`
+		Header         *bool `yaml:"header,omitempty"`
+		UpdateInterval any   `yaml:"updateIntervalMs,omitempty"`
 		*Alias
 	}{
 		Alias: (*Alias)(c),
 	}
-	if err := unmarshal(aux); err != nil {
+	var raw map[string]any
+	if err := unmarshal(&raw); err != nil {
+		return err
+	}
+	rawYAML, err := yaml.Marshal(raw)
+	if err != nil {
+		return err
+	}
+	if err := yaml.Unmarshal(rawYAML, (*Alias)(c)); err != nil {
+		return err
+	}
+	if err := yaml.Unmarshal(rawYAML, aux); err != nil {
 		return err
 	}
 	switch v := aux.Footer.(type) {
 	case bool:
+		c.footerValue = v
 		if !v {
 			c.Footer = FooterHidden
+		} else {
+			c.Footer = ""
 		}
 	case string:
+		c.footerValue = v
 		c.Footer = v
 	}
-	return nil
+	if aux.Header != nil {
+		c.Header = *aux.Header
+		c.headerSet = true
+	}
+	c.headerSet = hasYAMLKey(raw, "header")
+	c.updateIntervalSet = hasYAMLKey(raw, "updateIntervalMs")
+	c.footerSet = hasYAMLKey(raw, "footer")
+	c.footerValueSet = c.footerSet
+	c.proxySet = hasYAMLKey(raw, "proxy")
+	c.messageSet = hasYAMLKey(raw, "message")
+	if err := captureYAMLFields(raw, &c.presentFields); err != nil {
+		return err
+	}
+	return captureUnknownFields(raw, homerConfigJSONFields, &c.RawFields)
 }
 
 // UnmarshalJSON custom unmarshaler to handle footer: false
 func (c *HomerConfig) UnmarshalJSON(data []byte) error {
 	type Alias HomerConfig
 	aux := &struct {
-		Footer any `json:"footer,omitempty"`
+		Footer         any   `json:"footer,omitempty"`
+		Header         *bool `json:"header,omitempty"`
+		UpdateInterval any   `json:"updateIntervalMs,omitempty"`
 		*Alias
 	}{
 		Alias: (*Alias)(c),
@@ -138,46 +204,692 @@ func (c *HomerConfig) UnmarshalJSON(data []byte) error {
 	}
 	switch v := aux.Footer.(type) {
 	case bool:
+		c.footerValue = v
 		if !v {
 			c.Footer = FooterHidden
+		} else {
+			c.Footer = ""
 		}
 	case string:
+		c.footerValue = v
 		c.Footer = v
+	}
+	if aux.Header != nil {
+		c.Header = *aux.Header
+		c.headerSet = true
+	}
+	if aux.UpdateInterval != nil {
+		c.UpdateIntervalMs = aux.UpdateInterval
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	_, c.headerSet = raw["header"]
+	_, c.updateIntervalSet = raw["updateIntervalMs"]
+	_, c.footerSet = raw["footer"]
+	c.footerValueSet = c.footerSet
+	_, c.proxySet = raw["proxy"]
+	_, c.messageSet = raw["message"]
+	if err := captureJSONFields(data, &c.presentFields); err != nil {
+		return err
+	}
+	return captureUnknownJSONFields(data, homerConfigJSONFields, &c.RawFields)
+}
+
+// MarshalJSON emits the upstream representation, including the special
+// boolean form of footer: false and explicitly supplied zero/false values.
+func (c HomerConfig) MarshalJSON() ([]byte, error) {
+	type alias HomerConfig
+	encoded, err := json.Marshal(alias(c))
+	if err != nil {
+		return nil, err
+	}
+
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		return nil, err
+	}
+	if c.Footer == FooterHidden {
+		fields["footer"] = json.RawMessage("false")
+	} else if c.footerValueSet {
+		value, err := json.Marshal(c.footerValue)
+		if err != nil {
+			return nil, err
+		}
+		fields["footer"] = value
+	}
+	if c.headerSet {
+		if raw, ok := c.presentFields["header"]; ok && strings.TrimSpace(string(raw)) == "null" {
+			fields["header"] = append(json.RawMessage(nil), raw...)
+		} else {
+			value, err := json.Marshal(c.Header)
+			if err != nil {
+				return nil, err
+			}
+			fields["header"] = value
+		}
+	}
+	if c.proxySet {
+		if _, exists := fields["proxy"]; !exists {
+			fields["proxy"] = json.RawMessage("null")
+		}
+	}
+	if c.messageSet {
+		if _, exists := fields["message"]; !exists {
+			fields["message"] = json.RawMessage("null")
+		}
+	}
+	if c.updateIntervalSet {
+		if _, exists := fields["updateIntervalMs"]; !exists {
+			value, err := json.Marshal(c.UpdateIntervalMs)
+			if err != nil {
+				return nil, err
+			}
+			fields["updateIntervalMs"] = value
+		}
+	}
+	restoreExplicitRootJSONFields(fields, c)
+	for key, value := range c.RawFields {
+		if _, exists := fields[key]; !exists {
+			fields[key] = append(json.RawMessage(nil), value...)
+		}
+	}
+	return json.Marshal(fields)
+}
+
+func restoreExplicitRootJSONFields(fields map[string]json.RawMessage, config HomerConfig) {
+	if config.rootFieldPresent("title") && config.Title == "" {
+		fields["title"] = explicitZeroJSONValue(config, "title", "")
+	}
+	if config.rootFieldPresent("subtitle") && config.Subtitle == "" {
+		fields["subtitle"] = explicitZeroJSONValue(config, "subtitle", "")
+	}
+	if config.rootFieldPresent("documentTitle") && config.DocumentTitle == "" {
+		fields["documentTitle"] = explicitZeroJSONValue(config, "documentTitle", "")
+	}
+	if config.rootFieldPresent("logo") && config.Logo == "" {
+		fields["logo"] = explicitZeroJSONValue(config, "logo", "")
+	}
+	if config.rootFieldPresent("icon") && config.Icon == "" {
+		fields["icon"] = explicitZeroJSONValue(config, "icon", "")
+	}
+	if config.rootFieldPresent("theme") && config.Theme == "" {
+		fields["theme"] = explicitZeroJSONValue(config, "theme", "")
+	}
+	if config.rootFieldPresent("externalConfig") && config.ExternalConfig == "" {
+		fields["externalConfig"] = explicitZeroJSONValue(config, "externalConfig", "")
+	}
+	if config.rootFieldPresent("columns") && config.Columns == nil {
+		fields["columns"] = explicitZeroJSONValue(config, "columns", nil)
+	}
+	if config.rootFieldPresent("connectivityCheck") && config.ConnectivityCheck == nil {
+		fields["connectivityCheck"] = explicitZeroJSONValue(config, "connectivityCheck", nil)
+	}
+	if config.rootFieldPresent("stylesheet") && len(config.Stylesheet) == 0 {
+		fields["stylesheet"] = explicitZeroJSONValue(config, "stylesheet", []string{})
+	}
+	if config.rootFieldPresent("links") && len(config.Links) == 0 {
+		fields["links"] = explicitZeroJSONValue(config, "links", []Link{})
+	}
+	if config.rootFieldPresent("services") && len(config.Services) == 0 {
+		fields["services"] = explicitZeroJSONValue(config, "services", []Service{})
+	}
+	if config.rootFieldPresent("hotkey") && isZeroHotkey(config.Hotkey) {
+		fields["hotkey"] = explicitZeroJSONValue(config, "hotkey", map[string]any{})
+	}
+	if config.rootFieldPresent("colors") && isZeroColors(config.Colors) {
+		fields["colors"] = explicitZeroJSONValue(config, "colors", map[string]any{})
+	}
+	if config.rootFieldPresent("defaults") && isZeroDefaults(config.Defaults) {
+		fields["defaults"] = explicitZeroJSONValue(config, "defaults", map[string]any{})
+	}
+	if config.rootFieldPresent("proxy") && isZeroProxy(config.Proxy) {
+		fields["proxy"] = explicitZeroJSONValue(config, "proxy", map[string]any{})
+	}
+	if config.rootFieldPresent("message") && isZeroMessage(config.Message) {
+		fields["message"] = explicitZeroJSONValue(config, "message", map[string]any{})
+	}
+}
+
+func (config HomerConfig) rootFieldPresent(key string) bool {
+	_, ok := config.presentFields[key]
+	return ok
+}
+
+func explicitZeroJSONValue(config HomerConfig, key string, current any) json.RawMessage {
+	if raw, ok := config.presentFields[key]; ok && strings.TrimSpace(string(raw)) == "null" {
+		return append(json.RawMessage(nil), raw...)
+	}
+	value, err := json.Marshal(current)
+	if err != nil {
+		return json.RawMessage("null")
+	}
+	return value
+}
+
+func isZeroHotkey(config HotkeyConfig) bool {
+	return config.Search == "" && len(config.RawFields) == 0
+}
+
+func isZeroColors(config ColorConfig) bool {
+	return !themeColorsConfigured(config.Light) && !themeColorsConfigured(config.Dark) && len(config.RawFields) == 0
+}
+
+func isZeroDefaults(config DefaultConfig) bool {
+	return config.Layout == "" && config.ColorTheme == "" && len(config.RawFields) == 0
+}
+
+func isZeroProxy(config ProxyConfig) bool {
+	return !config.UseCredentials && len(config.Headers) == 0 && len(config.RawFields) == 0
+}
+
+func isZeroMessage(config MessageConfig) bool {
+	return config.Url == "" && len(config.Mapping) == 0 && config.RefreshInterval == nil &&
+		config.Style == "" && config.Title == "" && config.Icon == "" && config.Content == "" &&
+		len(config.RawFields) == 0
+}
+
+var homerConfigJSONFields = map[string]struct{}{
+	"title": {}, "subtitle": {}, "documentTitle": {}, "logo": {}, "icon": {},
+	"header": {}, "footer": {}, "columns": {}, "connectivityCheck": {},
+	"hotkey": {}, "theme": {}, "stylesheet": {}, "colors": {}, "defaults": {},
+	"proxy": {}, "message": {}, "links": {}, "services": {}, "externalConfig": {},
+	"updateIntervalMs": {},
+}
+
+func hasYAMLKey(raw map[string]any, key string) bool {
+	_, ok := raw[key]
+	return ok
+}
+
+// ProxyConfig contains configuration for proxy settings.
+// +kubebuilder:object:generate=false
+type ProxyConfig struct {
+	UseCredentials bool `json:"useCredentials,omitempty" yaml:"useCredentials,omitempty"`
+	// +kubebuilder:validation:Schemaless
+	// +kubebuilder:pruning:PreserveUnknownFields
+	Headers map[string]any `json:"headers,omitempty" yaml:"headers,omitempty"`
+	// RawFields retains explicit empty/false values and newer proxy options
+	// that upstream Homer may add before the operator models them.
+	RawFields map[string]json.RawMessage `json:"-" yaml:"-"`
+}
+
+func (p *ProxyConfig) UnmarshalJSON(data []byte) error {
+	type alias ProxyConfig
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*p = ProxyConfig(decoded)
+	return captureJSONFields(data, &p.RawFields)
+}
+
+func (p ProxyConfig) MarshalJSON() ([]byte, error) {
+	type alias ProxyConfig
+	encoded, err := json.Marshal(alias(p))
+	if err != nil {
+		return nil, err
+	}
+	return mergeRawFields(encoded, p.RawFields)
+}
+
+func (p *ProxyConfig) UnmarshalYAML(unmarshal func(any) error) error {
+	type alias ProxyConfig
+	var decoded alias
+	if err := unmarshal(&decoded); err != nil {
+		return err
+	}
+	*p = ProxyConfig(decoded)
+	var raw map[string]any
+	if err := unmarshal(&raw); err != nil {
+		return err
+	}
+	return captureYAMLFields(raw, &p.RawFields)
+}
+
+type DefaultConfig struct {
+	Layout     string                     `json:"layout,omitempty" yaml:"layout,omitempty"`
+	ColorTheme string                     `json:"colorTheme,omitempty" yaml:"colorTheme,omitempty"`
+	RawFields  map[string]json.RawMessage `json:"-" yaml:"-"`
+}
+
+func (d *DefaultConfig) UnmarshalJSON(data []byte) error {
+	type alias DefaultConfig
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*d = DefaultConfig(decoded)
+	return captureJSONFields(data, &d.RawFields)
+}
+
+func (d DefaultConfig) MarshalJSON() ([]byte, error) {
+	type alias DefaultConfig
+	encoded, err := json.Marshal(alias(d))
+	if err != nil {
+		return nil, err
+	}
+	return mergeRawFields(encoded, d.RawFields)
+}
+
+func (d *DefaultConfig) UnmarshalYAML(unmarshal func(any) error) error {
+	type alias DefaultConfig
+	var decoded alias
+	if err := unmarshal(&decoded); err != nil {
+		return err
+	}
+	*d = DefaultConfig(decoded)
+	var raw map[string]any
+	if err := unmarshal(&raw); err != nil {
+		return err
+	}
+	return captureYAMLFields(raw, &d.RawFields)
+}
+
+func (d DefaultConfig) MarshalYAML() (any, error) {
+	fields := map[string]any{}
+	for key, value := range d.RawFields {
+		fields[key] = decodeRawField(value)
+	}
+	if d.Layout != "" {
+		fields["layout"] = d.Layout
+	}
+	if d.ColorTheme != "" {
+		fields["colorTheme"] = d.ColorTheme
+	}
+	return fields, nil
+}
+
+// Service represents a Homer service group. The direct fields mirror
+// upstream Homer. Parameters/NestedObjects remain supported for annotations
+// and backwards compatibility with earlier operator releases.
+// +kubebuilder:pruning:PreserveUnknownFields
+type Service struct {
+	Name             string                       `json:"name,omitempty" yaml:"name,omitempty"`
+	Icon             string                       `json:"icon,omitempty" yaml:"icon,omitempty"`
+	Logo             string                       `json:"logo,omitempty" yaml:"logo,omitempty"`
+	Class            string                       `json:"class,omitempty" yaml:"class,omitempty"`
+	Items            []Item                       `json:"items,omitempty" yaml:"items,omitempty"`
+	Parameters       map[string]string            `json:"parameters,omitempty" yaml:"parameters,omitempty"`
+	NestedObjects    map[string]map[string]string `json:"nestedObjects,omitempty" yaml:"nestedObjects,omitempty"`
+	RawFields        map[string]json.RawMessage   `json:"-" yaml:"-"`
+	legacyParameters bool                         `json:"-" yaml:"-"`
+}
+
+// QuickLink is an upstream Homer quick link entry.
+type QuickLink struct {
+	Name      string                     `json:"name,omitempty" yaml:"name,omitempty"`
+	Icon      string                     `json:"icon,omitempty" yaml:"icon,omitempty"`
+	URL       string                     `json:"url,omitempty" yaml:"url,omitempty"`
+	Target    string                     `json:"target,omitempty" yaml:"target,omitempty"`
+	Color     string                     `json:"color,omitempty" yaml:"color,omitempty"`
+	RawFields map[string]json.RawMessage `json:"-" yaml:"-"`
+}
+
+func (q *QuickLink) UnmarshalJSON(data []byte) error {
+	type alias QuickLink
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*q = QuickLink(decoded)
+	return captureJSONFields(data, &q.RawFields)
+}
+
+func (q QuickLink) MarshalJSON() ([]byte, error) {
+	type alias QuickLink
+	encoded, err := json.Marshal(alias(q))
+	if err != nil {
+		return nil, err
+	}
+	return mergeRawFields(encoded, q.RawFields)
+}
+
+func (q *QuickLink) UnmarshalYAML(unmarshal func(any) error) error {
+	type alias QuickLink
+	var decoded alias
+	if err := unmarshal(&decoded); err != nil {
+		return err
+	}
+	*q = QuickLink(decoded)
+	var raw map[string]any
+	if err := unmarshal(&raw); err != nil {
+		return err
+	}
+	return captureYAMLFields(raw, &q.RawFields)
+}
+
+func (q QuickLink) MarshalYAML() (any, error) {
+	fields := map[string]any{}
+	for key, value := range q.RawFields {
+		fields[key] = decodeRawField(value)
+	}
+	if q.Name != "" {
+		fields["name"] = q.Name
+	}
+	if q.Icon != "" {
+		fields["icon"] = q.Icon
+	}
+	if q.URL != "" {
+		fields["url"] = q.URL
+	}
+	if q.Target != "" {
+		fields["target"] = q.Target
+	}
+	if q.Color != "" {
+		fields["color"] = q.Color
+	}
+	return fields, nil
+}
+
+// Item represents a Homer service item. Common upstream fields are modeled
+// directly; RawFields preserves smart-card-specific and future Homer fields.
+// +kubebuilder:pruning:PreserveUnknownFields
+type Item struct {
+	Name           string `json:"name,omitempty" yaml:"name,omitempty"`
+	Logo           string `json:"logo,omitempty" yaml:"logo,omitempty"`
+	Icon           string `json:"icon,omitempty" yaml:"icon,omitempty"`
+	Subtitle       string `json:"subtitle,omitempty" yaml:"subtitle,omitempty"`
+	Tag            string `json:"tag,omitempty" yaml:"tag,omitempty"`
+	Keywords       string `json:"keywords,omitempty" yaml:"keywords,omitempty"`
+	URL            string `json:"url,omitempty" yaml:"url,omitempty"`
+	Target         string `json:"target,omitempty" yaml:"target,omitempty"`
+	TagStyle       string `json:"tagstyle,omitempty" yaml:"tagstyle,omitempty"`
+	Type           string `json:"type,omitempty" yaml:"type,omitempty"`
+	Background     string `json:"background,omitempty" yaml:"background,omitempty"`
+	Class          string `json:"class,omitempty" yaml:"class,omitempty"`
+	Endpoint       string `json:"endpoint,omitempty" yaml:"endpoint,omitempty"`
+	UseCredentials *bool  `json:"useCredentials,omitempty" yaml:"useCredentials,omitempty"`
+	// +kubebuilder:validation:Schemaless
+	// +kubebuilder:pruning:PreserveUnknownFields
+	Headers      map[string]any `json:"headers,omitempty" yaml:"headers,omitempty"`
+	SuccessCodes []int          `json:"successCodes,omitempty" yaml:"successCodes,omitempty"`
+	// +kubebuilder:validation:Schemaless
+	// +kubebuilder:pruning:PreserveUnknownFields
+	UpdateIntervalMs   any                            `json:"updateIntervalMs,omitempty" yaml:"updateIntervalMs,omitempty"`
+	Quick              []QuickLink                    `json:"quick,omitempty" yaml:"quick,omitempty"`
+	Parameters         map[string]string              `json:"parameters,omitempty" yaml:"parameters,omitempty"`
+	NestedObjects      map[string]map[string]string   `json:"nestedObjects,omitempty" yaml:"nestedObjects,omitempty"`
+	ArrayObjects       map[string][]map[string]string `json:"arrayObjects,omitempty" yaml:"arrayObjects,omitempty"`
+	RawFields          map[string]json.RawMessage     `json:"-" yaml:"-"`
+	Source             string                         `json:"-" yaml:"-"`
+	Namespace          string                         `json:"-" yaml:"-"`
+	LastUpdate         string                         `json:"-" yaml:"-"`
+	updateIntervalSet  bool                           `json:"-" yaml:"-"`
+	legacyParameters   bool                           `json:"-" yaml:"-"`
+	parametersInjected bool                           `json:"-" yaml:"-"`
+}
+
+// UnmarshalJSON captures unknown upstream item fields so Kubernetes and
+// external configuration can carry smart-card-specific options unchanged.
+func (s *Service) UnmarshalJSON(data []byte) error {
+	type alias Service
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*s = Service(decoded)
+	if _, ok := rawJSONField(data, "parameters"); ok {
+		s.legacyParameters = true
+	}
+	return captureJSONFields(data, &s.RawFields)
+}
+
+// UnmarshalYAML captures unknown upstream service fields from file-based
+// configuration while retaining the normal yaml.v2 decoding behavior.
+func (s *Service) UnmarshalYAML(unmarshal func(any) error) error {
+	type alias Service
+	var decoded alias
+	if err := unmarshal(&decoded); err != nil {
+		return err
+	}
+	*s = Service(decoded)
+	var rawKeys map[string]any
+	if err := unmarshal(&rawKeys); err != nil {
+		return err
+	}
+	if _, ok := rawKeys["parameters"]; ok {
+		s.legacyParameters = true
+	}
+	var raw map[string]any
+	if err := unmarshal(&raw); err != nil {
+		return err
+	}
+	return captureYAMLFields(raw, &s.RawFields)
+}
+
+// UnmarshalJSON captures unknown upstream item fields so arbitrary Homer
+// smart-card options survive a CRD round trip.
+func (i *Item) UnmarshalJSON(data []byte) error {
+	type alias Item
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*i = Item(decoded)
+	if err := captureJSONFields(data, &i.RawFields); err != nil {
+		return err
+	}
+	if _, ok := rawJSONField(data, "updateIntervalMs"); ok {
+		i.updateIntervalSet = true
+	}
+	if _, ok := rawJSONField(data, "parameters"); ok {
+		i.legacyParameters = true
 	}
 	return nil
 }
 
-// ProxyConfig contains configuration for proxy settings.
-type ProxyConfig struct {
-	UseCredentials bool              `json:"useCredentials,omitempty"`
-	Headers        map[string]string `json:"headers,omitempty"`
+// MarshalJSON merges preserved unknown fields back into an upstream service
+// object. This keeps smart-card fields intact through CRD JSON round trips.
+func (s Service) MarshalJSON() ([]byte, error) {
+	type alias Service
+	encoded, err := json.Marshal(alias(s))
+	if err != nil {
+		return nil, err
+	}
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		return nil, err
+	}
+	for key, value := range s.RawFields {
+		if _, exists := fields[key]; !exists {
+			fields[key] = append(json.RawMessage(nil), value...)
+		}
+	}
+	return json.Marshal(fields)
 }
 
-type DefaultConfig struct {
-	Layout     string `json:"layout,omitempty"`
-	ColorTheme string `json:"colorTheme,omitempty"`
+// MarshalJSON merges preserved unknown fields back into an upstream item.
+func (i Item) MarshalJSON() ([]byte, error) {
+	type alias Item
+	encoded, err := json.Marshal(alias(i))
+	if err != nil {
+		return nil, err
+	}
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		return nil, err
+	}
+	for key, value := range i.RawFields {
+		if _, exists := fields[key]; !exists {
+			fields[key] = append(json.RawMessage(nil), value...)
+		}
+	}
+	return json.Marshal(fields)
 }
 
-type Service struct {
-	Items         []Item                       `json:"items,omitempty"`
-	Parameters    map[string]string            `json:"parameters,omitempty"`
-	NestedObjects map[string]map[string]string `json:"nestedObjects,omitempty"`
+// UnmarshalYAML captures unknown upstream item fields from file-based
+// configuration while retaining the normal yaml.v2 decoding behavior.
+func (i *Item) UnmarshalYAML(unmarshal func(any) error) error {
+	type alias Item
+	var decoded alias
+	if err := unmarshal(&decoded); err != nil {
+		return err
+	}
+	*i = Item(decoded)
+	var raw map[string]any
+	if err := unmarshal(&raw); err != nil {
+		return err
+	}
+	if err := captureYAMLFields(raw, &i.RawFields); err != nil {
+		return err
+	}
+	if _, ok := raw["updateIntervalMs"]; ok {
+		i.updateIntervalSet = true
+	}
+	if _, ok := raw["parameters"]; ok {
+		i.legacyParameters = true
+	}
+	return nil
 }
 
-type Item struct {
-	Parameters    map[string]string              `json:"parameters,omitempty"`
-	NestedObjects map[string]map[string]string   `json:"nestedObjects,omitempty"`
-	ArrayObjects  map[string][]map[string]string `json:"arrayObjects,omitempty"`
-	Source        string                         `json:"-"`
-	Namespace     string                         `json:"-"`
-	LastUpdate    string                         `json:"-"`
+var serviceJSONFields = map[string]struct{}{
+	"name": {}, "icon": {}, "logo": {}, "class": {}, "items": {},
+	"parameters": {}, "nestedObjects": {},
+}
+
+var itemJSONFields = map[string]struct{}{
+	"name": {}, "logo": {}, "icon": {}, "subtitle": {}, "tag": {},
+	"keywords": {}, "url": {}, "target": {}, "tagstyle": {}, "type": {},
+	"background": {}, "class": {}, "endpoint": {}, "useCredentials": {},
+	"headers": {}, "successCodes": {}, "updateIntervalMs": {}, "quick": {},
+	"parameters": {}, "nestedObjects": {}, "arrayObjects": {},
+}
+
+func rawJSONField(data []byte, field string) (json.RawMessage, bool) {
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(data, &raw) != nil {
+		return nil, false
+	}
+	value, ok := raw[field]
+	return value, ok
+}
+
+func captureUnknownJSONFields(data []byte, known map[string]struct{}, target *map[string]json.RawMessage) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	values := make(map[string]json.RawMessage)
+	for key, value := range raw {
+		if _, ok := known[key]; ok {
+			continue
+		}
+		values[key] = append(json.RawMessage(nil), value...)
+	}
+	*target = values
+	return nil
+}
+
+func captureUnknownFields(raw map[string]any, known map[string]struct{}, target *map[string]json.RawMessage) error {
+	values := make(map[string]json.RawMessage)
+	for key, value := range raw {
+		if _, ok := known[key]; ok {
+			continue
+		}
+		encoded, err := json.Marshal(normalizeYAMLValue(value))
+		if err != nil {
+			return err
+		}
+		values[key] = encoded
+	}
+	*target = values
+	return nil
+}
+
+func normalizeYAMLValue(value any) any {
+	switch value := value.(type) {
+	case map[any]any:
+		result := make(map[string]any, len(value))
+		for key, nested := range value {
+			result[fmt.Sprint(key)] = normalizeYAMLValue(nested)
+		}
+		return result
+	case map[string]any:
+		result := make(map[string]any, len(value))
+		for key, nested := range value {
+			result[key] = normalizeYAMLValue(nested)
+		}
+		return result
+	case []any:
+		result := make([]any, len(value))
+		for i, nested := range value {
+			result[i] = normalizeYAMLValue(nested)
+		}
+		return result
+	default:
+		return value
+	}
+}
+
+func decodeRawField(value json.RawMessage) any {
+	var decoded any
+	if err := json.Unmarshal(value, &decoded); err != nil {
+		return string(value)
+	}
+	return decoded
 }
 
 type Link struct {
-	Name   string `json:"name,omitempty"`
-	Icon   string `json:"icon,omitempty"`
-	Url    string `json:"url,omitempty"`
-	Target string `json:"target,omitempty"`
+	Name      string                     `json:"name,omitempty" yaml:"name,omitempty"`
+	Icon      string                     `json:"icon,omitempty" yaml:"icon,omitempty"`
+	Url       string                     `json:"url,omitempty" yaml:"url,omitempty"`
+	Target    string                     `json:"target,omitempty" yaml:"target,omitempty"`
+	RawFields map[string]json.RawMessage `json:"-" yaml:"-"`
+}
+
+func (l *Link) UnmarshalJSON(data []byte) error {
+	type alias Link
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*l = Link(decoded)
+	return captureJSONFields(data, &l.RawFields)
+}
+
+func (l Link) MarshalJSON() ([]byte, error) {
+	type alias Link
+	encoded, err := json.Marshal(alias(l))
+	if err != nil {
+		return nil, err
+	}
+	return mergeRawFields(encoded, l.RawFields)
+}
+
+func (l *Link) UnmarshalYAML(unmarshal func(any) error) error {
+	type alias Link
+	var decoded alias
+	if err := unmarshal(&decoded); err != nil {
+		return err
+	}
+	*l = Link(decoded)
+	var raw map[string]any
+	if err := unmarshal(&raw); err != nil {
+		return err
+	}
+	return captureYAMLFields(raw, &l.RawFields)
+}
+
+func (l Link) MarshalYAML() (any, error) {
+	fields := map[string]any{}
+	for key, value := range l.RawFields {
+		fields[key] = decodeRawField(value)
+	}
+	if l.Name != "" {
+		fields["name"] = l.Name
+	}
+	if l.Icon != "" {
+		fields["icon"] = l.Icon
+	}
+	if l.Url != "" {
+		fields["url"] = l.Url
+	}
+	if l.Target != "" {
+		fields["target"] = l.Target
+	}
+	return fields, nil
 }
 
 func getParameter(params map[string]string, key string) string {
@@ -188,41 +900,113 @@ func getParameter(params map[string]string, key string) string {
 }
 
 func getServiceName(service *Service) string {
-	if service.Parameters != nil {
-		return service.Parameters["name"]
+	if service.Name != "" {
+		return service.Name
 	}
-	return ""
+	if service.Parameters != nil {
+		if name, ok := service.Parameters["name"]; ok {
+			return name
+		}
+	}
+	return service.Name
 }
 
 func getItemName(item *Item) string {
-	if item.Parameters != nil {
-		return item.Parameters["name"]
+	if item.Name != "" {
+		return item.Name
 	}
-	return ""
+	if item.Parameters != nil {
+		if name, ok := item.Parameters["name"]; ok {
+			return name
+		}
+	}
+	return item.Name
 }
 
 func getItemURL(item *Item) string {
-	if item.Parameters != nil {
-		return item.Parameters["url"]
+	if item.URL != "" {
+		return item.URL
 	}
-	return ""
+	if item.Parameters != nil {
+		if value, ok := item.Parameters["url"]; ok {
+			return value
+		}
+	}
+	return item.URL
+}
+
+func getItemTag(item *Item) string {
+	if item.Tag != "" {
+		return item.Tag
+	}
+	if item.Parameters != nil {
+		if value, ok := item.Parameters["tag"]; ok {
+			return value
+		}
+	}
+	return item.Tag
+}
+
+func getItemKeywords(item *Item) string {
+	if item.Keywords != "" {
+		return item.Keywords
+	}
+	if item.Parameters != nil {
+		if value, ok := item.Parameters["keywords"]; ok {
+			return value
+		}
+	}
+	return item.Keywords
+}
+
+func getItemSubtitle(item *Item) string {
+	if item.Subtitle != "" {
+		return item.Subtitle
+	}
+	if item.Parameters != nil {
+		if value, ok := item.Parameters["subtitle"]; ok {
+			return value
+		}
+	}
+	return item.Subtitle
 }
 
 func getItemType(item *Item) string {
-	if item.Parameters != nil {
-		return item.Parameters["type"]
+	if item.Type != "" {
+		return item.Type
 	}
-	return ""
+	if item.Parameters != nil {
+		if value, ok := item.Parameters["type"]; ok {
+			return value
+		}
+	}
+	return item.Type
 }
 
 func getItemEndpoint(item *Item) string {
-	if item.Parameters != nil {
-		return item.Parameters["endpoint"]
+	if item.Endpoint != "" {
+		return item.Endpoint
 	}
-	return ""
+	if item.Parameters != nil {
+		if value, ok := item.Parameters["endpoint"]; ok {
+			return value
+		}
+	}
+	return item.Endpoint
 }
 
 func setServiceParameter(service *Service, key, value string) {
+	service.legacyParameters = true
+	switch strings.ToLower(key) {
+	case "name":
+		service.Name = value
+	case "icon":
+		service.Icon = value
+	case "logo":
+		service.Logo = value
+	case "class":
+		service.Class = value
+	}
 	if service.Parameters == nil {
 		service.Parameters = make(map[string]string)
 	}
@@ -230,6 +1014,35 @@ func setServiceParameter(service *Service, key, value string) {
 }
 
 func setItemParameter(item *Item, key, value string) {
+	item.legacyParameters = true
+	switch strings.ToLower(key) {
+	case "name":
+		item.Name = value
+	case "logo":
+		item.Logo = value
+	case "icon":
+		item.Icon = value
+	case "subtitle":
+		item.Subtitle = value
+	case "tag":
+		item.Tag = value
+	case "keywords":
+		item.Keywords = value
+	case "url":
+		item.URL = value
+	case "target":
+		item.Target = value
+	case "tagstyle":
+		item.TagStyle = value
+	case "type":
+		item.Type = value
+	case "background":
+		item.Background = value
+	case "class":
+		item.Class = value
+	case "endpoint":
+		item.Endpoint = value
+	}
 	if item.Parameters == nil {
 		item.Parameters = make(map[string]string)
 	}
@@ -239,15 +1052,15 @@ func setItemParameter(item *Item, key, value string) {
 func cleanupHomerConfig(config *HomerConfig) {
 	validServices := make([]Service, 0, len(config.Services))
 	for _, service := range config.Services {
+		// Keep direct upstream objects in declaration order. Parameter-map
+		// objects are the operator's legacy representation and retain their
+		// historical deterministic sorting behavior.
 		ensureParameterMaps(&service.Parameters, &service.NestedObjects)
-		if getParameter(service.Parameters, "name") == "" {
-			continue
-		}
 
 		var validItems []Item
 		for _, item := range service.Items {
 			ensureParameterMaps(&item.Parameters, &item.NestedObjects)
-			if getParameter(item.Parameters, "name") == "" {
+			if getItemName(&item) == "" && !itemHasConfiguration(&item) {
 				continue
 			}
 
@@ -259,6 +1072,13 @@ func cleanupHomerConfig(config *HomerConfig) {
 		}
 
 		service.Items = validItems
+		if len(service.Items) == 0 {
+			// Keep an explicitly configured empty service group. Homer permits
+			// groups without a name and treats the items key as optional.
+			if len(service.RawFields) == 0 && service.Name == "" && getParameter(service.Parameters, "name") == "" {
+				continue
+			}
+		}
 		validServices = append(validServices, service)
 	}
 
@@ -274,41 +1094,246 @@ func ensureParameterMaps(params *map[string]string, nested *map[string]map[strin
 	}
 }
 
+func itemHasConfiguration(item *Item) bool {
+	if item == nil {
+		return false
+	}
+	return item.Logo != "" || item.Icon != "" || item.Subtitle != "" ||
+		item.Tag != "" || item.Keywords != "" || item.URL != "" ||
+		item.Target != "" || item.TagStyle != "" || item.Type != "" ||
+		item.Background != "" || item.Class != "" || item.Endpoint != "" ||
+		item.UseCredentials != nil || len(item.Headers) > 0 ||
+		len(item.SuccessCodes) > 0 || item.UpdateIntervalMs != nil ||
+		item.updateIntervalSet || len(item.Quick) > 0 || len(item.RawFields) > 0 ||
+		len(item.Parameters) > 0 || len(item.NestedObjects) > 0 || len(item.ArrayObjects) > 0
+}
+
 type HotkeyConfig struct {
-	Search string `json:"search,omitempty"`
+	Search    string                     `json:"search,omitempty" yaml:"search,omitempty"`
+	RawFields map[string]json.RawMessage `json:"-" yaml:"-"`
+}
+
+func (h *HotkeyConfig) UnmarshalJSON(data []byte) error {
+	type alias HotkeyConfig
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*h = HotkeyConfig(decoded)
+	return captureJSONFields(data, &h.RawFields)
+}
+
+func (h HotkeyConfig) MarshalJSON() ([]byte, error) {
+	type alias HotkeyConfig
+	encoded, err := json.Marshal(alias(h))
+	if err != nil {
+		return nil, err
+	}
+	return mergeRawFields(encoded, h.RawFields)
+}
+
+func (h *HotkeyConfig) UnmarshalYAML(unmarshal func(any) error) error {
+	type alias HotkeyConfig
+	var decoded alias
+	if err := unmarshal(&decoded); err != nil {
+		return err
+	}
+	*h = HotkeyConfig(decoded)
+	var raw map[string]any
+	if err := unmarshal(&raw); err != nil {
+		return err
+	}
+	return captureYAMLFields(raw, &h.RawFields)
 }
 
 // ColorConfig contains color scheme configuration
 type ColorConfig struct {
-	Light ThemeColors `json:"light,omitempty"`
-	Dark  ThemeColors `json:"dark,omitempty"`
+	Light     ThemeColors                `json:"light,omitempty" yaml:"light,omitempty"`
+	Dark      ThemeColors                `json:"dark,omitempty" yaml:"dark,omitempty"`
+	RawFields map[string]json.RawMessage `json:"-" yaml:"-"`
+}
+
+func (c *ColorConfig) UnmarshalJSON(data []byte) error {
+	type alias ColorConfig
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*c = ColorConfig(decoded)
+	return captureJSONFields(data, &c.RawFields)
+}
+
+func (c ColorConfig) MarshalJSON() ([]byte, error) {
+	type alias ColorConfig
+	encoded, err := json.Marshal(alias(c))
+	if err != nil {
+		return nil, err
+	}
+	return mergeRawFields(encoded, c.RawFields)
+}
+
+func (c *ColorConfig) UnmarshalYAML(unmarshal func(any) error) error {
+	type alias ColorConfig
+	var decoded alias
+	if err := unmarshal(&decoded); err != nil {
+		return err
+	}
+	*c = ColorConfig(decoded)
+	var raw map[string]any
+	if err := unmarshal(&raw); err != nil {
+		return err
+	}
+	return captureYAMLFields(raw, &c.RawFields)
 }
 
 // ThemeColors contains color definitions for a theme
 type ThemeColors struct {
-	HighlightPrimary   string `json:"highlight-primary,omitempty" yaml:"highlight-primary,omitempty"`
-	HighlightSecondary string `json:"highlight-secondary,omitempty" yaml:"highlight-secondary,omitempty"`
-	HighlightHover     string `json:"highlight-hover,omitempty" yaml:"highlight-hover,omitempty"`
-	Background         string `json:"background,omitempty" yaml:"background,omitempty"`
-	CardBackground     string `json:"card-background,omitempty" yaml:"card-background,omitempty"`
-	Text               string `json:"text,omitempty" yaml:"text,omitempty"`
-	TextHeader         string `json:"text-header,omitempty" yaml:"text-header,omitempty"`
-	TextTitle          string `json:"text-title,omitempty" yaml:"text-title,omitempty"`
-	TextSubtitle       string `json:"text-subtitle,omitempty" yaml:"text-subtitle,omitempty"`
-	CardShadow         string `json:"card-shadow,omitempty" yaml:"card-shadow,omitempty"`
-	Link               string `json:"link,omitempty" yaml:"link,omitempty"`
-	LinkHover          string `json:"link-hover,omitempty" yaml:"link-hover,omitempty"`
-	BackgroundImage    string `json:"background-image,omitempty" yaml:"background-image,omitempty"`
+	HighlightPrimary   string                     `json:"highlight-primary,omitempty" yaml:"highlight-primary,omitempty"`
+	HighlightSecondary string                     `json:"highlight-secondary,omitempty" yaml:"highlight-secondary,omitempty"`
+	HighlightHover     string                     `json:"highlight-hover,omitempty" yaml:"highlight-hover,omitempty"`
+	Background         string                     `json:"background,omitempty" yaml:"background,omitempty"`
+	CardBackground     string                     `json:"card-background,omitempty" yaml:"card-background,omitempty"`
+	Text               string                     `json:"text,omitempty" yaml:"text,omitempty"`
+	TextHeader         string                     `json:"text-header,omitempty" yaml:"text-header,omitempty"`
+	TextTitle          string                     `json:"text-title,omitempty" yaml:"text-title,omitempty"`
+	TextSubtitle       string                     `json:"text-subtitle,omitempty" yaml:"text-subtitle,omitempty"`
+	CardShadow         string                     `json:"card-shadow,omitempty" yaml:"card-shadow,omitempty"`
+	Link               string                     `json:"link,omitempty" yaml:"link,omitempty"`
+	LinkHover          string                     `json:"link-hover,omitempty" yaml:"link-hover,omitempty"`
+	BackgroundImage    string                     `json:"background-image,omitempty" yaml:"background-image,omitempty"`
+	RawFields          map[string]json.RawMessage `json:"-" yaml:"-"`
 }
 
+func (c *ThemeColors) UnmarshalJSON(data []byte) error {
+	type alias ThemeColors
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*c = ThemeColors(decoded)
+	return captureJSONFields(data, &c.RawFields)
+}
+
+func (c ThemeColors) MarshalJSON() ([]byte, error) {
+	type alias ThemeColors
+	encoded, err := json.Marshal(alias(c))
+	if err != nil {
+		return nil, err
+	}
+	return mergeRawFields(encoded, c.RawFields)
+}
+
+func (c *ThemeColors) UnmarshalYAML(unmarshal func(any) error) error {
+	type alias ThemeColors
+	var decoded alias
+	if err := unmarshal(&decoded); err != nil {
+		return err
+	}
+	*c = ThemeColors(decoded)
+	var raw map[string]any
+	if err := unmarshal(&raw); err != nil {
+		return err
+	}
+	return captureYAMLFields(raw, &c.RawFields)
+}
+
+// +kubebuilder:object:generate=false
 type MessageConfig struct {
-	Url             string            `json:"url,omitempty"`
-	Mapping         map[string]string `json:"mapping,omitempty"`
-	RefreshInterval int               `json:"refreshInterval,omitempty"`
-	Style           string            `json:"style,omitempty"`
-	Title           string            `json:"title,omitempty"`
-	Icon            string            `json:"icon,omitempty"`
-	Content         string            `json:"content,omitempty"`
+	Url string `json:"url,omitempty" yaml:"url,omitempty"`
+	// Mapping is an open object in upstream Homer. Values are normally string
+	// property names, but preserving arbitrary JSON keeps newer mappings valid.
+	// +kubebuilder:validation:Schemaless
+	// +kubebuilder:pruning:PreserveUnknownFields
+	Mapping map[string]any `json:"mapping,omitempty" yaml:"mapping,omitempty"`
+	// RefreshInterval is intentionally open-ended. Homer passes this value to
+	// JavaScript's setTimeout, so numeric, numeric-string, false, and null
+	// values all have meaningful upstream behavior.
+	// +kubebuilder:validation:Schemaless
+	// +kubebuilder:pruning:PreserveUnknownFields
+	RefreshInterval any    `json:"refreshInterval,omitempty" yaml:"refreshInterval,omitempty"`
+	Style           string `json:"style,omitempty" yaml:"style,omitempty"`
+	Title           string `json:"title,omitempty" yaml:"title,omitempty"`
+	Icon            string `json:"icon,omitempty" yaml:"icon,omitempty"`
+	Content         string `json:"content,omitempty" yaml:"content,omitempty"`
+	// RawFields retains explicit empty/zero values and newer message options
+	// that upstream Homer may add before the operator models them.
+	RawFields map[string]json.RawMessage `json:"-" yaml:"-"`
+}
+
+func (m *MessageConfig) UnmarshalJSON(data []byte) error {
+	type alias MessageConfig
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*m = MessageConfig(decoded)
+	return captureJSONFields(data, &m.RawFields)
+}
+
+func (m MessageConfig) MarshalJSON() ([]byte, error) {
+	type alias MessageConfig
+	encoded, err := json.Marshal(alias(m))
+	if err != nil {
+		return nil, err
+	}
+	return mergeRawFields(encoded, m.RawFields)
+}
+
+func (m *MessageConfig) UnmarshalYAML(unmarshal func(any) error) error {
+	type alias MessageConfig
+	var raw map[string]any
+	if err := unmarshal(&raw); err != nil {
+		return err
+	}
+	var decoded alias
+	encoded, err := yaml.Marshal(raw)
+	if err != nil {
+		return err
+	}
+	if err := yaml.Unmarshal(encoded, &decoded); err != nil {
+		return err
+	}
+	*m = MessageConfig(decoded)
+	return captureYAMLFields(raw, &m.RawFields)
+}
+
+func captureJSONFields(data []byte, target *map[string]json.RawMessage) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	values := make(map[string]json.RawMessage, len(raw))
+	for key, value := range raw {
+		values[key] = append(json.RawMessage(nil), value...)
+	}
+	*target = values
+	return nil
+}
+
+func captureYAMLFields(raw map[string]any, target *map[string]json.RawMessage) error {
+	values := make(map[string]json.RawMessage, len(raw))
+	for key, value := range raw {
+		encoded, err := json.Marshal(normalizeYAMLValue(value))
+		if err != nil {
+			return err
+		}
+		values[key] = encoded
+	}
+	*target = values
+	return nil
+}
+
+func mergeRawFields(encoded []byte, rawFields map[string]json.RawMessage) ([]byte, error) {
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		return nil, err
+	}
+	for key, value := range rawFields {
+		if _, exists := fields[key]; !exists {
+			fields[key] = append(json.RawMessage(nil), value...)
+		}
+	}
+	return json.Marshal(fields)
 }
 
 func LoadHomerConfigFromFile(filename string) (*HomerConfig, error) {
@@ -453,6 +1478,12 @@ type DeploymentConfig struct {
 	DNSConfig           string
 	Resources           *corev1.ResourceRequirements
 	HomerImage          string
+	ConfigSyncImage     string
+	// IconAliases maps one source asset to every Homer icon destination it
+	// should populate. A single source file is commonly used for both the
+	// favicon and Apple touch icon, so a scalar destination loses information.
+	IconAliases    map[string][]string
+	PageConfigKeys []string
 }
 
 func CreateDeployment(
@@ -475,6 +1506,10 @@ func createDeploymentInternal(
 	if image == "" {
 		image = "b4bz/homer:latest"
 	}
+	configSyncImage := config.ConfigSyncImage
+	if configSyncImage == "" {
+		configSyncImage = "alpine:3.18"
+	}
 
 	// Base volumes
 	volumes := []corev1.Volume{
@@ -490,6 +1525,12 @@ func createDeploymentInternal(
 		},
 		{
 			Name: "assets-volume",
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		},
+		{
+			Name: "operator-state-volume",
 			VolumeSource: corev1.VolumeSource{
 				EmptyDir: &corev1.EmptyDirVolumeSource{},
 			},
@@ -547,7 +1588,7 @@ func createDeploymentInternal(
 					Containers: []corev1.Container{
 						{
 							Name:  "config-sync",
-							Image: "alpine:3.18",
+							Image: configSyncImage,
 							Command: []string{
 								"sh",
 								"-c",
@@ -678,41 +1719,139 @@ func buildSidecarCommand(config *DeploymentConfig) string {
 	cmd += "ln -sf /config/config.yml /www/assets/config.yml && "
 	cmd += "echo 'Config symlink created' && "
 
-	// Copy custom assets if ConfigMap is provided
-	if config != nil && config.AssetsConfigMapName != "" {
-		cmd += "echo 'Setting up custom assets...' && "
-		// Dynamically copy all files from custom-assets directory
-		cmd += "if [ -d /custom-assets ] && [ \"$(ls -A /custom-assets 2>/dev/null)\" ]; then " +
-			"cd /custom-assets && " +
-			"for file in *; do " +
-			"[ -f \"$file\" ] && cp \"$file\" /www/assets/ && echo \"Copied $file\" || true; " +
-			"done; " +
-			"cd /; fi && "
-	}
-
-	// Add PWA manifest if provided
-	if config != nil && config.PWAManifest != "" {
-		escapedManifest := strings.ReplaceAll(config.PWAManifest, "'", "'\"'\"'")
-		cmd += "echo 'Creating PWA manifest...' && " +
-			"cat > /www/assets/manifest.json << 'EOF'\n" + escapedManifest + "\nEOF && "
+	if config != nil {
+		for _, pageKey := range config.PageConfigKeys {
+			if !isSafeRelativeAssetPath(pageKey) {
+				slog.Warn("skipping unsafe Homer page asset path", "path", pageKey)
+				continue
+			}
+			cmd += "ln -sf " + shellQuote("/config/"+pageKey) + " " + shellQuote("/www/assets/"+pageKey) + " && "
+		}
 	}
 
 	cmd += "echo 'Initial setup complete. Starting config watch...' && "
 
-	// Watch for ConfigMap changes using polling approach - no package installation needed
-	cmd += "last_config_link='' && " +
-		"while true; do " +
-		"current_config_link=$(readlink /config/config.yml 2>/dev/null || echo 'none') && " +
-		"if [ \"$current_config_link\" != \"$last_config_link\" ]; then " +
-		"echo 'Config change detected, updating symlink...' && " +
-		"ln -sf /config/config.yml /www/assets/config.yml && " +
-		"echo \"Config updated at $(date)\" && " +
-		"last_config_link=\"$current_config_link\"; " +
-		"fi; " +
-		"sleep 5; " +
-		"done"
+	// Keep the symlinks and staged assets current using only basic POSIX
+	// utilities. ConfigMap volumes are projected atomically, so refreshing on
+	// each poll avoids depending on readlink/find/sha256sum being present in a
+	// user-supplied config-sync image.
+	cmd += "while true; do " +
+		"ln -sf /config/config.yml /www/assets/config.yml && "
+	if config != nil {
+		for _, pageKey := range config.PageConfigKeys {
+			if !isSafeRelativeAssetPath(pageKey) {
+				continue
+			}
+			cmd += "ln -sf " + shellQuote("/config/"+pageKey) + " " + shellQuote("/www/assets/"+pageKey) + " && "
+		}
+	}
+	cmd += buildAssetRefreshCommand(config) + "sleep 5; done"
 
 	return cmd
+}
+
+// buildAssetRefreshCommand returns a shell fragment that replaces every
+// asset previously staged by this operator and copies the current projected
+// ConfigMap contents. The state file lets updates remove files that no longer
+// exist in the ConfigMap, while keeping Homer-owned default assets intact.
+func buildAssetRefreshCommand(config *DeploymentConfig) string {
+	if config == nil {
+		return "true && "
+	}
+
+	const stateDir = "/operator-state/.homer-operator-state"
+	const stateFile = stateDir + "/staged"
+	const backupDir = stateDir + "/backups"
+
+	cmd := "true && "
+	if config.AssetsConfigMapName != "" {
+		cmd += "mkdir -p " + shellQuote(stateDir) + " && " +
+			"if [ -f " + shellQuote(stateFile) + " ]; then " +
+			"while IFS= read -r relative; do " +
+			"if [ -n \"$relative\" ]; then " +
+			"backup=\"" + backupDir + "/$relative\"; destination=\"/www/assets/$relative\"; " +
+			"if [ -f \"$backup\" ]; then mkdir -p \"${destination%/*}\" && cp \"$backup\" \"$destination\"; elif [ -f \"$backup.missing\" ]; then rm -f \"$destination\"; else rm -f \"$destination\"; fi; " +
+			"fi; " +
+			"done < " + shellQuote(stateFile) + "; " +
+			"fi && " +
+			"rm -rf " + shellQuote(backupDir) + " && mkdir -p " + shellQuote(backupDir) + " && " +
+			"rm -f " + shellQuote(stateFile) + " && touch " + shellQuote(stateFile) + " && " +
+			"stage_asset() { " +
+			"source=\"$1\"; relative=\"$2\"; " +
+			"case \"$relative\" in " + assetRefreshReservedPaths(config) + ") return 0 ;; esac; " +
+			"case \"$relative\" in ''|.|..|/*|../*|*'\\\\'*) return 0 ;; esac; " +
+			"destination=\"/www/assets/$relative\"; backup=\"" + backupDir + "/$relative\"; " +
+			"if [ ! -e \"$backup\" ] && [ ! -e \"$backup.missing\" ]; then " +
+			"if [ -e \"$destination\" ]; then mkdir -p \"${backup%/*}\" && cp \"$destination\" \"$backup\"; else mkdir -p \"${backup%/*}\" && : > \"$backup.missing\"; fi; " +
+			"fi; " +
+			"mkdir -p \"${destination%/*}\" && cp \"$source\" \"$destination\" && printf '%s\\n' \"$relative\" >> " + shellQuote(stateFile) + "; " +
+			"} && " +
+			"if [ -d /custom-assets ]; then " +
+			"stage_tree() { " +
+			"for entry in \"$1\"/* \"$1\"/.[!.]* \"$1\"/..?*; do " +
+			"[ -f \"$entry\" ] || [ -d \"$entry\" ] || continue; " +
+			"if [ -d \"$entry\" ]; then stage_tree \"$entry\" \"$2${entry##*/}/\"; " +
+			"else stage_asset \"$entry\" \"$2${entry##*/}\"; fi; " +
+			"done; " +
+			"}; stage_tree /custom-assets ''; fi && "
+	}
+
+	aliasSources := make([]string, 0, len(config.IconAliases))
+	for source := range config.IconAliases {
+		aliasSources = append(aliasSources, source)
+	}
+	slices.Sort(aliasSources)
+	for _, source := range aliasSources {
+		if !isSafeRelativeAssetPath(source) {
+			slog.Warn("skipping unsafe Homer icon alias source", "source", source)
+			continue
+		}
+		destinations := append([]string(nil), config.IconAliases[source]...)
+		slices.Sort(destinations)
+		for _, destination := range destinations {
+			if !isSafeRelativeAssetPath(destination) {
+				slog.Warn("skipping unsafe Homer icon alias destination", "source", source, "destination", destination)
+				continue
+			}
+			if config.AssetsConfigMapName != "" {
+				cmd += "if [ -f " + shellQuote("/custom-assets/"+source) + " ]; then stage_asset " +
+					shellQuote("/custom-assets/"+source) + " " + shellQuote(destination) + "; fi && "
+			}
+		}
+	}
+
+	if config.PWAManifest != "" {
+		cmd += "printf '%s' " + shellQuote(config.PWAManifest) + " > " + shellQuote("/www/assets/manifest.json") + " && "
+	}
+
+	return cmd
+}
+
+func assetRefreshReservedPaths(config *DeploymentConfig) string {
+	paths := []string{"config.yml"}
+	if config != nil && config.PWAManifest != "" {
+		paths = append(paths, "manifest.json")
+	}
+	if config != nil {
+		for _, pageKey := range config.PageConfigKeys {
+			if isSafeRelativeAssetPath(pageKey) {
+				paths = append(paths, pageKey)
+			}
+		}
+	}
+	return strings.Join(paths, "|")
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+func isSafeRelativeAssetPath(value string) bool {
+	if value == "" || strings.ContainsRune(value, '\x00') || strings.Contains(value, "\\") {
+		return false
+	}
+	clean := path.Clean(value)
+	return clean != "." && clean != ".." && !strings.HasPrefix(clean, "../") && !strings.HasPrefix(clean, "/")
 }
 
 // buildSidecarVolumeMounts creates volume mounts for the config-sync sidecar
@@ -725,6 +1864,10 @@ func buildSidecarVolumeMounts(config *DeploymentConfig) []corev1.VolumeMount {
 		{
 			Name:      "assets-volume",
 			MountPath: "/www/assets",
+		},
+		{
+			Name:      "operator-state-volume",
+			MountPath: "/operator-state",
 		},
 	}
 
@@ -780,15 +1923,11 @@ func CreateDeploymentWithDNS(
 
 // ValidateTheme validates that the theme name is supported by Homer
 func ValidateTheme(theme string) error {
-	if theme == "" {
-		return nil // Empty theme is valid (uses default)
-	}
-
-	validThemes := []string{"default", "neon", "walkxcode"}
-	if slices.Contains(validThemes, theme) {
-		return nil
-	}
-	return fmt.Errorf("unsupported theme: %s", theme)
+	// Homer builds the CSS class as `theme-${theme}` and intentionally leaves
+	// room for community/custom themes. Only the frontend knows which theme
+	// stylesheet is available, so rejecting names here would prevent valid
+	// upstream Homer configurations from being used.
+	return nil
 }
 
 // SecretKeyRef represents a reference to a key in a Secret (local type to avoid circular imports)
@@ -855,6 +1994,7 @@ func ResolveAPIKeyFromSecret(
 		item.Parameters = make(map[string]string)
 	}
 	item.Parameters["apikey"] = value
+	item.parametersInjected = true
 	return nil
 }
 
@@ -900,6 +2040,7 @@ func ResolveUsernameFromSecret(
 		item.Parameters = make(map[string]string)
 	}
 	item.Parameters["username"] = value
+	item.parametersInjected = true
 	return nil
 }
 
@@ -921,6 +2062,7 @@ func ResolvePasswordFromSecret(
 		item.Parameters = make(map[string]string)
 	}
 	item.Parameters["password"] = value
+	item.parametersInjected = true
 	return nil
 }
 
@@ -968,79 +2110,70 @@ func GeneratePWAManifest(
 		backgroundColor = "#ffffff"
 	}
 
-	manifest := fmt.Sprintf(`{
-  "name": "%s",
-  "short_name": "%s",
-  "description": "%s",
-  "start_url": "%s",
-  "display": "%s",
-  "theme_color": "%s",
-  "background_color": "%s",
-  "icons": [`,
-		title,
-		func() string {
-			if shortName != "" {
-				return truncateString(shortName, 12)
-			}
-			return truncateString(title, 12)
-		}(), // Short name max 12 chars
-		description,
-		startURL,
-		display,
-		themeColor,
-		backgroundColor)
+	type manifestIcon struct {
+		Src     string `json:"src"`
+		Sizes   string `json:"sizes"`
+		Type    string `json:"type"`
+		Purpose string `json:"purpose"`
+	}
+	type manifest struct {
+		Name            string         `json:"name"`
+		ShortName       string         `json:"short_name"`
+		Description     string         `json:"description"`
+		StartURL        string         `json:"start_url"`
+		Display         string         `json:"display"`
+		ThemeColor      string         `json:"theme_color"`
+		BackgroundColor string         `json:"background_color"`
+		Icons           []manifestIcon `json:"icons"`
+	}
 
-	iconEntries := []string{}
+	iconEntries := make([]manifestIcon, 0, 2)
 
 	// Add default icons if not overridden
 	if icons["192"] != "" {
-		iconEntries = append(iconEntries, fmt.Sprintf(`    {
-      "src": "%s",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any maskable"
-    }`, icons["192"]))
+		iconEntries = append(iconEntries, manifestIcon{
+			Src: icons["192"], Sizes: "192x192", Type: "image/png", Purpose: "any maskable",
+		})
 	}
 
 	if icons["512"] != "" {
-		iconEntries = append(iconEntries, fmt.Sprintf(`    {
-      "src": "%s", 
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any maskable"
-    }`, icons["512"]))
+		iconEntries = append(iconEntries, manifestIcon{
+			Src: icons["512"], Sizes: "512x512", Type: "image/png", Purpose: "any maskable",
+		})
 	}
 
 	// Add default Homer icons if no custom icons provided
 	if len(iconEntries) == 0 {
 		iconEntries = append(iconEntries,
-			`    {
-      "src": "assets/icons/pwa-192x192.png",
-      "sizes": "192x192", 
-      "type": "image/png",
-      "purpose": "any maskable"
-    }`,
-			`    {
-      "src": "assets/icons/pwa-512x512.png",
-      "sizes": "512x512",
-      "type": "image/png", 
-      "purpose": "any maskable"
-    }`)
+			manifestIcon{Src: "icons/pwa-192x192.png", Sizes: "192x192", Type: "image/png", Purpose: "any maskable"},
+			manifestIcon{Src: "icons/pwa-512x512.png", Sizes: "512x512", Type: "image/png", Purpose: "any maskable"},
+		)
 	}
 
-	manifest += strings.Join(iconEntries, ",\n") + `
-  ]
-}`
-
-	return manifest
+	result, err := json.MarshalIndent(manifest{
+		Name: title,
+		ShortName: func() string {
+			if shortName != "" {
+				return truncateString(shortName, 12)
+			}
+			return truncateString(title, 12)
+		}(),
+		Description: description, StartURL: startURL, Display: display,
+		ThemeColor: themeColor, BackgroundColor: backgroundColor, Icons: iconEntries,
+	}, "", "  ")
+	if err != nil {
+		return ""
+	}
+	return string(result)
 }
 
 // truncateString truncates a string to a maximum length
 func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
-	return s[:maxLen-3] + "..."
+	return string(runes[:maxLen-3]) + "..."
 }
 
 func CreateService(name string, namespace string, owner client.Object) corev1.Service {
@@ -1538,30 +2671,50 @@ func smartMergeItems(existingItem, newItem *Item) {
 
 	if newItem.Parameters != nil {
 		for key, value := range newItem.Parameters {
+			existingValue := itemFieldValue(existingItem, key)
 			// Smart precedence rules
 			switch key {
 			case NameField:
 				// CRD name always wins (foundation principle)
 				if !isCRDExisting {
-					existingItem.Parameters[key] = value
+					setItemParameter(existingItem, key, value)
 				}
 			case URLField, "subtitle":
 				// Discovered items provide runtime URLs and subtitles (they know the actual endpoints)
 				if isDiscoveredNew {
-					existingItem.Parameters[key] = value
-				} else if existingItem.Parameters[key] == "" || !isCRDExisting {
+					setItemParameter(existingItem, key, value)
+				} else if existingValue == "" || !isCRDExisting {
 					// Fill in if empty OR if existing item is not from CRD (allow updates)
-					existingItem.Parameters[key] = value
+					setItemParameter(existingItem, key, value)
 				}
 			default:
 				// For other fields, CRD takes precedence, discovered fills gaps
-				if isCRDExisting && existingItem.Parameters[key] != "" {
+				if isCRDExisting && existingValue != "" {
 					// Keep CRD value
 					continue
 				}
 				// Use new value (either CRD is empty or new item is CRD)
-				existingItem.Parameters[key] = value
+				setItemParameter(existingItem, key, value)
 			}
+		}
+	}
+
+	// A direct upstream item may not have a legacy Parameters map. Merge its
+	// modeled fields too, applying the same CRD-foundation/discovery rules.
+	for key, value := range directItemStringFields(*newItem) {
+		if value == "" {
+			continue
+		}
+		existingValue := itemFieldValue(existingItem, key)
+		if key == NameField && isCRDExisting {
+			continue
+		}
+		if (key == URLField || key == "subtitle") && isDiscoveredNew {
+			setItemParameter(existingItem, key, value)
+			continue
+		}
+		if existingValue == "" || !isCRDExisting {
+			setItemParameter(existingItem, key, value)
 		}
 	}
 
@@ -1571,8 +2724,57 @@ func smartMergeItems(existingItem, newItem *Item) {
 			if existingItem.NestedObjects[objectName] == nil {
 				existingItem.NestedObjects[objectName] = make(map[string]string)
 			}
-			// Additive approach - both CRD and discovered can contribute
-			maps.Copy(existingItem.NestedObjects[objectName], objectMap)
+			// Additive approach - both CRD and discovered can contribute. A CRD
+			// value remains authoritative when both sources define the key.
+			for key, value := range objectMap {
+				if !isCRDExisting || existingItem.NestedObjects[objectName][key] == "" {
+					existingItem.NestedObjects[objectName][key] = value
+				}
+			}
+		}
+	}
+
+	if newItem.Headers != nil {
+		if existingItem.Headers == nil {
+			existingItem.Headers = make(map[string]any)
+		}
+		for key, value := range newItem.Headers {
+			if _, exists := existingItem.Headers[key]; !exists || !isCRDExisting {
+				existingItem.Headers[key] = deepCopyValue(value)
+			}
+		}
+	}
+	if newItem.Quick != nil {
+		for _, quickLink := range newItem.Quick {
+			duplicate := false
+			for _, existingQuickLink := range existingItem.Quick {
+				if reflect.DeepEqual(existingQuickLink, quickLink) {
+					duplicate = true
+					break
+				}
+			}
+			if !duplicate {
+				existingItem.Quick = append(existingItem.Quick, *quickLink.DeepCopy())
+			}
+		}
+	}
+	if newItem.SuccessCodes != nil && (len(existingItem.SuccessCodes) == 0 || !isCRDExisting) {
+		existingItem.SuccessCodes = append([]int(nil), newItem.SuccessCodes...)
+	}
+	if newItem.UpdateIntervalMs != nil && (existingItem.UpdateIntervalMs == nil || !isCRDExisting) {
+		existingItem.UpdateIntervalMs = deepCopyValue(newItem.UpdateIntervalMs)
+		existingItem.updateIntervalSet = newItem.updateIntervalSet
+	}
+	if newItem.UseCredentials != nil && (existingItem.UseCredentials == nil || !isCRDExisting) {
+		existingItem.UseCredentials = new(bool)
+		*existingItem.UseCredentials = *newItem.UseCredentials
+	}
+	for key, value := range newItem.RawFields {
+		if _, exists := existingItem.RawFields[key]; !exists {
+			if existingItem.RawFields == nil {
+				existingItem.RawFields = make(map[string]json.RawMessage)
+			}
+			existingItem.RawFields[key] = append(json.RawMessage(nil), value...)
 		}
 	}
 
@@ -1585,6 +2787,57 @@ func smartMergeItems(existingItem, newItem *Item) {
 			existingItem.Source = newItem.Source
 			existingItem.Namespace = newItem.Namespace
 		}
+	}
+}
+
+func itemFieldValue(item *Item, key string) string {
+	switch strings.ToLower(key) {
+	case "name":
+		return item.Name
+	case "logo":
+		return item.Logo
+	case "icon":
+		return item.Icon
+	case "subtitle":
+		return item.Subtitle
+	case "tag":
+		return item.Tag
+	case "keywords":
+		return item.Keywords
+	case "url":
+		return item.URL
+	case "target":
+		return item.Target
+	case "tagstyle":
+		return item.TagStyle
+	case "type":
+		return item.Type
+	case "background":
+		return item.Background
+	case "class":
+		return item.Class
+	case "endpoint":
+		return item.Endpoint
+	default:
+		return getParameter(item.Parameters, key)
+	}
+}
+
+func directItemStringFields(item Item) map[string]string {
+	return map[string]string{
+		"name":       item.Name,
+		"logo":       item.Logo,
+		"icon":       item.Icon,
+		"subtitle":   item.Subtitle,
+		"tag":        item.Tag,
+		"keywords":   item.Keywords,
+		"url":        item.URL,
+		"target":     item.Target,
+		"tagstyle":   item.TagStyle,
+		"type":       item.Type,
+		"background": item.Background,
+		"class":      item.Class,
+		"endpoint":   item.Endpoint,
 	}
 }
 
@@ -1628,6 +2881,7 @@ func processItemAnnotations(item *Item, annotations map[string]string) {
 
 // processItemAnnotationsWithValidation processes item annotations with validation
 func processItemAnnotationsWithValidation(item *Item, annotations map[string]string, validationLevel ValidationLevel) {
+	item.legacyParameters = true
 	for key, value := range annotations {
 		if fieldName, ok := strings.CutPrefix(key, "item.homer.rajsingh.info/"); ok {
 			processItemField(item, strings.ToLower(fieldName), value, validationLevel)
@@ -1657,6 +2911,7 @@ func processItemField(item *Item, fieldName, value string, validationLevel Valid
 
 // processArrayObjectField handles array-of-objects annotations like quick.0.name
 func processArrayObjectField(item *Item, arrayName string, index int, property, value string) {
+	item.legacyParameters = true
 	if item.ArrayObjects == nil {
 		item.ArrayObjects = make(map[string][]map[string]string)
 	}
@@ -1674,6 +2929,7 @@ func processArrayObjectField(item *Item, arrayName string, index int, property, 
 
 // processNestedObjectField handles nested object annotations like customHeaders/Authorization
 func processNestedObjectField(item *Item, fieldName, value string) {
+	item.legacyParameters = true
 	// Split the field name on "/" to get object and property
 	parts := strings.SplitN(fieldName, "/", 2)
 	if len(parts) != 2 {
@@ -1699,6 +2955,7 @@ func processNestedObjectField(item *Item, fieldName, value string) {
 
 // processDynamicParameter handles all parameters dynamically
 func processDynamicParameter(item *Item, fieldName, value string, validationLevel ValidationLevel) {
+	item.legacyParameters = true
 	// Initialize Parameters map if not exists
 	if item.Parameters == nil {
 		item.Parameters = make(map[string]string)
@@ -1717,10 +2974,11 @@ func processDynamicParameter(item *Item, fieldName, value string, validationLeve
 					cleanKeywords = append(cleanKeywords, keyword)
 				}
 			}
-			item.Parameters[fieldName] = strings.Join(cleanKeywords, ",")
+			value = strings.Join(cleanKeywords, ",")
 		} else {
-			item.Parameters[fieldName] = strings.TrimSpace(value)
+			value = strings.TrimSpace(value)
 		}
+		setKnownItemParameterOrStore(item, fieldName, value)
 	case "url", "target", WarningValueField, DangerValueField:
 		// Handle validation for these fields
 		if err := validateAnnotationValue(fieldName, value, validationLevel); err != nil &&
@@ -1728,9 +2986,20 @@ func processDynamicParameter(item *Item, fieldName, value string, validationLeve
 			// Don't store invalid values in strict mode
 			return
 		}
-		item.Parameters[fieldName] = value
+		setKnownItemParameterOrStore(item, fieldName, value)
 	default:
-		// Store all other parameters as-is
+		// Store known upstream fields in both representations so annotation
+		// overrides remain visible to direct-field consumers. Other fields stay
+		// in the open-ended legacy parameter map.
+		setKnownItemParameterOrStore(item, fieldName, value)
+	}
+}
+
+func setKnownItemParameterOrStore(item *Item, fieldName, value string) {
+	switch fieldName {
+	case "name", "logo", "icon", "subtitle", "tag", "keywords", "url", "target", "tagstyle", "type", "background", "class", "endpoint":
+		setItemParameter(item, fieldName, value)
+	default:
 		item.Parameters[fieldName] = value
 	}
 }
@@ -2123,6 +3392,7 @@ func processServiceAnnotations(service *Service, annotations map[string]string) 
 
 // processServiceField processes a single service field using smart convention-based detection
 func processServiceField(service *Service, fieldName, value string) {
+	service.legacyParameters = true
 	// Handle nested object annotations (e.g., customConfig/theme)
 	if strings.Contains(fieldName, "/") {
 		processServiceNestedObjectField(service, fieldName, value)
@@ -2134,15 +3404,25 @@ func processServiceField(service *Service, fieldName, value string) {
 		return
 	}
 
-	// Store all parameters dynamically using lowercase field names
+	// Store known upstream fields directly as well as in the legacy map. This
+	// keeps annotation overrides visible to direct-field consumers.
+	fieldName = strings.ToLower(fieldName)
+	switch fieldName {
+	case "name", "icon", "logo", "class":
+		setServiceParameter(service, fieldName, value)
+		return
+	}
+
+	// Store all other parameters dynamically using lowercase field names
 	if service.Parameters == nil {
 		service.Parameters = make(map[string]string)
 	}
-	service.Parameters[strings.ToLower(fieldName)] = value
+	service.Parameters[fieldName] = value
 }
 
 // processServiceNestedObjectField handles nested object annotations for services
 func processServiceNestedObjectField(service *Service, fieldName, value string) {
+	service.legacyParameters = true
 	// Split the field name on "/" to get object and property
 	parts := strings.SplitN(fieldName, "/", 2)
 	if len(parts) != 2 {
@@ -2207,10 +3487,6 @@ func ValidateHomerConfig(config *HomerConfig) error {
 		return fmt.Errorf("config: nil")
 	}
 
-	if config.Title == "" {
-		return fmt.Errorf("title: required")
-	}
-
 	if config.Colors.Light.Background != "" && !isValidColor(config.Colors.Light.Background) {
 		return fmt.Errorf("light background color: %s", config.Colors.Light.Background)
 	}
@@ -2228,19 +3504,21 @@ func ValidateHomerConfig(config *HomerConfig) error {
 
 	for i, service := range config.Services {
 		serviceName := getServiceName(&service)
-		if serviceName == "" {
-			return fmt.Errorf("service[%d]: missing name", i)
-		}
 
 		for j, item := range service.Items {
 			itemName := getItemName(&item)
-			if itemName == "" {
-				return fmt.Errorf("service[%d].item[%d]: missing name", i, j)
-			}
 
 			itemURL := getItemURL(&item)
-			if itemURL != "" && !isValidURL(itemURL) {
-				return fmt.Errorf("service[%d].item[%d]: invalid URL %s", i, j, itemURL)
+			// Upstream Homer treats item URLs as browser href strings. Keep
+			// strict URL checks for the annotation/parameter compatibility
+			// path, where the operator historically promised validation, but
+			// do not reject direct upstream-style values such as mailto:, tel:,
+			// protocol-relative URLs, or custom schemes.
+			legacyItem := service.legacyParameters || item.legacyParameters ||
+				len(service.Parameters) > 0 || len(item.Parameters) > 0 ||
+				len(item.NestedObjects) > 0 || len(item.ArrayObjects) > 0
+			if legacyItem && itemURL != "" && !isValidURL(itemURL) {
+				return fmt.Errorf("service[%d].item[%d] (%s): invalid URL %s", i, j, serviceName+"/"+itemName, itemURL)
 			}
 		}
 	}
@@ -2280,7 +3558,14 @@ func isValidURL(url string) bool {
 	if url == "" {
 		return true
 	}
-	return strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "ftp://")
+	if strings.HasPrefix(url, "#") || strings.HasPrefix(url, "/") || strings.HasPrefix(url, "./") || strings.HasPrefix(url, "../") {
+		return true
+	}
+	parsed, err := neturl.Parse(url)
+	if err != nil {
+		return false
+	}
+	return parsed.Scheme == "http" || parsed.Scheme == "https" || parsed.Scheme == "ftp"
 }
 
 // getOwnerReferences safely creates owner references with proper GVK
@@ -2372,13 +3657,43 @@ func GetAssetURL(assetConfig *AssetConfig, assetName string, fallbackURL string)
 
 // normalizeHomerConfig sets default values and ensures proper field formatting
 func normalizeHomerConfig(config *HomerConfig) {
-	// Set header to true by default if not explicitly set
-	if !config.Header {
+	// Homer defaults to showing the header. Preserve an explicitly supplied
+	// false value, which is a supported upstream setting.
+	if !config.headerSet && !config.Header {
 		config.Header = true
 	}
 
-	// Sort services and items alphabetically for consistent ordering
-	sortServicesAndItems(config)
+	// Homer preserves declaration order. The operator's optional order
+	// parameter remains available for users who explicitly request sorting.
+	if configNeedsExplicitOrdering(config) {
+		sortServicesAndItems(config)
+	}
+}
+
+func configNeedsExplicitOrdering(config *HomerConfig) bool {
+	for _, service := range config.Services {
+		// The parameter-map representation is the operator's legacy/discovery
+		// representation. Keep its historical deterministic ordering. Direct
+		// upstream-style objects are emitted in declaration order unless an
+		// order parameter is explicitly supplied.
+		if service.legacyParameters || len(service.Parameters) > 0 || hasOrderParameter(service.Parameters) {
+			return true
+		}
+		for _, item := range service.Items {
+			if item.legacyParameters || (!item.parametersInjected && len(item.Parameters) > 0) || hasOrderParameter(item.Parameters) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasOrderParameter(params map[string]string) bool {
+	if params == nil {
+		return false
+	}
+	_, ok := params["order"]
+	return ok
 }
 
 // getOrderAnnotation returns the integer value of the "order" parameter.
@@ -2435,12 +3750,23 @@ func marshalHomerConfigToYAML(config *HomerConfig) ([]byte, error) {
 	addProxyConfig(configMap, config)
 	addMessageConfig(configMap, config)
 	addLinksAndServices(configMap, config)
+	for key, value := range config.presentFields {
+		if _, exists := configMap[key]; !exists {
+			configMap[key] = decodeRawField(value)
+		}
+	}
 
 	return yaml.Marshal(configMap)
 }
 
 // addBasicFields adds basic configuration fields
 func addBasicFields(configMap map[string]any, config *HomerConfig) {
+	for key, value := range config.RawFields {
+		if _, known := homerConfigJSONFields[key]; known {
+			continue
+		}
+		configMap[key] = decodeRawField(value)
+	}
 	if config.Title != "" {
 		configMap["title"] = config.Title
 	}
@@ -2456,15 +3782,23 @@ func addBasicFields(configMap map[string]any, config *HomerConfig) {
 	if config.Icon != "" {
 		configMap["icon"] = config.Icon
 	}
-	configMap["header"] = config.Header
-	if config.Footer != "" {
+	if config.Header || config.headerSet {
+		if raw, ok := config.presentFields["header"]; ok && strings.TrimSpace(string(raw)) == "null" {
+			configMap["header"] = nil
+		} else {
+			configMap["header"] = config.Header
+		}
+	}
+	if config.Footer != "" || config.footerSet {
 		if config.Footer == FooterHidden {
 			configMap["footer"] = false
+		} else if config.footerValueSet {
+			configMap["footer"] = config.footerValue
 		} else {
 			configMap["footer"] = config.Footer
 		}
 	}
-	if config.Columns != "" {
+	if config.Columns != nil {
 		configMap["columns"] = config.Columns
 	}
 	if config.ConnectivityCheck != nil {
@@ -2479,31 +3813,97 @@ func addBasicFields(configMap map[string]any, config *HomerConfig) {
 	if config.ExternalConfig != "" {
 		configMap["externalConfig"] = config.ExternalConfig
 	}
+	if config.UpdateIntervalMs != nil || config.updateIntervalSet {
+		configMap["updateIntervalMs"] = config.UpdateIntervalMs
+	}
+}
+
+// AddPageConfigsToConfigMap stores additional Homer page configurations in
+// the same ConfigMap as config.yml. Homer loads a page named "foo" from
+// assets/foo.yml when the browser URL contains #foo.
+func AddPageConfigsToConfigMap(configMap *corev1.ConfigMap, pages map[string]apiextensionsv1.JSON) error {
+	if configMap == nil || len(pages) == 0 {
+		return nil
+	}
+	if configMap.Data == nil {
+		configMap.Data = make(map[string]string)
+	}
+	for name, page := range pages {
+		if !isValidPageName(name) {
+			return fmt.Errorf("invalid Homer page name %q: use only letters, numbers, '.', '_' and '-'", name)
+		}
+		var pageValue any
+		if err := json.Unmarshal(page.Raw, &pageValue); err != nil {
+			return fmt.Errorf("parse Homer page %q: %w", name, err)
+		}
+		data, err := yaml.Marshal(pageValue)
+		if err != nil {
+			return fmt.Errorf("marshal Homer page %q: %w", name, err)
+		}
+		configMap.Data[name+".yml"] = string(data)
+	}
+	return nil
+}
+
+func isValidPageName(name string) bool {
+	if name == "" || name == "config" || strings.HasSuffix(name, ".yml") || strings.HasSuffix(name, ".yaml") {
+		return false
+	}
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // addHotkeyConfig adds hotkey configuration
 func addHotkeyConfig(configMap map[string]any, config *HomerConfig) {
-	if config.Hotkey.Search != "" {
+	if config.Hotkey.Search != "" || len(config.Hotkey.RawFields) > 0 {
+		values := make(map[string]any)
+		for key, value := range config.Hotkey.RawFields {
+			values[key] = decodeRawField(value)
+		}
 		configMap["hotkey"] = map[string]any{
 			"search": config.Hotkey.Search,
 		}
+		for key, value := range values {
+			configMap["hotkey"].(map[string]any)[key] = value
+		}
+	} else if raw, ok := config.presentFields["hotkey"]; ok {
+		configMap["hotkey"] = decodeRawField(raw)
 	}
 }
 
 // addColorsConfig adds colors configuration
 func addColorsConfig(configMap map[string]any, config *HomerConfig) {
-	if config.Colors.Light != (ThemeColors{}) || config.Colors.Dark != (ThemeColors{}) {
+	if themeColorsConfigured(config.Colors.Light) || themeColorsConfigured(config.Colors.Dark) || len(config.Colors.RawFields) > 0 {
+		if raw, ok := config.presentFields["colors"]; ok && strings.TrimSpace(string(raw)) == "null" {
+			configMap["colors"] = nil
+			return
+		}
 		colorsMap := make(map[string]any)
-		if config.Colors.Light != (ThemeColors{}) {
+		for key, value := range config.Colors.RawFields {
+			colorsMap[key] = decodeRawField(value)
+		}
+		if themeColorsConfigured(config.Colors.Light) {
 			lightMap := make(map[string]any)
 			addThemeColors(lightMap, config.Colors.Light)
+			for key, value := range config.Colors.Light.RawFields {
+				lightMap[key] = decodeRawField(value)
+			}
 			if len(lightMap) > 0 {
 				colorsMap["light"] = lightMap
 			}
 		}
-		if config.Colors.Dark != (ThemeColors{}) {
+		if themeColorsConfigured(config.Colors.Dark) {
 			darkMap := make(map[string]any)
 			addThemeColors(darkMap, config.Colors.Dark)
+			for key, value := range config.Colors.Dark.RawFields {
+				darkMap[key] = decodeRawField(value)
+			}
 			if len(darkMap) > 0 {
 				colorsMap["dark"] = darkMap
 			}
@@ -2511,13 +3911,32 @@ func addColorsConfig(configMap map[string]any, config *HomerConfig) {
 		if len(colorsMap) > 0 {
 			configMap["colors"] = colorsMap
 		}
+	} else if raw, ok := config.presentFields["colors"]; ok {
+		configMap["colors"] = decodeRawField(raw)
 	}
+}
+
+func themeColorsConfigured(colors ThemeColors) bool {
+	return colors.HighlightPrimary != "" || colors.HighlightSecondary != "" ||
+		colors.HighlightHover != "" || colors.Background != "" ||
+		colors.CardBackground != "" || colors.Text != "" ||
+		colors.TextHeader != "" || colors.TextTitle != "" ||
+		colors.TextSubtitle != "" || colors.CardShadow != "" ||
+		colors.Link != "" || colors.LinkHover != "" ||
+		colors.BackgroundImage != "" || len(colors.RawFields) > 0
 }
 
 // addDefaultsConfig adds defaults configuration
 func addDefaultsConfig(configMap map[string]any, config *HomerConfig) {
-	if config.Defaults.ColorTheme != "" || config.Defaults.Layout != "" {
+	if config.Defaults.ColorTheme != "" || config.Defaults.Layout != "" || len(config.Defaults.RawFields) > 0 {
+		if raw, ok := config.presentFields["defaults"]; ok && strings.TrimSpace(string(raw)) == "null" {
+			configMap["defaults"] = nil
+			return
+		}
 		defaultsMap := make(map[string]any)
+		for key, value := range config.Defaults.RawFields {
+			defaultsMap[key] = decodeRawField(value)
+		}
 		if config.Defaults.Layout != "" {
 			defaultsMap["layout"] = config.Defaults.Layout
 		}
@@ -2525,13 +3944,22 @@ func addDefaultsConfig(configMap map[string]any, config *HomerConfig) {
 			defaultsMap["colorTheme"] = config.Defaults.ColorTheme
 		}
 		configMap["defaults"] = defaultsMap
+	} else if raw, ok := config.presentFields["defaults"]; ok {
+		configMap["defaults"] = decodeRawField(raw)
 	}
 }
 
 // addProxyConfig adds proxy configuration
 func addProxyConfig(configMap map[string]any, config *HomerConfig) {
-	if config.Proxy.UseCredentials || len(config.Proxy.Headers) > 0 {
+	if config.Proxy.UseCredentials || len(config.Proxy.Headers) > 0 || len(config.Proxy.RawFields) > 0 || config.proxySet {
+		if raw, ok := config.presentFields["proxy"]; ok && strings.TrimSpace(string(raw)) == "null" {
+			configMap["proxy"] = nil
+			return
+		}
 		proxyMap := make(map[string]any)
+		for key, value := range config.Proxy.RawFields {
+			proxyMap[key] = decodeRawField(value)
+		}
 		if config.Proxy.UseCredentials {
 			proxyMap["useCredentials"] = config.Proxy.UseCredentials
 		}
@@ -2544,8 +3972,18 @@ func addProxyConfig(configMap map[string]any, config *HomerConfig) {
 
 // addMessageConfig adds message configuration
 func addMessageConfig(configMap map[string]any, config *HomerConfig) {
-	if config.Message.Title != "" || config.Message.Content != "" || config.Message.Url != "" {
+	if config.Message.Title != "" || config.Message.Content != "" || config.Message.Url != "" ||
+		config.Message.Icon != "" || config.Message.Style != "" ||
+		config.Message.RefreshInterval != nil || len(config.Message.Mapping) > 0 ||
+		len(config.Message.RawFields) > 0 || config.messageSet {
+		if raw, ok := config.presentFields["message"]; ok && strings.TrimSpace(string(raw)) == "null" {
+			configMap["message"] = nil
+			return
+		}
 		messageMap := make(map[string]any)
+		for key, value := range config.Message.RawFields {
+			messageMap[key] = decodeRawField(value)
+		}
 		if config.Message.Title != "" {
 			messageMap["title"] = config.Message.Title
 		}
@@ -2561,7 +3999,7 @@ func addMessageConfig(configMap map[string]any, config *HomerConfig) {
 		if config.Message.Url != "" {
 			messageMap["url"] = config.Message.Url
 		}
-		if config.Message.RefreshInterval > 0 {
+		if config.Message.RefreshInterval != nil {
 			messageMap["refreshInterval"] = config.Message.RefreshInterval
 		}
 		if len(config.Message.Mapping) > 0 {
@@ -2575,9 +4013,13 @@ func addMessageConfig(configMap map[string]any, config *HomerConfig) {
 func addLinksAndServices(configMap map[string]any, config *HomerConfig) {
 	if len(config.Links) > 0 {
 		configMap["links"] = config.Links
+	} else if raw, ok := config.presentFields["links"]; ok {
+		configMap["links"] = decodeRawField(raw)
 	}
 	if len(config.Services) > 0 {
 		configMap["services"] = flattenServicesForYAML(config.Services)
+	} else if raw, ok := config.presentFields["services"]; ok {
+		configMap["services"] = decodeRawField(raw)
 	}
 }
 
@@ -2633,6 +4075,23 @@ func flattenServicesForYAML(services []Service) []map[string]any {
 
 	for _, service := range services {
 		serviceMap := make(map[string]any)
+		if service.Name != "" {
+			serviceMap["name"] = service.Name
+		}
+		if service.Icon != "" {
+			serviceMap["icon"] = service.Icon
+		}
+		if service.Logo != "" {
+			serviceMap["logo"] = service.Logo
+		}
+		if service.Class != "" {
+			serviceMap["class"] = service.Class
+		}
+		for key, value := range service.RawFields {
+			if _, exists := serviceMap[key]; !exists {
+				serviceMap[key] = decodeRawField(value)
+			}
+		}
 
 		// Add parameters with smart type inference and YAML key conversion
 		if service.Parameters != nil {
@@ -2673,6 +4132,12 @@ func flattenItemsForYAML(items []Item) []map[string]any {
 
 	for _, item := range items {
 		itemMap := make(map[string]any)
+		addDirectItemFields(itemMap, item)
+		for key, value := range item.RawFields {
+			if _, exists := itemMap[key]; !exists {
+				itemMap[key] = decodeRawField(value)
+			}
+		}
 
 		// Add parameters with smart type inference (key-aware for array detection)
 		if item.Parameters != nil {
@@ -2712,6 +4177,63 @@ func flattenItemsForYAML(items []Item) []map[string]any {
 	return result
 }
 
+func addDirectItemFields(itemMap map[string]any, item Item) {
+	if item.Name != "" {
+		itemMap["name"] = item.Name
+	}
+	if item.Logo != "" {
+		itemMap["logo"] = item.Logo
+	}
+	if item.Icon != "" {
+		itemMap["icon"] = item.Icon
+	}
+	if item.Subtitle != "" {
+		itemMap["subtitle"] = item.Subtitle
+	}
+	if item.Tag != "" {
+		itemMap["tag"] = item.Tag
+	}
+	if item.Keywords != "" {
+		itemMap["keywords"] = item.Keywords
+	}
+	if item.URL != "" {
+		itemMap["url"] = item.URL
+	}
+	if item.Target != "" {
+		itemMap["target"] = item.Target
+	}
+	if item.TagStyle != "" {
+		itemMap["tagstyle"] = item.TagStyle
+	}
+	if item.Type != "" {
+		itemMap["type"] = item.Type
+	}
+	if item.Background != "" {
+		itemMap["background"] = item.Background
+	}
+	if item.Class != "" {
+		itemMap["class"] = item.Class
+	}
+	if item.Endpoint != "" {
+		itemMap["endpoint"] = item.Endpoint
+	}
+	if item.UseCredentials != nil {
+		itemMap["useCredentials"] = *item.UseCredentials
+	}
+	if len(item.Headers) > 0 {
+		itemMap["headers"] = item.Headers
+	}
+	if len(item.SuccessCodes) > 0 {
+		itemMap["successCodes"] = item.SuccessCodes
+	}
+	if item.UpdateIntervalMs != nil || item.updateIntervalSet {
+		itemMap["updateIntervalMs"] = item.UpdateIntervalMs
+	}
+	if len(item.Quick) > 0 {
+		itemMap["quick"] = item.Quick
+	}
+}
+
 // getYAMLKey converts parameter keys to proper YAML field names
 // Homer uses camelCase for JavaScript property access, so we need to ensure
 // annotation keys (which may be lowercase) are converted to proper camelCase
@@ -2730,6 +4252,8 @@ func getYAMLKey(key string) string {
 		return "checkInterval"
 	case "updateinterval":
 		return "updateInterval"
+	case "updateintervalms":
+		return "updateIntervalMs"
 	case "refreshinterval":
 		return "refreshInterval"
 	case "successcodes":
@@ -2806,33 +4330,54 @@ func enhanceItemWithHealthCheck(item *Item, healthConfig *ServiceHealthConfig) {
 		return
 	}
 
-	if item.Parameters == nil {
-		item.Parameters = make(map[string]string)
-	}
+	usesLegacyParameters := item.legacyParameters || item.parametersInjected || len(item.Parameters) > 0
 
-	// Add health check URL if not already a smart card
-	if item.Parameters["type"] == "" {
-		item.Parameters["type"] = GenericType
-	}
-
-	// Set health endpoint
-	if healthConfig.HealthPath != "" && item.Parameters["endpoint"] == "" {
-		if url := item.Parameters["url"]; url != "" {
-			item.Parameters["endpoint"] = url + healthConfig.HealthPath
+	// Add health check URL if not already a smart card. Direct upstream fields
+	// are the source of truth for direct CRD items; generated/discovered items
+	// retain the legacy parameter representation for compatibility.
+	if getItemType(item) == "" {
+		if usesLegacyParameters {
+			setItemParameter(item, "type", GenericType)
+		} else {
+			item.Type = GenericType
 		}
 	}
 
-	// Merge health check headers
+	// Set health endpoint.
+	if healthConfig.HealthPath != "" && getItemEndpoint(item) == "" {
+		if url := getItemURL(item); url != "" {
+			endpoint := url + healthConfig.HealthPath
+			if usesLegacyParameters {
+				setItemParameter(item, "endpoint", endpoint)
+			} else {
+				item.Endpoint = endpoint
+			}
+		}
+	}
+
+	// Merge health check headers. Homer accepts direct item headers; the
+	// nested representation remains available for annotation-generated items.
 	if healthConfig.Headers != nil {
-		if item.NestedObjects == nil {
-			item.NestedObjects = make(map[string]map[string]string)
-		}
-		if item.NestedObjects["headers"] == nil {
-			item.NestedObjects["headers"] = make(map[string]string)
-		}
-		for k, v := range healthConfig.Headers {
-			if _, exists := item.NestedObjects["headers"][k]; !exists {
-				item.NestedObjects["headers"][k] = v
+		if usesLegacyParameters {
+			if item.NestedObjects == nil {
+				item.NestedObjects = make(map[string]map[string]string)
+			}
+			if item.NestedObjects["headers"] == nil {
+				item.NestedObjects["headers"] = make(map[string]string)
+			}
+			for key, value := range healthConfig.Headers {
+				if _, exists := item.NestedObjects["headers"][key]; !exists {
+					item.NestedObjects["headers"][key] = value
+				}
+			}
+		} else {
+			if item.Headers == nil {
+				item.Headers = make(map[string]any)
+			}
+			for key, value := range healthConfig.Headers {
+				if _, exists := item.Headers[key]; !exists {
+					item.Headers[key] = value
+				}
 			}
 		}
 	}
@@ -2877,8 +4422,7 @@ func aggregateServiceMetrics(service *Service) ServiceMetrics {
 func countItemsWithUrls(items []Item) int {
 	count := 0
 	for _, item := range items {
-		// Check Parameters map only
-		if item.Parameters != nil && item.Parameters["url"] != "" {
+		if getItemURL(&item) != "" {
 			count++
 		}
 	}
@@ -2889,8 +4433,7 @@ func countItemsWithUrls(items []Item) int {
 func countItemsWithTags(items []Item) int {
 	count := 0
 	for _, item := range items {
-		// Check Parameters map only
-		if item.Parameters != nil && item.Parameters["tag"] != "" {
+		if getItemTag(&item) != "" {
 			count++
 		}
 	}
@@ -2915,7 +4458,6 @@ func findServiceDependencies(services []Service) []ServiceDependency {
 
 	// Look for dependencies in service names, keywords, or URLs
 	for _, service := range services {
-		// Get service name from Parameters map only
 		serviceName := getServiceName(&service)
 		if serviceName == "" {
 			continue
@@ -2925,16 +4467,16 @@ func findServiceDependencies(services []Service) []ServiceDependency {
 			// Get item name from Parameters map
 			itemName := getItemName(&item)
 
-			// Process keywords dependencies
-			if item.Parameters != nil && item.Parameters["keywords"] != "" {
+			// Process keywords dependencies from direct upstream fields with
+			// legacy parameter fallback.
+			if keywords := getItemKeywords(&item); keywords != "" {
 				dependencies = append(dependencies,
-					findKeywordDependencies(item.Parameters["keywords"], services, serviceName, itemName)...)
+					findKeywordDependencies(keywords, services, serviceName, itemName)...)
 			}
 
-			// Process subtitle dependencies
-			if item.Parameters != nil && item.Parameters["subtitle"] != "" {
+			if subtitle := getItemSubtitle(&item); subtitle != "" {
 				dependencies = append(dependencies,
-					findSubtitleDependencies(item.Parameters["subtitle"], services, serviceName, itemName)...)
+					findSubtitleDependencies(subtitle, services, serviceName, itemName)...)
 			}
 		}
 	}
