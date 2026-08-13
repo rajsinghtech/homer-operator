@@ -204,6 +204,14 @@ spec:
       namespace: platform-assets
 ```
 
+Asset files are staged below Homer’s `/www/assets` directory. Nested files keep
+their relative paths, while configured icon sources can be copied to Homer’s
+canonical `icons/` paths (`favicon.ico`, `apple-touch-icon.png`, and the PWA
+icon paths). When PWA support is enabled, the operator also writes
+`manifest.json`; icon paths in that manifest match the staged paths. Changing
+or replacing a cross-namespace source updates its owned mirror, and stale
+mirrors are removed when the Dashboard reference changes.
+
 ---
 
 ## Advanced Configuration
@@ -548,7 +556,7 @@ serviceMonitor:
 kubectl create namespace homer-operator
 helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator \
   --namespace homer-operator \
-  --version 1.2.1 -f values.yaml
+  --version 1.2.2 -f values.yaml
 ```
 
 ---

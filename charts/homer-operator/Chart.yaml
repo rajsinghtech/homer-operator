@@ -2,8 +2,8 @@ apiVersion: v2
 name: homer-operator
 description: Kubernetes operator for automated Homer dashboard deployment with service discovery
 type: application
-version: 0.1.0
-appVersion: "latest"
+version: 1.2.2
+appVersion: "1.2.2"
 home: https://github.com/rajsinghtech/homer-operator
 icon: https://raw.githubusercontent.com/rajsinghtech/homer-operator/main/homer/Homer-Operator.png
 sources:

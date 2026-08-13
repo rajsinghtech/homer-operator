@@ -13,7 +13,7 @@ A Helm chart for deploying the Homer Operator on Kubernetes. The Homer Operator 
 
 ```bash
 helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator \
-  --version 1.2.1 -n homer-operator --create-namespace
+  --version 1.2.2 -n homer-operator --create-namespace
 ```
 
 ### Install from Source
@@ -158,6 +158,12 @@ For custom assets, `spec.assets.configMapRef.namespace` may point to a
 ConfigMap in another namespace. The operator watches that source and creates a
 namespace-local mirror for the Dashboard pod. Leaving `namespace` empty uses
 the Dashboard's namespace.
+
+Asset files are staged below Homer’s `/www/assets` directory with their
+relative paths preserved. Icon mappings can populate Homer’s canonical icon
+paths, and enabled PWA configuration generates `manifest.json` with matching
+icon URLs. Cross-namespace mirrors are updated when their source changes and
+removed when the Dashboard switches references.
 
 ## Troubleshooting
 

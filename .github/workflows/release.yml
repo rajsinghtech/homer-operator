@@ -224,9 +224,5 @@ jobs:
               --create-namespace
             ```
 
-            ### What's Changed
-            See the full changelog below.
-
-            ---
-
-            **Full Changelog**: https://github.com/${{ github.repository }}/commits/${{ github.ref_name }}
+            ### Release Notes
+            GitHub-generated release notes are appended below this release description.

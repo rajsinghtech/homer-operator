@@ -60,6 +60,15 @@ type DashboardReconciler struct {
 	ClusterManager   *ClusterManager
 }
 
+// discoveredClusterResources contains the results from the discovery pass used
+// to build the dashboard resources. Status must use these results instead of
+// issuing a second set of remote-cluster list requests.
+type discoveredClusterResources struct {
+	ingresses  map[string][]networkingv1.Ingress
+	httpRoutes map[string][]gatewayv1.HTTPRoute
+	services   map[string][]corev1.Service
+}
+
 //+kubebuilder:rbac:groups=homer.rajsingh.info,resources=dashboards,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=homer.rajsingh.info,resources=dashboards/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=homer.rajsingh.info,resources=dashboards/finalizers,verbs=update
@@ -100,12 +109,12 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	// Discover resources from all clusters
-	filteredIngressList, err := r.getMultiClusterFilteredIngresses(ctx, &dashboard)
+	filteredIngressList, discoveredIngresses, err := r.getMultiClusterFilteredIngresses(ctx, &dashboard)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	filteredServices, err := r.getMultiClusterFilteredServices(ctx, &dashboard)
+	filteredServices, discoveredServices, err := r.getMultiClusterFilteredServices(ctx, &dashboard)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -114,7 +123,7 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, err
 	}
 
-	resources, _, err := r.prepareResources(ctx, &dashboard, filteredIngressList, filteredServices)
+	resources, _, discoveredHTTPRoutes, err := r.prepareResources(ctx, &dashboard, filteredIngressList, filteredServices)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -127,7 +136,9 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		log := log.FromContext(ctx)
 		log.V(1).Info("Resources are up to date, skipping update")
 		// Still update status even when resources don't need updating
-		if err := r.updateStatus(ctx, &dashboard); err != nil {
+		if err := r.updateStatus(ctx, &dashboard, &discoveredClusterResources{
+			ingresses: discoveredIngresses, httpRoutes: discoveredHTTPRoutes, services: discoveredServices,
+		}); err != nil {
 			if !apierrors.IsNotFound(err) {
 				return ctrl.Result{}, err
 			}
@@ -143,7 +154,9 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, nil
 	}
 
-	if err := r.updateStatus(ctx, &dashboard); err != nil {
+	if err := r.updateStatus(ctx, &dashboard, &discoveredClusterResources{
+		ingresses: discoveredIngresses, httpRoutes: discoveredHTTPRoutes, services: discoveredServices,
+	}); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
@@ -376,12 +389,14 @@ func (r *DashboardReconciler) getFilteredIngresses(ctx context.Context, dashboar
 }
 
 // getMultiClusterFilteredIngresses discovers and filters Ingresses from all configured clusters
-func (r *DashboardReconciler) getMultiClusterFilteredIngresses(ctx context.Context, dashboard *homerv1alpha1.Dashboard) (networkingv1.IngressList, error) {
+func (r *DashboardReconciler) getMultiClusterFilteredIngresses(ctx context.Context, dashboard *homerv1alpha1.Dashboard) (networkingv1.IngressList, map[string][]networkingv1.Ingress, error) {
 	allIngresses := []networkingv1.Ingress{}
+	var discoveredIngresses map[string][]networkingv1.Ingress
 
 	// Use ClusterManager if available and remote clusters are configured
 	if r.ClusterManager != nil && len(dashboard.Spec.RemoteClusters) > 0 {
-		clusterIngresses, err := r.ClusterManager.DiscoverIngresses(ctx, dashboard)
+		var err error
+		discoveredIngresses, err = r.ClusterManager.DiscoverIngresses(ctx, dashboard)
 		if err != nil {
 			log := log.FromContext(ctx)
 			log.Error(err, "Failed to discover ingresses from clusters")
@@ -389,7 +404,7 @@ func (r *DashboardReconciler) getMultiClusterFilteredIngresses(ctx context.Conte
 		}
 
 		// Aggregate all discovered ingresses
-		for clusterName, ingresses := range clusterIngresses {
+		for clusterName, ingresses := range discoveredIngresses {
 			log := log.FromContext(ctx)
 			log.V(1).Info("Discovered ingresses from cluster", "cluster", clusterName, "count", len(ingresses))
 
@@ -407,10 +422,11 @@ func (r *DashboardReconciler) getMultiClusterFilteredIngresses(ctx context.Conte
 		}
 	} else {
 		// Fall back to single-cluster discovery
-		return r.getFilteredIngresses(ctx, dashboard)
+		filtered, err := r.getFilteredIngresses(ctx, dashboard)
+		return filtered, nil, err
 	}
 
-	return networkingv1.IngressList{Items: allIngresses}, nil
+	return networkingv1.IngressList{Items: allIngresses}, discoveredIngresses, nil
 }
 
 func (r *DashboardReconciler) getFilteredServices(ctx context.Context, dashboard *homerv1alpha1.Dashboard) ([]corev1.Service, error) {
@@ -431,7 +447,7 @@ func (r *DashboardReconciler) getFilteredServices(ctx context.Context, dashboard
 	return serviceList.Items, nil
 }
 
-func (r *DashboardReconciler) getMultiClusterFilteredServices(ctx context.Context, dashboard *homerv1alpha1.Dashboard) ([]corev1.Service, error) {
+func (r *DashboardReconciler) getMultiClusterFilteredServices(ctx context.Context, dashboard *homerv1alpha1.Dashboard) ([]corev1.Service, map[string][]corev1.Service, error) {
 	if r.ClusterManager != nil && len(dashboard.Spec.RemoteClusters) > 0 {
 		clusterServices, err := r.ClusterManager.DiscoverServices(ctx, dashboard)
 		if err != nil {
@@ -443,10 +459,11 @@ func (r *DashboardReconciler) getMultiClusterFilteredServices(ctx context.Contex
 		for _, services := range clusterServices {
 			allServices = append(allServices, services...)
 		}
-		return allServices, nil
+		return allServices, clusterServices, nil
 	}
 
-	return r.getFilteredServices(ctx, dashboard)
+	filtered, err := r.getFilteredServices(ctx, dashboard)
+	return filtered, nil, err
 }
 
 func (r *DashboardReconciler) validateDashboardConfig(dashboard *homerv1alpha1.Dashboard) error {
@@ -456,29 +473,29 @@ func (r *DashboardReconciler) validateDashboardConfig(dashboard *homerv1alpha1.D
 	return homer.ValidateHomerConfig(&dashboard.Spec.HomerConfig)
 }
 
-func (r *DashboardReconciler) prepareResources(ctx context.Context, dashboard *homerv1alpha1.Dashboard, filteredIngressList networkingv1.IngressList, filteredServices []corev1.Service) ([]client.Object, *homer.HomerConfig, error) {
+func (r *DashboardReconciler) prepareResources(ctx context.Context, dashboard *homerv1alpha1.Dashboard, filteredIngressList networkingv1.IngressList, filteredServices []corev1.Service) ([]client.Object, *homer.HomerConfig, map[string][]gatewayv1.HTTPRoute, error) {
 	deploymentConfig := r.buildDeploymentConfig(dashboard)
 	deployment := homer.CreateDeployment(dashboard.Name, dashboard.Namespace, dashboard.Spec.Replicas, dashboard, deploymentConfig)
 	service := homer.CreateService(dashboard.Name, dashboard.Namespace, dashboard)
 
 	homerConfig, err := r.buildHomerConfig(ctx, dashboard)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
-	configMap, err := r.createConfigMap(ctx, homerConfig, dashboard, filteredIngressList, filteredServices)
+	configMap, discoveredHTTPRoutes, err := r.createConfigMap(ctx, homerConfig, dashboard, filteredIngressList, filteredServices)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	resources := []client.Object{&deployment, &service, &configMap}
 	if assetMirror, err := r.buildAssetMirror(ctx, dashboard); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	} else if assetMirror != nil {
 		resources = append(resources, assetMirror)
 	}
 
-	return resources, homerConfig, nil
+	return resources, homerConfig, discoveredHTTPRoutes, nil
 }
 
 func (r *DashboardReconciler) buildDeploymentConfig(dashboard *homerv1alpha1.Dashboard) *homer.DeploymentConfig {
@@ -1114,7 +1131,7 @@ func (r *DashboardReconciler) createOrUpdateResources(ctx context.Context, resou
 	return nil
 }
 
-func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *homer.HomerConfig, dashboard *homerv1alpha1.Dashboard, filteredIngressList networkingv1.IngressList, filteredServices []corev1.Service) (corev1.ConfigMap, error) {
+func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *homer.HomerConfig, dashboard *homerv1alpha1.Dashboard, filteredIngressList networkingv1.IngressList, filteredServices []corev1.Service) (corev1.ConfigMap, map[string][]gatewayv1.HTTPRoute, error) {
 	// Merge namespace annotations into Ingress annotations
 	mergedIngressList := networkingv1.IngressList{
 		Items: make([]networkingv1.Ingress, len(filteredIngressList.Items)),
@@ -1136,10 +1153,12 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 
 	if r.EnableGatewayAPI {
 		filteredHTTPRoutes := []gatewayv1.HTTPRoute{}
+		var discoveredHTTPRoutes map[string][]gatewayv1.HTTPRoute
 
 		// Use ClusterManager for multi-cluster discovery if available
 		if r.ClusterManager != nil && len(dashboard.Spec.RemoteClusters) > 0 {
 			clusterHTTPRoutes, err := r.ClusterManager.DiscoverHTTPRoutes(ctx, dashboard)
+			discoveredHTTPRoutes = clusterHTTPRoutes
 			if err != nil {
 				log := log.FromContext(ctx)
 				log.Error(err, "Failed to discover HTTPRoutes from clusters")
@@ -1158,13 +1177,13 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 			// Fall back to single-cluster discovery
 			clusterHTTPRoutes := &gatewayv1.HTTPRouteList{}
 			if err := r.List(ctx, clusterHTTPRoutes); err != nil {
-				return corev1.ConfigMap{}, err
+				return corev1.ConfigMap{}, nil, err
 			}
 
 			for i := range clusterHTTPRoutes.Items {
 				shouldInclude, err := r.shouldIncludeHTTPRoute(ctx, &clusterHTTPRoutes.Items[i], dashboard)
 				if err != nil {
-					return corev1.ConfigMap{}, err
+					return corev1.ConfigMap{}, nil, err
 				}
 				if shouldInclude {
 					filteredHTTPRoutes = append(filteredHTTPRoutes, clusterHTTPRoutes.Items[i])
@@ -1185,22 +1204,22 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 		// Multi-cluster HTTPRoutes already have domain filters stored in annotations
 		configMap, err := homer.CreateConfigMapWithHTTPRoutes(homerConfig, dashboard.Name, dashboard.Namespace, mergedIngressList, mergedHTTPRoutes, mergedServices, dashboard, dashboard.Spec.DomainFilters)
 		if err != nil {
-			return corev1.ConfigMap{}, err
+			return corev1.ConfigMap{}, nil, err
 		}
 		if err := homer.AddPageConfigsToConfigMap(&configMap, dashboard.Spec.Pages); err != nil {
-			return corev1.ConfigMap{}, err
+			return corev1.ConfigMap{}, nil, err
 		}
-		return configMap, nil
+		return configMap, discoveredHTTPRoutes, nil
 	}
 
 	configMap, err := homer.CreateConfigMap(homerConfig, dashboard.Name, dashboard.Namespace, mergedIngressList, mergedServices, dashboard)
 	if err != nil {
-		return corev1.ConfigMap{}, err
+		return corev1.ConfigMap{}, nil, err
 	}
 	if err := homer.AddPageConfigsToConfigMap(&configMap, dashboard.Spec.Pages); err != nil {
-		return corev1.ConfigMap{}, err
+		return corev1.ConfigMap{}, nil, err
 	}
-	return configMap, nil
+	return configMap, nil, nil
 }
 
 func iconAliases(dashboard *homerv1alpha1.Dashboard) map[string][]string {
@@ -1574,7 +1593,7 @@ func validateHTTPRouteDomainFilters(httproute *gatewayv1.HTTPRoute, domainFilter
 }
 
 // updateDashboardStatusComplete updates both deployment and service discovery status in one call
-func (r *DashboardReconciler) updateStatus(ctx context.Context, dashboard *homerv1alpha1.Dashboard) error {
+func (r *DashboardReconciler) updateStatus(ctx context.Context, dashboard *homerv1alpha1.Dashboard, discovered *discoveredClusterResources) error {
 	log := log.FromContext(ctx)
 
 	// Check if Dashboard is being deleted
@@ -1645,15 +1664,10 @@ func (r *DashboardReconciler) updateStatus(ctx context.Context, dashboard *homer
 	if r.ClusterManager != nil {
 		clusterStatuses := r.ClusterManager.GetClusterStatuses()
 
-		// Get discovered resource counts
-		if len(dashboard.Spec.RemoteClusters) > 0 {
-			clusterIngresses, _ := r.ClusterManager.DiscoverIngresses(ctx, dashboard)
-			var clusterHTTPRoutes map[string][]gatewayv1.HTTPRoute
-			if r.EnableGatewayAPI {
-				clusterHTTPRoutes, _ = r.ClusterManager.DiscoverHTTPRoutes(ctx, dashboard)
-			}
-			clusterServices, _ := r.ClusterManager.DiscoverServices(ctx, dashboard)
-			clusterStatuses = r.ClusterManager.UpdateClusterStatuses(clusterStatuses, clusterIngresses, clusterHTTPRoutes, clusterServices)
+		// Use the resources discovered during reconciliation. Re-discovering here
+		// causes duplicate remote API calls and can overwrite a successful pass.
+		if discovered != nil && len(dashboard.Spec.RemoteClusters) > 0 {
+			clusterStatuses = r.ClusterManager.UpdateClusterStatuses(clusterStatuses, discovered.ingresses, discovered.httpRoutes, discovered.services)
 		}
 
 		dashboard.Status.ClusterStatuses = clusterStatuses
