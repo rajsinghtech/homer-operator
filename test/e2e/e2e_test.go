@@ -89,11 +89,19 @@ func cleanupE2ETest(k8sClient client.Client, ctx context.Context, testNs string)
 	}, time.Minute, time.Second).Should(BeTrue())
 }
 
-func environmentValue(name, fallback string) string {
+func environmentValue(name string) string {
 	if value := os.Getenv(name); value != "" {
 		return value
 	}
-	return fallback
+
+	switch name {
+	case "E2E_OPERATOR_DEPLOYMENT":
+		return defaultOperatorDeployment
+	case "E2E_OPERATOR_NAMESPACE":
+		return defaultOperatorNamespace
+	default:
+		return ""
+	}
 }
 
 func hasUpdatedDashboardConfig(config string) bool {
@@ -129,16 +137,16 @@ var _ = Describe("Homer Operator E2E Tests", func() {
 			By("Checking that Homer Operator deployment exists")
 			deployment := &appsv1.Deployment{}
 			err := k8sClient.Get(ctx, types.NamespacedName{
-				Name:      environmentValue("E2E_OPERATOR_DEPLOYMENT", defaultOperatorDeployment),
-				Namespace: environmentValue("E2E_OPERATOR_NAMESPACE", defaultOperatorNamespace),
+				Name:      environmentValue("E2E_OPERATOR_DEPLOYMENT"),
+				Namespace: environmentValue("E2E_OPERATOR_NAMESPACE"),
 			}, deployment)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Checking that deployment is ready")
 			Eventually(func() bool {
 				err := k8sClient.Get(ctx, types.NamespacedName{
-					Name:      environmentValue("E2E_OPERATOR_DEPLOYMENT", defaultOperatorDeployment),
-					Namespace: environmentValue("E2E_OPERATOR_NAMESPACE", defaultOperatorNamespace),
+					Name:      environmentValue("E2E_OPERATOR_DEPLOYMENT"),
+					Namespace: environmentValue("E2E_OPERATOR_NAMESPACE"),
 				}, deployment)
 				if err != nil {
 					return false
