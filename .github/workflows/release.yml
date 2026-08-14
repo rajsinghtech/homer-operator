@@ -19,7 +19,9 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
   GO_VERSION: '1.26.5'
-  ENVTEST_TOOL_VERSION: 'v0.21.0'
+  # setup-envtest became a separately versioned module after controller-runtime
+  # v0.21.0; v0.24.1 is the current supported tool release.
+  ENVTEST_TOOL_VERSION: 'v0.24.1'
   ENVTEST_K8S_VERSION: '1.29.0'
 
 jobs:
