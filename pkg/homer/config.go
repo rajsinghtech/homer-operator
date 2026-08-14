@@ -745,7 +745,12 @@ type Item struct {
 	updateIntervalSet  bool `json:"-" yaml:"-"`
 	legacyParameters   bool `json:"-" yaml:"-"`
 	parametersInjected bool `json:"-" yaml:"-"`
-	objectSet          bool `json:"-" yaml:"-"`
+	// resolvedSecretHeaders is a NUL-delimited, sorted set of header names
+	// resolved from Dashboard Secret references. It is intentionally kept as a
+	// string so the handwritten and generated deep-copy paths preserve the
+	// provenance without exposing it in Homer output.
+	resolvedSecretHeaders string `json:"-" yaml:"-"`
+	objectSet             bool   `json:"-" yaml:"-"`
 }
 
 // UnmarshalJSON captures unknown upstream item fields so Kubernetes and
@@ -1190,6 +1195,11 @@ func cleanupHomerConfig(config *HomerConfig) {
 			if getItemName(&item) == "" && !itemHasConfiguration(&item) {
 				continue
 			}
+			// Promote legacy parameter/nested header forms before discovery and
+			// health checks merge their own headers. This makes the legacy CRD
+			// representation participate in the same precedence rules as the
+			// upstream Item.Headers field.
+			materializeItemHeaders(&item)
 
 			item.Source = "crd"
 			item.Namespace = "dashboard"
@@ -2170,10 +2180,24 @@ func resolveSecretValue(
 	secretRef *SecretKeyRef,
 	defaultNamespace string,
 ) (string, error) {
-	// Check if item has a type in Parameters (smart card indicator)
-	itemType := getItemType(item)
-	if secretRef == nil || itemType == "" {
+	// API keys, tokens, usernames, and passwords are smart-card-specific and
+	// retain the historical type gate. Header Secrets are handled separately:
+	// headers are also valid for generic discovered items.
+	if secretRef == nil || item == nil || getItemType(item) == "" {
 		return "", nil // No secret to resolve or not a smart card
+	}
+
+	return readSecretValue(ctx, k8sClient, secretRef, defaultNamespace)
+}
+
+func readSecretValue(
+	ctx context.Context,
+	k8sClient client.Client,
+	secretRef *SecretKeyRef,
+	defaultNamespace string,
+) (string, error) {
+	if secretRef == nil {
+		return "", nil
 	}
 
 	secretNamespace := defaultNamespace
@@ -2199,6 +2223,31 @@ func resolveSecretValue(
 	}
 
 	return string(value), nil
+}
+
+func markResolvedSecretHeader(item *Item, headerName string) {
+	if item == nil {
+		return
+	}
+	headerName = strings.TrimSpace(headerName)
+	if headerName == "" {
+		return
+	}
+
+	names := resolvedSecretHeaderNames(item)
+	if slices.Contains(names, headerName) {
+		return
+	}
+	names = append(names, headerName)
+	slices.Sort(names)
+	item.resolvedSecretHeaders = strings.Join(names, "\x00")
+}
+
+func resolvedSecretHeaderNames(item *Item) []string {
+	if item == nil || item.resolvedSecretHeaders == "" {
+		return nil
+	}
+	return strings.Split(item.resolvedSecretHeaders, "\x00")
 }
 
 // ResolveAPIKeyFromSecret resolves an API key from a Kubernetes Secret and updates the item
@@ -2293,12 +2342,15 @@ func ResolveHeaderFromSecret(
 	secretRef *SecretKeyRef,
 	defaultNamespace string,
 ) error {
-	value, err := resolveSecretValue(ctx, k8sClient, item, secretRef, defaultNamespace)
+	// Unlike smart-card credentials, configured headers apply to generic
+	// items as well as typed smart cards.
+	value, err := readSecretValue(ctx, k8sClient, secretRef, defaultNamespace)
 	if err != nil || value == "" {
 		return err
 	}
 
 	setItemHeader(item, headerName, value)
+	markResolvedSecretHeader(item, headerName)
 	return nil
 }
 
@@ -2886,6 +2938,11 @@ func updateOrAddServiceItems(homerConfig *HomerConfig, service Service, items []
 	configMutex.Lock()
 	defer configMutex.Unlock()
 
+	// Secret references are resolved before Kubernetes discovery. Carry the
+	// resolved values from CRD items into every discovered item so a Secret
+	// configured on the Dashboard is not limited to a same-named foundation.
+	applyConfiguredSecretHeaders(homerConfig, items)
+
 	// Get service name from Parameters only
 	serviceName := getServiceName(&service)
 
@@ -2927,6 +2984,57 @@ func updateOrAddServiceItems(homerConfig *HomerConfig, service Service, items []
 	homerConfig.Services = append(homerConfig.Services, service)
 }
 
+func configuredSecretHeaders(config *HomerConfig) map[string]any {
+	if config == nil {
+		return nil
+	}
+
+	headers := make(map[string]any)
+	for serviceIndex := range config.Services {
+		for itemIndex := range config.Services[serviceIndex].Items {
+			item := &config.Services[serviceIndex].Items[itemIndex]
+			for _, name := range resolvedSecretHeaderNames(item) {
+				value, exists := item.Headers[name]
+				if !exists {
+					continue
+				}
+				// Dashboard Secret references are global configuration. If a
+				// malformed config resolves the same header name more than once,
+				// declaration order provides a stable first-value winner.
+				if _, exists := headers[name]; !exists {
+					headers[name] = deepCopyValue(value)
+				}
+			}
+		}
+	}
+	return headers
+}
+
+func applyConfiguredSecretHeaders(config *HomerConfig, items []Item) {
+	headers := configuredSecretHeaders(config)
+	if len(headers) == 0 || len(items) == 0 {
+		return
+	}
+
+	names := make([]string, 0, len(headers))
+	for name := range headers {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+
+	for index := range items {
+		materializeItemHeaders(&items[index])
+		if items[index].Headers == nil {
+			items[index].Headers = make(map[string]any, len(headers))
+		}
+		for _, name := range names {
+			// A Secret-backed header is explicit Dashboard configuration, so
+			// it takes precedence over a same-name discovery annotation.
+			items[index].Headers[name] = deepCopyValue(headers[name])
+		}
+	}
+}
+
 // itemsRepresentSameResource determines whether a discovered item should
 // update an existing item or be added as a separate item. Display names are
 // intentionally user-facing and are not guaranteed to be unique across
@@ -2960,6 +3068,12 @@ func discoveredItemIdentity(item Item) string {
 
 // smartMergeItems intelligently merges items prioritizing CRD foundation with discovered enhancements
 func smartMergeItems(existingItem, newItem *Item) {
+	// Legacy parameter-based headers must be materialized before merge so a
+	// discovered or health header cannot accidentally replace a CRD header that
+	// was authored through parameters.headers/customHeaders.
+	materializeItemHeaders(existingItem)
+	materializeItemHeaders(newItem)
+
 	if existingItem.Parameters == nil {
 		existingItem.Parameters = make(map[string]string)
 	}
@@ -4615,23 +4729,10 @@ func flattenItemHeaders(item Item) map[string]any {
 	}
 
 	// Keep older parameter-based objects compatible, but let direct Item.Headers
-	// values win when both representations contain the same header.
-	for key, value := range item.Parameters {
-		lowerKey := strings.ToLower(key)
-		switch {
-		case lowerKey == headersObjectName:
-			for name, headerValue := range parseHeaderAnnotation(value) {
-				if _, exists := headers[name]; !exists {
-					headers[name] = headerValue
-				}
-			}
-		case strings.HasPrefix(lowerKey, "headers."):
-			name := key[len("headers."):]
-			if _, exists := headers[name]; !exists {
-				headers[name] = value
-			}
-		}
-	}
+	// values win when both representations contain the same header. Process
+	// canonical `headers` before the legacy `customHeaders` alias, and process
+	// keys in sorted order so conflicting legacy forms are deterministic.
+	mergeLegacyHeaderParameters(headers, item.Parameters)
 
 	for objectName, objectMap := range item.NestedObjects {
 		if !strings.EqualFold(objectName, headersObjectName) && !strings.EqualFold(objectName, legacyHeadersObjectName) {
@@ -4646,9 +4747,72 @@ func flattenItemHeaders(item Item) map[string]any {
 	return headers
 }
 
+func materializeItemHeaders(item *Item) {
+	if item == nil {
+		return
+	}
+	if headers := flattenItemHeaders(*item); len(headers) > 0 {
+		item.Headers = headers
+	}
+}
+
+func mergeLegacyHeaderParameters(headers map[string]any, parameters map[string]string) {
+	if len(parameters) == 0 {
+		return
+	}
+
+	keys := make([]string, 0, len(parameters))
+	for key := range parameters {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+
+	// Object-valued legacy parameters have lower precedence than direct
+	// Item.Headers but higher precedence than the more deeply nested legacy
+	// representation. The canonical object wins over its customHeaders alias.
+	for _, objectName := range []string{headersObjectName, legacyHeadersObjectName} {
+		for _, key := range keys {
+			if !strings.EqualFold(key, objectName) {
+				continue
+			}
+			for name, value := range parseHeaderAnnotation(parameters[key]) {
+				if _, exists := headers[name]; !exists {
+					headers[name] = value
+				}
+			}
+		}
+	}
+
+	// Per-header parameter forms are also supported for both the canonical
+	// object and its legacy alias. They fill only missing keys, retaining the
+	// same direct > headers > customHeaders precedence.
+	for _, objectName := range []string{headersObjectName, legacyHeadersObjectName} {
+		for _, key := range keys {
+			lowerKey := strings.ToLower(key)
+			prefixes := []string{objectName + ".", objectName + "/"}
+			for _, prefix := range prefixes {
+				if !strings.HasPrefix(lowerKey, prefix) {
+					continue
+				}
+				name := key[len(prefix):]
+				if name != "" {
+					if _, exists := headers[name]; !exists {
+						headers[name] = parameters[key]
+					}
+				}
+				break
+			}
+		}
+	}
+}
+
 func isLegacyHeaderParameter(key string) bool {
 	lowerKey := strings.ToLower(key)
-	return lowerKey == headersObjectName || strings.HasPrefix(lowerKey, headersObjectName+".")
+	return lowerKey == headersObjectName || lowerKey == legacyHeadersObjectName ||
+		strings.HasPrefix(lowerKey, headersObjectName+".") ||
+		strings.HasPrefix(lowerKey, headersObjectName+"/") ||
+		strings.HasPrefix(lowerKey, legacyHeadersObjectName+".") ||
+		strings.HasPrefix(lowerKey, legacyHeadersObjectName+"/")
 }
 
 func addDirectItemFields(itemMap map[string]any, item Item) {

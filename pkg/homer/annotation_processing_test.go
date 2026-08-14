@@ -218,9 +218,11 @@ func TestHeadersRenderAsUpstreamObject(t *testing.T) {
 	item := Item{
 		Headers: map[string]any{"X-Direct": "direct"},
 		Parameters: map[string]string{
-			"headers":             "X-Legacy: legacy",
-			"headers.X-Parameter": "parameter",
-			"name":                "Service",
+			"headers":                       "X-Legacy: legacy",
+			"headers.X-Parameter":           "parameter",
+			"customHeaders":                 "X-Custom-Parameter: custom-parameter",
+			"customHeaders.X-Custom-Dotted": "custom-dotted",
+			"name":                          "Service",
 		},
 		NestedObjects: map[string]map[string]string{
 			"customHeaders": {"X-Custom": "custom"},
@@ -233,10 +235,12 @@ func TestHeadersRenderAsUpstreamObject(t *testing.T) {
 		t.Fatalf("headers output = %#v, want object", got["headers"])
 	}
 	for name, want := range map[string]string{
-		"X-Direct":    "direct",
-		"X-Legacy":    "legacy",
-		"X-Parameter": "parameter",
-		"X-Custom":    "custom",
+		"X-Direct":           "direct",
+		"X-Legacy":           "legacy",
+		"X-Parameter":        "parameter",
+		"X-Custom":           "custom",
+		"X-Custom-Parameter": "custom-parameter",
+		"X-Custom-Dotted":    "custom-dotted",
 	} {
 		if headers[name] != want {
 			t.Errorf("headers[%q] = %#v, want %q", name, headers[name], want)
@@ -244,6 +248,27 @@ func TestHeadersRenderAsUpstreamObject(t *testing.T) {
 	}
 	if _, exists := got["customHeaders"]; exists {
 		t.Error("legacy customHeaders must not be emitted")
+	}
+}
+
+func TestSecretHeaderResolutionAllowsGenericItems(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add core scheme: %v", err)
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "credentials", Namespace: "default"},
+		Data:       map[string][]byte{"header": []byte("secret-value")},
+	}).Build()
+
+	item := &Item{}
+	if err := ResolveHeaderFromSecret(context.Background(), k8sClient, item, "X-Secret", &SecretKeyRef{
+		Name: "credentials", Key: "header",
+	}, "default"); err != nil {
+		t.Fatalf("resolve generic header secret: %v", err)
+	}
+	if got := item.Headers["X-Secret"]; got != "secret-value" {
+		t.Fatalf("generic item header = %#v, want secret-value", got)
 	}
 }
 

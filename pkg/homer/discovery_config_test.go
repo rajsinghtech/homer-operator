@@ -1,13 +1,16 @@
 package homer
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
@@ -65,6 +68,152 @@ func TestCreateConfigMapWithDiscoveryConfigAppliesDashboardFeatures(t *testing.T
 	}
 	if !strings.Contains(configMap.Data["config.yml"], "platform") {
 		t.Fatalf("rendered config is missing grouped service: %s", configMap.Data["config.yml"])
+	}
+}
+
+func TestSecretHeadersPropagateToDiscoveredItems(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add core scheme: %v", err)
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "credentials", Namespace: "default"},
+		Data:       map[string][]byte{"header": []byte("secret-value")},
+	}).Build()
+
+	config := &HomerConfig{Services: []Service{{
+		Name:  "configured",
+		Items: []Item{{Name: "foundation"}},
+	}}}
+	foundation := &config.Services[0].Items[0]
+	if err := ResolveHeaderFromSecret(context.Background(), k8sClient, foundation, "X-Secret", &SecretKeyRef{
+		Name: "credentials", Key: "header",
+	}, "default"); err != nil {
+		t.Fatalf("resolve header secret: %v", err)
+	}
+
+	ingress := networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "web", Namespace: "apps",
+			Annotations: map[string]string{
+				"item.homer.rajsingh.info/headers.X-Secret": "discovered",
+			},
+		},
+		Spec: networkingv1.IngressSpec{Rules: []networkingv1.IngressRule{{Host: "web.example.com"}}},
+	}
+	svc := corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "apps"},
+		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
+	}
+	route := gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: "apps"},
+		Spec:       gatewayv1.HTTPRouteSpec{Hostnames: []gatewayv1.Hostname{"route.example.com"}},
+	}
+
+	if _, err := CreateConfigMapWithHTTPRoutesAndDiscoveryConfig(
+		config, "dashboard", "default", networkingv1.IngressList{Items: []networkingv1.Ingress{ingress}},
+		[]gatewayv1.HTTPRoute{route}, []corev1.Service{svc}, nil, nil, nil,
+	); err != nil {
+		t.Fatalf("create discovered config: %v", err)
+	}
+
+	wantSources := map[string]bool{"ingress/web": false, "svc/api": false, "httproute/route": false}
+	for _, service := range config.Services {
+		for _, item := range service.Items {
+			if _, ok := wantSources[item.Source]; !ok {
+				continue
+			}
+			wantSources[item.Source] = true
+			if got := item.Headers["X-Secret"]; got != "secret-value" {
+				t.Errorf("%s header = %#v, want secret-value", item.Source, got)
+			}
+		}
+	}
+	for source, found := range wantSources {
+		if !found {
+			t.Errorf("discovered source %q was not found in %#v", source, config.Services)
+		}
+	}
+}
+
+func TestHeaderPrecedenceIsDirectThenDiscoveredThenHealth(t *testing.T) {
+	config := &HomerConfig{Services: []Service{{
+		Name: "apps",
+		Items: []Item{{
+			Name:    "web-one.example.com",
+			URL:     "https://configured.example.com",
+			Headers: map[string]any{"X-Shared": "direct"},
+		}},
+	}}}
+	ingress := networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "web", Namespace: "apps",
+			Annotations: map[string]string{
+				"item.homer.rajsingh.info/headers.X-Shared": "discovered",
+			},
+		},
+		Spec: networkingv1.IngressSpec{Rules: []networkingv1.IngressRule{
+			{Host: "one.example.com"},
+			{Host: "two.example.com"},
+		}},
+	}
+	discovery := &DiscoveryConfig{
+		HealthCheck: &ServiceHealthConfig{
+			Enabled:    true,
+			HealthPath: "/health",
+			Headers: map[string]string{
+				"X-Shared": "health",
+				"X-Health": "health",
+			},
+		},
+	}
+
+	if _, err := CreateConfigMapWithHTTPRoutesAndDiscoveryConfig(
+		config, "dashboard", "default", networkingv1.IngressList{Items: []networkingv1.Ingress{ingress}},
+		nil, nil, nil, nil, discovery,
+	); err != nil {
+		t.Fatalf("create precedence config: %v", err)
+	}
+
+	items := make(map[string]Item)
+	for _, service := range config.Services {
+		for _, item := range service.Items {
+			items[getItemName(&item)] = item
+		}
+	}
+	for name, wantShared := range map[string]string{
+		"web-one.example.com": "direct",
+		"web-two.example.com": "discovered",
+	} {
+		item, ok := items[name]
+		if !ok {
+			t.Fatalf("item %q not found in %#v", name, items)
+		}
+		if got := item.Headers["X-Shared"]; got != wantShared {
+			t.Errorf("%s X-Shared = %#v, want %q", name, got, wantShared)
+		}
+		if got := item.Headers["X-Health"]; got != "health" {
+			t.Errorf("%s X-Health = %#v, want health", name, got)
+		}
+	}
+}
+
+func TestLegacyHeaderParametersKeepCRDPrecedence(t *testing.T) {
+	existing := &Item{
+		Source:     CRDSource,
+		Name:       "web",
+		Parameters: map[string]string{"headers": "X-Shared: legacy"},
+	}
+	discovered := &Item{
+		Source:  "ingress/web",
+		Name:    "web",
+		Headers: map[string]any{"X-Shared": "discovered"},
+	}
+
+	smartMergeItems(existing, discovered)
+
+	if got := existing.Headers["X-Shared"]; got != "legacy" {
+		t.Fatalf("legacy CRD header = %#v, want legacy", got)
 	}
 }
 
