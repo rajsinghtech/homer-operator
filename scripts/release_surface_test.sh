@@ -176,6 +176,9 @@ for verification_marker in \
     'make manifests' \
     'make generate' \
     'make lint' \
+    'make envtest' \
+    '--bin-dir "$PWD/bin"' \
+    'KUBEBUILDER_ASSETS=' \
     'go vet ./...' \
     'go test' \
     'go build ./...' \
@@ -184,7 +187,7 @@ for verification_marker in \
     'chart_packaging_test.sh' \
     'shellcheck scripts/*.sh' \
     'actionlint'; do
-    if ! grep -Fq "$verification_marker" "$RELEASE_WORKFLOW"; then
+    if ! grep -Fq -- "$verification_marker" "$RELEASE_WORKFLOW"; then
         echo "release workflow is missing verification gate: $verification_marker" >&2
         exit 1
     fi

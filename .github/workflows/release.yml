@@ -54,8 +54,10 @@ jobs:
           git diff --exit-code
           make lint
           go vet ./...
+          make envtest
+          envtest_assets="$(./bin/setup-envtest use 1.29.0 --bin-dir "$PWD/bin" -p path)"
           mapfile -t go_packages < <(go list ./... | grep -v '/e2e$')
-          go test "${go_packages[@]}"
+          KUBEBUILDER_ASSETS="$envtest_assets" go test "${go_packages[@]}"
           go build ./...
           make build-installer IMG=ghcr.io/rajsinghtech/homer-operator:main
           git diff --exit-code
