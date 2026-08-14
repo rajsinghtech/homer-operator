@@ -495,7 +495,7 @@ func TestEffectiveExternalConfigControlsValidationAndPWADefaults(t *testing.T) {
 	if err := json.Unmarshal([]byte(manifest), &decoded); err != nil {
 		t.Fatalf("PWA manifest is not valid JSON: %v", err)
 	}
-	if decoded.Name != "External title" || decoded.Description != "External subtitle" || decoded.StartURL != "../" || decoded.Scope != "../" {
+	if decoded.Name != "External title" || decoded.Description != "External subtitle" || decoded.StartURL != dashboardRelativePath || decoded.Scope != dashboardRelativePath {
 		t.Fatalf("PWA defaults from effective config = %#v", decoded)
 	}
 }

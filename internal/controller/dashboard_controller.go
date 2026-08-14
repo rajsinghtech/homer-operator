@@ -71,6 +71,8 @@ type DashboardReconciler struct {
 	clusterManagerMu sync.Mutex
 }
 
+const dashboardRelativePath = "../"
+
 // discoveredClusterResources contains the results from the discovery pass used
 // to build the dashboard resources. Status must use these results instead of
 // issuing a second set of remote-cluster list requests.
@@ -1596,7 +1598,7 @@ func (r *DashboardReconciler) generatePWAManifest(dashboard *homerv1alpha1.Dashb
 
 	startURL := pwa.StartURL
 	if startURL == "" {
-		startURL = "../"
+		startURL = dashboardRelativePath
 	}
 
 	// Build icons map
@@ -1634,7 +1636,7 @@ func isStageableAssetPath(value string) bool {
 		return false
 	}
 	clean := path.Clean(value)
-	return clean != "." && clean != ".." && !strings.HasPrefix(clean, "../")
+	return clean != "." && clean != ".." && !strings.HasPrefix(clean, dashboardRelativePath)
 }
 
 // getExternalHomerConfig retrieves Homer configuration from an external ConfigMap
