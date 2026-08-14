@@ -303,6 +303,8 @@ if ! sed -n '/^  verify-release-e2e:/,/^  build-image:/p' "$RELEASE_WORKFLOW" |
 fi
 
 for publication_marker in \
+    'Set unique staging image tag' \
+    "release-staging-\${GITHUB_SHA}-\${GITHUB_RUN_ID}-\${GITHUB_RUN_ATTEMPT}" \
     "cmp --silent \"\$local_chart\" \"\$pulled_chart\"" \
     'chart_digest=' \
     'OCI chart digest' \
@@ -316,6 +318,41 @@ for publication_marker in \
     "kubeconform -strict -ignore-missing-schemas -summary \"\$installer_path\""; do
     if ! grep -Fq -- "$publication_marker" "$RELEASE_WORKFLOW"; then
         echo "release workflow is missing publication verification: $publication_marker" >&2
+        exit 1
+    fi
+done
+
+BUILD_PUSH_BLOCK="$(sed -n '/^      - name: Build and push staging Docker image$/,/^      - name:/p' "$RELEASE_WORKFLOW")"
+if ! grep -Fq "tags: \${{ steps.staging.outputs.tag }}" <<< "$BUILD_PUSH_BLOCK" ||
+   grep -Fq 'steps.meta.outputs.tags' <<< "$BUILD_PUSH_BLOCK" ||
+   grep -Fq 'type=semver' <<< "$BUILD_PUSH_BLOCK" ||
+   grep -Fq 'type=raw,value=latest' <<< "$BUILD_PUSH_BLOCK"; then
+    echo "staging build-push step exposes final release tags" >&2
+    exit 1
+fi
+
+if ! grep -Fq 'docker buildx imagetools create' "$RELEASE_WORKFLOW" ||
+   ! grep -Fq 'Promote verified image digest' "$RELEASE_WORKFLOW" ||
+   ! grep -Fq 'Final tag consistency check before image promotion' "$RELEASE_WORKFLOW"; then
+    echo "release workflow is missing post-validation image promotion" >&2
+    exit 1
+fi
+
+build_push_line="$(grep -n -m1 '^      - name: Build and push staging Docker image$' "$RELEASE_WORKFLOW" | cut -d: -f1)"
+promotion_line="$(grep -n -m1 '^      - name: Promote verified image digest$' "$RELEASE_WORKFLOW" | cut -d: -f1)"
+if (( promotion_line <= build_push_line )); then
+    echo "image promotion occurs before the staging build-push step" >&2
+    exit 1
+fi
+
+for validation_step in \
+    'Verify container provenance' \
+    'Verify container signatures' \
+    'Validate SBOM' \
+    'Final tag consistency check before image promotion'; do
+    validation_line="$(grep -n -m1 "^      - name: ${validation_step}$" "$RELEASE_WORKFLOW" | cut -d: -f1)"
+    if [[ -z "$validation_line" || "$promotion_line" -le "$validation_line" ]]; then
+        echo "image promotion does not follow validation step: $validation_step" >&2
         exit 1
     fi
 done

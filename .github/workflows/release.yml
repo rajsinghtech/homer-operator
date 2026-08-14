@@ -317,7 +317,17 @@ jobs:
             type=raw,value=latest
             type=sha,prefix=sha-
 
-      - name: Final tag consistency check before image publication
+      - name: Set unique staging image tag
+        id: staging
+        env:
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        run: |
+          set -euo pipefail
+          staging_tag="${IMAGE_REF}:release-staging-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "tag=${staging_tag}" >> "$GITHUB_OUTPUT"
+          echo "Staging image tag: ${staging_tag}"
+
+      - name: Final tag consistency check before staging image publication
         env:
           EXPECTED_SHA: ${{ github.sha }}
         run: |
@@ -329,18 +339,18 @@ jobs:
             "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
           tag_sha="$(git rev-parse --verify "refs/tags/${GITHUB_REF_NAME}^{commit}")"
           if [[ "$tag_sha" != "$EXPECTED_SHA" ]]; then
-            echo "Refusing to publish image for stale tag ${GITHUB_REF_NAME}: ${tag_sha} != ${EXPECTED_SHA}" >&2
+            echo "Refusing to publish staging image for stale tag ${GITHUB_REF_NAME}: ${tag_sha} != ${EXPECTED_SHA}" >&2
             exit 1
           fi
 
-      - name: Build and push Docker image
+      - name: Build and push staging Docker image
         id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ steps.staging.outputs.tag }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -466,32 +476,24 @@ jobs:
       - name: Sign container image
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-          TAGS: ${{ steps.meta.outputs.tags }}
+          STAGING_TAG: ${{ steps.staging.outputs.tag }}
         run: |
           set -euo pipefail
-          while IFS= read -r tag; do
-            if [[ -n "$tag" ]]; then
-              echo "Signing: $tag@${DIGEST}"
-              cosign sign --yes "$tag@${DIGEST}"
-            fi
-          done <<< "$TAGS"
+          echo "Signing: ${STAGING_TAG}@${DIGEST}"
+          cosign sign --yes "${STAGING_TAG}@${DIGEST}"
 
       - name: Verify container signatures
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-          TAGS: ${{ steps.meta.outputs.tags }}
+          STAGING_TAG: ${{ steps.staging.outputs.tag }}
         run: |
           set -euo pipefail
           identity="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$"
-          while IFS= read -r tag; do
-            if [[ -n "$tag" ]]; then
-              echo "Verifying: $tag@${DIGEST}"
-              cosign verify \
-                --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-                --certificate-identity-regexp "$identity" \
-                "$tag@${DIGEST}" >/dev/null
-            fi
-          done <<< "$TAGS"
+          echo "Verifying: ${STAGING_TAG}@${DIGEST}"
+          cosign verify \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity-regexp "$identity" \
+            "${STAGING_TAG}@${DIGEST}" >/dev/null
 
       - name: Generate SBOM
         uses: anchore/sbom-action@v0.24.0
@@ -541,6 +543,50 @@ jobs:
         with:
           name: sbom
           path: sbom.spdx.json
+
+      # Repository tag protection/immutability is required for race-free
+      # promotion; this check is immediately before final-tag publication.
+      - name: Final tag consistency check before image promotion
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git ls-remote --exit-code --refs origin "refs/tags/${GITHUB_REF_NAME}" >/dev/null
+          git fetch --force --no-tags origin \
+            "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          tag_sha="$(git rev-parse --verify "refs/tags/${GITHUB_REF_NAME}^{commit}")"
+          if [[ "$tag_sha" != "$EXPECTED_SHA" ]]; then
+            echo "Refusing to promote image for stale tag ${GITHUB_REF_NAME}: ${tag_sha} != ${EXPECTED_SHA}" >&2
+            exit 1
+          fi
+
+      - name: Promote verified image digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          STAGING_TAG: ${{ steps.staging.outputs.tag }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          identity="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$"
+          while IFS= read -r tag; do
+            if [[ -n "$tag" ]]; then
+              echo "Promoting ${STAGING_TAG}@${DIGEST} to ${tag}"
+              docker buildx imagetools create \
+                --tag "$tag" \
+                "${STAGING_TAG}@${DIGEST}"
+
+              promoted_digest="$(docker buildx imagetools inspect "$tag" | awk '$1 == "Digest:" { print $2; exit }')"
+              if [[ "$promoted_digest" != "$DIGEST" ]]; then
+                echo "Promoted tag ${tag} resolved to ${promoted_digest}, expected ${DIGEST}" >&2
+                exit 1
+              fi
+
+              cosign verify \
+                --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+                --certificate-identity-regexp "$identity" \
+                "$tag@${DIGEST}" >/dev/null
+            fi
+          done <<< "$TAGS"
 
   release-helm:
     name: Release Helm Chart
