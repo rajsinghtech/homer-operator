@@ -605,6 +605,33 @@ func TestRemoveItemsFromHTTPRouteSource(t *testing.T) {
 	}
 }
 
+func TestRemoveItemsFromSourcePreservesConfiguredEmptyService(t *testing.T) {
+	config := &HomerConfig{
+		Services: []Service{
+			{
+				Name:      "Configured empty group",
+				objectSet: true,
+			},
+			{
+				Name:             "Discovered group",
+				Parameters:       map[string]string{"name": "Discovered group"},
+				legacyParameters: true,
+				Items: []Item{{
+					Name:      "discovered-item",
+					Source:    "ingress/app",
+					Namespace: "default",
+				}},
+			},
+		},
+	}
+
+	removeItemsFromSource(config, "ingress/app", "default")
+
+	if len(config.Services) != 1 || getServiceName(&config.Services[0]) != "Configured empty group" {
+		t.Fatalf("configured empty service was removed or discovery group was retained: %#v", config.Services)
+	}
+}
+
 func TestSingleHostnameToMultipleHostnameTransition(t *testing.T) {
 	config := &HomerConfig{}
 

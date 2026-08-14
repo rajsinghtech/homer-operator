@@ -1321,6 +1321,7 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 			// Create a copy to avoid mutating the original
 			httprouteCopy := httproute.DeepCopy()
 			httprouteCopy.Annotations = r.mergeNamespaceAnnotations(ctx, httproute.Namespace, httproute.Annotations)
+			setHTTPRouteProtocol(ctx, r.Client, httprouteCopy)
 			mergedHTTPRoutes[i] = *httprouteCopy
 		}
 

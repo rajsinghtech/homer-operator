@@ -67,7 +67,11 @@ const (
 	FooterHidden        = "__FOOTER_HIDDEN__"
 	ProtocolHTTPS       = "https"
 	ProtocolHTTP        = "http"
-	NamespaceIconURL    = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/" +
+	// HTTPRouteProtocolAnnotation is populated by the controller after it
+	// resolves the selected Gateway listener. It is intentionally not part of
+	// the user-facing Homer annotation surface.
+	HTTPRouteProtocolAnnotation = "homer.rajsingh.info/discovered-protocol"
+	NamespaceIconURL            = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/" +
 		"resources/labeled/ns-128.png"
 	IngressIconURL = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/" +
 		"resources/labeled/ing-128.png"
@@ -1571,7 +1575,7 @@ func CreateConfigMapWithDiscoveryConfig(
 		enhanceHomerConfigWithAggregation(config, discoveryConfig.HealthCheck)
 	}
 
-	if err := ValidateHomerConfig(config); err != nil {
+	if err := validateHomerConfig(config, discoveryValidationLevel(discoveryConfig)); err != nil {
 		return corev1.ConfigMap{}, fmt.Errorf("config validation: %w", err)
 	}
 
@@ -1649,7 +1653,7 @@ func CreateConfigMapWithHTTPRoutesAndDiscoveryConfig(
 	}
 
 	// Validate configuration before creating ConfigMap
-	if err := ValidateHomerConfig(config); err != nil {
+	if err := validateHomerConfig(config, discoveryValidationLevel(discoveryConfig)); err != nil {
 		return corev1.ConfigMap{}, fmt.Errorf("config validation: %w", err)
 	}
 
@@ -3160,36 +3164,20 @@ func directItemStringFields(item Item) map[string]string {
 	}
 }
 
-// determineProtocolFromHTTPRoute determines the protocol based on HTTPRoute configuration
+// determineProtocolFromHTTPRoute uses the protocol resolved from the selected
+// Gateway listener. HTTPRoute objects do not carry listener protocol data, so
+// callers that can read Gateways should populate HTTPRouteProtocolAnnotation;
+// an unresolved route is conservatively treated as HTTP. Hostname suffixes
+// and listener names are not protocol signals.
 func determineProtocolFromHTTPRoute(httproute *gatewayv1.HTTPRoute) string {
-	// Check if any parent references indicate TLS
-	for _, parentRef := range httproute.Spec.ParentRefs {
-		// If the parent reference specifies a section name that typically indicates HTTPS
-		if parentRef.SectionName != nil {
-			sectionName := string(*parentRef.SectionName)
-			if strings.Contains(strings.ToLower(sectionName), ProtocolHTTPS) ||
-				strings.Contains(strings.ToLower(sectionName), "tls") ||
-				strings.Contains(strings.ToLower(sectionName), "ssl") {
-				return ProtocolHTTPS
-			}
-		}
-	}
-
-	// Check if any hostnames look like they should be HTTPS (common patterns)
-	for _, hostname := range httproute.Spec.Hostnames {
-		hostStr := string(hostname)
-		// Common patterns that suggest HTTPS
-		if strings.Contains(hostStr, "api.") ||
-			strings.Contains(hostStr, "secure.") ||
-			strings.Contains(hostStr, "admin.") ||
-			strings.HasSuffix(hostStr, ".com") ||
-			strings.HasSuffix(hostStr, ".org") ||
-			strings.HasSuffix(hostStr, ".net") {
+	if httproute != nil && httproute.Annotations != nil {
+		switch strings.ToLower(strings.TrimSpace(httproute.Annotations[HTTPRouteProtocolAnnotation])) {
+		case ProtocolHTTPS:
 			return ProtocolHTTPS
+		case ProtocolHTTP:
+			return ProtocolHTTP
 		}
 	}
-
-	// Default to HTTP for local/development environments
 	return ProtocolHTTP
 }
 
@@ -3816,8 +3804,14 @@ func MatchesDomainFilters(hosts []string, domainFilters []string) bool {
 	return false
 }
 
-// ValidateHomerConfig validates the Homer configuration for common issues
+// ValidateHomerConfig validates the Homer configuration for common issues.
+// It retains the strict behavior used by callers that do not have a discovery
+// validation policy.
 func ValidateHomerConfig(config *HomerConfig) error {
+	return validateHomerConfig(config, ValidationLevelStrict)
+}
+
+func validateHomerConfig(config *HomerConfig, validationLevel ValidationLevel) error {
 	if config == nil {
 		return fmt.Errorf("config: nil")
 	}
@@ -3852,7 +3846,7 @@ func ValidateHomerConfig(config *HomerConfig) error {
 			legacyItem := service.legacyParameters || item.legacyParameters ||
 				len(service.Parameters) > 0 || len(item.Parameters) > 0 ||
 				len(item.NestedObjects) > 0 || len(item.ArrayObjects) > 0
-			if legacyItem && itemURL != "" && !isValidURL(itemURL) {
+			if legacyItem && itemURL != "" && !isValidURL(itemURL) && validationLevel != ValidationLevelWarn {
 				return fmt.Errorf("service[%d].item[%d] (%s): invalid URL %s", i, j, serviceName+"/"+itemName, itemURL)
 			}
 		}
@@ -4934,7 +4928,7 @@ func removeEmptyServices(homerConfig *HomerConfig) {
 	// Use in-place filtering to avoid allocations
 	filteredCount := 0
 	for i, service := range homerConfig.Services {
-		if len(service.Items) > 0 {
+		if len(service.Items) > 0 || preserveEmptyService(&service) {
 			// Move kept service to the front of the slice
 			if filteredCount != i {
 				homerConfig.Services[filteredCount] = service
@@ -4945,6 +4939,14 @@ func removeEmptyServices(homerConfig *HomerConfig) {
 
 	// Truncate slice to remove empty services
 	homerConfig.Services = homerConfig.Services[:filteredCount]
+}
+
+// preserveEmptyService keeps user-authored upstream service groups while
+// allowing discovery-created groups to disappear after their last item is
+// removed. Services decoded from YAML/JSON carry objectSet; discovery groups
+// are built through the legacy parameter path and do not.
+func preserveEmptyService(service *Service) bool {
+	return service.objectSet || !service.legacyParameters
 }
 
 // enhanceHomerConfigWithAggregation enhances Homer config with advanced aggregation features

@@ -83,6 +83,32 @@ func TestCreateConfigMapWithHTTPRoutesAppliesValidation(t *testing.T) {
 	}
 }
 
+func TestCreateConfigMapWithDiscoveryWarnRetainsInvalidURL(t *testing.T) {
+	ingress := networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "app",
+			Namespace:   "apps",
+			Annotations: map[string]string{"item.homer.rajsingh.info/url": "not a url"},
+		},
+		Spec: networkingv1.IngressSpec{Rules: []networkingv1.IngressRule{{Host: "app.example.com"}}},
+	}
+	config := &HomerConfig{}
+
+	if _, err := CreateConfigMapWithDiscoveryConfig(
+		config, "dashboard", "default", networkingv1.IngressList{Items: []networkingv1.Ingress{ingress}}, nil, nil,
+		&DiscoveryConfig{ValidationLevel: ValidationLevelWarn},
+	); err != nil {
+		t.Fatalf("warn-level discovery rejected invalid annotation URL: %v", err)
+	}
+	if got := getItemURL(&config.Services[0].Items[0]); got != "not a url" {
+		t.Fatalf("warn-level URL = %q, want invalid value retained", got)
+	}
+
+	if err := ValidateHomerConfig(config); err == nil {
+		t.Fatal("strict public validation accepted the invalid legacy URL")
+	}
+}
+
 func TestDiscoveryValidationLevelDefaultsToWarn(t *testing.T) {
 	if got := discoveryValidationLevel(&DiscoveryConfig{}); got != ValidationLevelWarn {
 		t.Fatalf("empty Dashboard discovery validation level = %q, want %q", got, ValidationLevelWarn)
@@ -96,9 +122,26 @@ func testRouteForDiscoveryConfig() gatewayv1.HTTPRoute {
 	return gatewayv1.HTTPRoute{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "route", Namespace: "apps",
-			Annotations: map[string]string{"item.homer.rajsingh.info/url": "not a url"},
+			Annotations: map[string]string{
+				"item.homer.rajsingh.info/url": "not a url",
+				HTTPRouteProtocolAnnotation:    ProtocolHTTPS,
+			},
 		},
 		Spec: gatewayv1.HTTPRouteSpec{Hostnames: []gatewayv1.Hostname{"route.example.com"}},
+	}
+}
+
+func TestHTTPRouteProtocolDoesNotInferFromHostname(t *testing.T) {
+	route := gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: "apps"},
+		Spec:       gatewayv1.HTTPRouteSpec{Hostnames: []gatewayv1.Hostname{"example.com"}},
+	}
+	config := &HomerConfig{}
+
+	UpdateHomerConfigHTTPRoute(config, &route, nil)
+
+	if got := getItemURL(&config.Services[0].Items[0]); got != "http://example.com" {
+		t.Fatalf("HTTPRoute URL = %q, want listener-independent HTTP fallback", got)
 	}
 }
 

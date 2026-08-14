@@ -608,6 +608,7 @@ func (m *ClusterManager) discoverClusterHTTPRoutes(ctx context.Context, cluster 
 
 			// Merge namespace annotations from the source cluster
 			m.mergeHomerAnnotationsFromNamespace(ctx, cluster.Client, clusterHTTPRoutes.Items[i].Namespace, clusterHTTPRoutes.Items[i].Annotations)
+			setHTTPRouteProtocol(ctx, cluster.Client, &clusterHTTPRoutes.Items[i])
 
 			filtered = append(filtered, clusterHTTPRoutes.Items[i])
 		}

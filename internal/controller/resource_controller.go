@@ -98,7 +98,7 @@ func (r *GenericResourceReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			return ctrl.Result{}, err
 		}
 
-		if err := r.updateConfigMap(resourceInfo, &configMap, dashboard.Spec.DomainFilters); err != nil {
+		if err := r.updateConfigMap(ctx, resourceInfo, &configMap, dashboard.Spec.DomainFilters); err != nil {
 			log.FromContext(ctx).Error(err, "Failed to update configmap from resource", "dashboard", dashboard.Name)
 			continue
 		}
@@ -203,9 +203,11 @@ func (r *GenericResourceReconciler) shouldIncludeHTTPRoute(ctx context.Context, 
 	return false, nil
 }
 
-func (r *GenericResourceReconciler) updateConfigMap(resourceInfo *ResourceInfo, configMap *corev1.ConfigMap, domainFilters []string) error {
+func (r *GenericResourceReconciler) updateConfigMap(ctx context.Context, resourceInfo *ResourceInfo, configMap *corev1.ConfigMap, domainFilters []string) error {
 	if r.IsHTTPRoute {
-		return homer.UpdateConfigMapHTTPRoute(configMap, resourceInfo.Object.(*gatewayv1.HTTPRoute), domainFilters)
+		httproute := resourceInfo.Object.(*gatewayv1.HTTPRoute)
+		setHTTPRouteProtocol(ctx, r.Client, httproute)
+		return homer.UpdateConfigMapHTTPRoute(configMap, httproute, domainFilters)
 	}
 	return homer.UpdateConfigMapIngress(configMap, *resourceInfo.Object.(*networkingv1.Ingress), domainFilters)
 }
