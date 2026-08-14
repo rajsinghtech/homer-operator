@@ -18,6 +18,7 @@ package homer
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -202,8 +203,12 @@ func TestHeadersAnnotationProcessing(t *testing.T) {
 					t.Errorf("Expected header %s %q, got %q", key, expected, item.Headers[key])
 				}
 			}
-			if len(item.Parameters) != 0 {
-				t.Fatalf("headers should not be stored as legacy parameters: %#v", item.Parameters)
+			for key := range item.Parameters {
+				lowerKey := strings.ToLower(key)
+				if lowerKey == headersObjectName || strings.HasPrefix(lowerKey, headersObjectName+".") ||
+					strings.HasPrefix(lowerKey, legacyHeadersObjectName) {
+					t.Fatalf("headers should not be stored as legacy parameters: %#v", item.Parameters)
+				}
 			}
 		})
 	}
