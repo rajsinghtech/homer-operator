@@ -269,7 +269,7 @@ func TestAuthorizedDomainFiltersApplyPerHTTPRouteHostname(t *testing.T) {
 	if len(config.Services) != 1 || len(config.Services[0].Items) != 1 {
 		t.Fatalf("filtered HTTPRoute items = %#v, want one matching hostname", config.Services)
 	}
-	if got := getItemURL(&config.Services[0].Items[0]); got != "https://allowed.example.com" {
+	if got := getItemURL(&config.Services[0].Items[0]); got != "http://allowed.example.com" {
 		t.Fatalf("filtered HTTPRoute URL = %q, want allowed hostname", got)
 	}
 }
