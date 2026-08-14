@@ -190,6 +190,17 @@ for verification_marker in \
     fi
 done
 
+for workflow in "$RELEASE_WORKFLOW" "$HELM_RELEASE"; do
+    if ! grep -Fq 'actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz' "$workflow"; then
+        echo "$workflow downloads the wrong actionlint Linux asset" >&2
+        exit 1
+    fi
+    if grep -Fq 'actionlint_${ACTIONLINT_VERSION}_linux_x86_64.tar.gz' "$workflow"; then
+        echo "$workflow still references the nonexistent x86_64 actionlint asset" >&2
+        exit 1
+    fi
+done
+
 if ! awk '
     /^  build-image:/ { in_job = 1; next }
     in_job && /^    needs: \[verify-release, verify-release-e2e\]$/ { found = 1 }
