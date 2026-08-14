@@ -13,7 +13,7 @@ import (
 
 func TestSetHTTPRouteProtocolUsesSelectedGatewayListener(t *testing.T) {
 	scheme := runtime.NewScheme()
-	if err := gatewayv1.AddToScheme(scheme); err != nil {
+	if err := gatewayv1.Install(scheme); err != nil {
 		t.Fatalf("add Gateway API to scheme: %v", err)
 	}
 
@@ -47,7 +47,7 @@ func TestSetHTTPRouteProtocolUsesSelectedGatewayListener(t *testing.T) {
 
 func TestSetHTTPRouteProtocolDoesNotGuessFromHostname(t *testing.T) {
 	scheme := runtime.NewScheme()
-	if err := gatewayv1.AddToScheme(scheme); err != nil {
+	if err := gatewayv1.Install(scheme); err != nil {
 		t.Fatalf("add Gateway API to scheme: %v", err)
 	}
 
