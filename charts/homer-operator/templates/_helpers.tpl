@@ -56,9 +56,9 @@ Create the name of the service account to use
 */}}
 {{- define "homer-operator.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}
-{{- default (include "homer-operator.fullname" .) .Values.serviceAccount.name }}
+{{- default (include "homer-operator.fullname" .) .Values.serviceAccount.name | trunc 63 | trimSuffix "-" }}
 {{- else }}
-{{- default "default" .Values.serviceAccount.name }}
+{{- default "default" .Values.serviceAccount.name | trunc 63 | trimSuffix "-" }}
 {{- end }}
 {{- end }}
 
@@ -80,56 +80,70 @@ Create the name of the manager deployment
 Create the name of the metrics service
 */}}
 {{- define "homer-operator.metricsServiceName" -}}
-{{- printf "%s-metrics" (include "homer-operator.fullname" .) }}
-{{- end }}
-
-{{/*
-Create the name of the webhook service
-*/}}
-{{- define "homer-operator.webhookServiceName" -}}
-{{- printf "%s-webhook" (include "homer-operator.fullname" .) }}
+{{- include "homer-operator.suffixedName" (list (include "homer-operator.fullname" .) "metrics") }}
 {{- end }}
 
 {{/*
 Create leader election role name
 */}}
 {{- define "homer-operator.leaderElectionRoleName" -}}
-{{- printf "%s-leader-election" (include "homer-operator.fullname" .) }}
+{{- include "homer-operator.suffixedName" (list (include "homer-operator.fullname" .) "leader-election") }}
 {{- end }}
 
 {{/*
 Create manager role name
 */}}
 {{- define "homer-operator.managerRoleName" -}}
-{{- printf "%s-manager" (include "homer-operator.fullname" .) }}
+{{- include "homer-operator.suffixedName" (list (include "homer-operator.fullname" .) "manager") }}
 {{- end }}
 
 {{/*
 Create metrics reader role name
 */}}
 {{- define "homer-operator.metricsReaderRoleName" -}}
-{{- printf "%s-metrics-reader" (include "homer-operator.fullname" .) }}
+{{- include "homer-operator.suffixedName" (list (include "homer-operator.fullname" .) "metrics-reader") }}
 {{- end }}
 
 {{/*
-Create proxy role name
+Append a suffix without exceeding Kubernetes' 63-character name limit.
 */}}
-{{- define "homer-operator.proxyRoleName" -}}
-{{- printf "%s-proxy" (include "homer-operator.fullname" .) }}
+{{- define "homer-operator.suffixedName" -}}
+{{- $base := index . 0 -}}
+{{- $suffix := index . 1 -}}
+{{- $maxBaseLength := int (sub 63 (add 1 (len $suffix))) -}}
+{{- printf "%s-%s" ($base | trunc $maxBaseLength | trimSuffix "-") $suffix | trimSuffix "-" }}
 {{- end }}
 
 {{/*
-Create proxy role binding name
+Create the ServiceAccount used by the secure ServiceMonitor.
 */}}
-{{- define "homer-operator.proxyRoleBindingName" -}}
-{{- printf "%s-proxy" (include "homer-operator.fullname" .) }}
+{{- define "homer-operator.metricsScraperServiceAccountName" -}}
+{{- $default := include "homer-operator.suffixedName" (list (include "homer-operator.fullname" .) "metrics") -}}
+{{- default $default .Values.serviceMonitor.auth.serviceAccountName | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Create the token Secret used by the secure ServiceMonitor.
+*/}}
+{{- define "homer-operator.metricsScraperTokenSecretName" -}}
+{{- $default := include "homer-operator.suffixedName" (list (include "homer-operator.fullname" .) "metrics-token") -}}
+{{- default $default .Values.serviceMonitor.auth.tokenSecretName | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Create the name of the optional Grafana dashboard ConfigMap.
+*/}}
+{{- define "homer-operator.grafanaDashboardName" -}}
+{{- include "homer-operator.suffixedName" (list (include "homer-operator.fullname" .) "grafana-dashboard") }}
 {{- end }}
 
 {{/*
 Create the image name
 */}}
 {{- define "homer-operator.image" -}}
-{{- if .Values.image.tag }}
+{{- if .Values.image.digest }}
+{{- printf "%s@%s" .Values.image.repository .Values.image.digest }}
+{{- else if .Values.image.tag }}
 {{- printf "%s:%s" .Values.image.repository .Values.image.tag }}
 {{- else }}
 {{- printf "%s:%s" .Values.image.repository .Chart.AppVersion }}

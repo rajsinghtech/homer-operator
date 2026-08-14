@@ -177,11 +177,11 @@ spec:
   
   # Secret references for smart cards and authentication
   # Enables secure storage of sensitive data for Homer smart cards
+  # Smart-card Secrets must be created in this Dashboard's namespace.
   # secrets:
   #   apiKey:
   #     name: "dashboard-secrets"
   #     key: "api-key"
-  #     namespace: "public"  # Optional: defaults to Dashboard namespace
   #   token:
   #     name: "dashboard-secrets"
   #     key: "auth-token"

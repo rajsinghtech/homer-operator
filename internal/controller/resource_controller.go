@@ -48,6 +48,10 @@ type ResourceInfo struct {
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes/status,verbs=get
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 
+// GenericResourceReconciler remains available for direct users of the
+// controller package. Production manager setup intentionally does not
+// register it: DashboardReconciler owns the resource watches and performs the
+// complete declarative ConfigMap rebuild, avoiding competing writers.
 type GenericResourceReconciler struct {
 	client.Client
 	Scheme      *runtime.Scheme
@@ -63,40 +67,43 @@ func (r *GenericResourceReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
-	// List all Dashboard CRs
 	dashboardList := &homerv1alpha1.DashboardList{}
 	if err := r.List(ctx, dashboardList); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	for _, dashboard := range dashboardList.Items {
-		delete(dashboard.Annotations, "kubectl.kubernetes.io/last-applied-configuration")
-		if utils.IsSubset(resourceInfo.Annotations, dashboard.Annotations) {
-			shouldInclude, err := r.shouldIncludeResource(ctx, resourceInfo, &dashboard)
-			if err != nil {
-				return ctrl.Result{}, err
-			}
-			if !shouldInclude {
+	for i := range dashboardList.Items {
+		dashboard := &dashboardList.Items[i]
+		if dashboard.Annotations != nil {
+			delete(dashboard.Annotations, "kubectl.kubernetes.io/last-applied-configuration")
+		}
+		if !utils.IsSubset(resourceInfo.Annotations, dashboard.Annotations) {
+			continue
+		}
+
+		shouldInclude, err := r.shouldIncludeResource(ctx, resourceInfo, dashboard)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !shouldInclude {
+			continue
+		}
+
+		configMap := corev1.ConfigMap{}
+		configMapName := dashboard.Name + homer.ResourceSuffix
+		if err := r.Get(ctx, client.ObjectKey{Namespace: dashboard.Namespace, Name: configMapName}, &configMap); err != nil {
+			if apierrors.IsNotFound(err) {
 				continue
 			}
+			return ctrl.Result{}, err
+		}
 
-			configMap := corev1.ConfigMap{}
-			configMapName := dashboard.Name + homer.ResourceSuffix
-			if err := r.Get(ctx, client.ObjectKey{Namespace: dashboard.Namespace, Name: configMapName}, &configMap); err != nil {
-				if apierrors.IsNotFound(err) {
-					continue
-				}
-				return ctrl.Result{}, err
-			}
-
-			if err := r.updateConfigMap(resourceInfo, &configMap, dashboard.Spec.DomainFilters); err != nil {
-				log.FromContext(ctx).Error(err, "Failed to update configmap from resource", "dashboard", dashboard.Name)
-				continue
-			}
-
-			if err := utils.UpdateConfigMapWithRetry(ctx, r.Client, &configMap, dashboard.Name); err != nil {
-				return ctrl.Result{}, err
-			}
+		if err := r.updateConfigMap(resourceInfo, &configMap, dashboard.Spec.DomainFilters); err != nil {
+			log.FromContext(ctx).Error(err, "Failed to update configmap from resource", "dashboard", dashboard.Name)
+			continue
+		}
+		if err := utils.UpdateConfigMapWithRetry(ctx, r.Client, &configMap, dashboard.Name); err != nil {
+			return ctrl.Result{}, err
 		}
 	}
 
@@ -110,11 +117,8 @@ func (r *GenericResourceReconciler) getResourceInfo(ctx context.Context, req ctr
 			return nil, err
 		}
 		return &ResourceInfo{
-			Name:        httproute.Name,
-			Namespace:   httproute.Namespace,
-			Annotations: httproute.Annotations,
-			Labels:      httproute.Labels,
-			Object:      &httproute,
+			Name: httproute.Name, Namespace: httproute.Namespace,
+			Annotations: httproute.Annotations, Labels: httproute.Labels, Object: &httproute,
 		}, nil
 	}
 
@@ -123,11 +127,8 @@ func (r *GenericResourceReconciler) getResourceInfo(ctx context.Context, req ctr
 		return nil, err
 	}
 	return &ResourceInfo{
-		Name:        ingress.Name,
-		Namespace:   ingress.Namespace,
-		Annotations: ingress.Annotations,
-		Labels:      ingress.Labels,
-		Object:      &ingress,
+		Name: ingress.Name, Namespace: ingress.Namespace,
+		Annotations: ingress.Annotations, Labels: ingress.Labels, Object: &ingress,
 	}, nil
 }
 
@@ -155,13 +156,11 @@ func (r *GenericResourceReconciler) shouldIncludeIngress(resourceInfo *ResourceI
 			return false, nil
 		}
 	}
-
 	return true, nil
 }
 
 func (r *GenericResourceReconciler) shouldIncludeHTTPRoute(ctx context.Context, resourceInfo *ResourceInfo, dashboard *homerv1alpha1.Dashboard) (bool, error) {
 	httproute := resourceInfo.Object.(*gatewayv1.HTTPRoute)
-
 	if dashboard.Spec.HTTPRouteSelector != nil {
 		selector, err := metav1.LabelSelectorAsSelector(dashboard.Spec.HTTPRouteSelector)
 		if err != nil {
@@ -172,53 +171,43 @@ func (r *GenericResourceReconciler) shouldIncludeHTTPRoute(ctx context.Context, 
 		}
 	}
 
-	if len(dashboard.Spec.DomainFilters) > 0 {
-		if !utils.MatchesHTTPRouteDomainFilters(httproute.Spec.Hostnames, dashboard.Spec.DomainFilters) {
-			return false, nil
-		}
-	}
-
-	if dashboard.Spec.GatewaySelector != nil {
-		selector, err := metav1.LabelSelectorAsSelector(dashboard.Spec.GatewaySelector)
-		if err != nil {
-			return false, err
-		}
-
-		for _, parentRef := range httproute.Spec.ParentRefs {
-			if parentRef.Kind != nil && string(*parentRef.Kind) != "Gateway" {
-				continue
-			}
-
-			namespace := httproute.Namespace
-			if parentRef.Namespace != nil {
-				namespace = string(*parentRef.Namespace)
-			}
-
-			gateway := &gatewayv1.Gateway{}
-			if err := r.Get(ctx, client.ObjectKey{Name: string(parentRef.Name), Namespace: namespace}, gateway); err != nil {
-				if apierrors.IsNotFound(err) {
-					continue
-				}
-				return false, err
-			}
-
-			if selector.Matches(labels.Set(gateway.Labels)) {
-				return true, nil
-			}
-		}
+	if len(dashboard.Spec.DomainFilters) > 0 && !utils.MatchesHTTPRouteDomainFilters(httproute.Spec.Hostnames, dashboard.Spec.DomainFilters) {
 		return false, nil
 	}
-
-	return true, nil
+	if dashboard.Spec.GatewaySelector == nil {
+		return true, nil
+	}
+	selector, err := metav1.LabelSelectorAsSelector(dashboard.Spec.GatewaySelector)
+	if err != nil {
+		return false, err
+	}
+	for _, parentRef := range httproute.Spec.ParentRefs {
+		if parentRef.Kind != nil && string(*parentRef.Kind) != "Gateway" {
+			continue
+		}
+		namespace := httproute.Namespace
+		if parentRef.Namespace != nil {
+			namespace = string(*parentRef.Namespace)
+		}
+		gateway := &gatewayv1.Gateway{}
+		if err := r.Get(ctx, client.ObjectKey{Name: string(parentRef.Name), Namespace: namespace}, gateway); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return false, err
+		}
+		if selector.Matches(labels.Set(gateway.Labels)) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (r *GenericResourceReconciler) updateConfigMap(resourceInfo *ResourceInfo, configMap *corev1.ConfigMap, domainFilters []string) error {
 	if r.IsHTTPRoute {
-		httproute := resourceInfo.Object.(*gatewayv1.HTTPRoute)
-		return homer.UpdateConfigMapHTTPRoute(configMap, httproute, domainFilters)
+		return homer.UpdateConfigMapHTTPRoute(configMap, resourceInfo.Object.(*gatewayv1.HTTPRoute), domainFilters)
 	}
-	ingress := resourceInfo.Object.(*networkingv1.Ingress)
-	return homer.UpdateConfigMapIngress(configMap, *ingress, domainFilters)
+	return homer.UpdateConfigMapIngress(configMap, *resourceInfo.Object.(*networkingv1.Ingress), domainFilters)
 }
 
 func (r *GenericResourceReconciler) SetupIngressController(mgr ctrl.Manager) error {

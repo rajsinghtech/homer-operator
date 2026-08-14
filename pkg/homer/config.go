@@ -4,6 +4,8 @@ package homer
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -71,6 +73,7 @@ const (
 		"resources/labeled/ing-128.png"
 	ServiceIconURL = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/" +
 		"resources/labeled/svc-128.png"
+	assetVolumeNamePrefix = "asset-volume-"
 )
 
 const (
@@ -724,15 +727,19 @@ type Item struct {
 	// +nullable
 	NestedObjects map[string]map[string]string `json:"nestedObjects,omitempty" yaml:"nestedObjects,omitempty"`
 	// +nullable
-	ArrayObjects       map[string][]map[string]string `json:"arrayObjects,omitempty" yaml:"arrayObjects,omitempty"`
-	RawFields          map[string]json.RawMessage     `json:"-" yaml:"-"`
-	Source             string                         `json:"-" yaml:"-"`
-	Namespace          string                         `json:"-" yaml:"-"`
-	LastUpdate         string                         `json:"-" yaml:"-"`
-	updateIntervalSet  bool                           `json:"-" yaml:"-"`
-	legacyParameters   bool                           `json:"-" yaml:"-"`
-	parametersInjected bool                           `json:"-" yaml:"-"`
-	objectSet          bool                           `json:"-" yaml:"-"`
+	ArrayObjects map[string][]map[string]string `json:"arrayObjects,omitempty" yaml:"arrayObjects,omitempty"`
+	RawFields    map[string]json.RawMessage     `json:"-" yaml:"-"`
+	Source       string                         `json:"-" yaml:"-"`
+	Namespace    string                         `json:"-" yaml:"-"`
+	LastUpdate   string                         `json:"-" yaml:"-"`
+	// crdFoundation remains true after a discovered item enhances a CRD item.
+	// The source is then allowed to identify that enhanced item without
+	// allowing a second same-named resource to merge into it.
+	crdFoundation      bool `json:"-" yaml:"-"`
+	updateIntervalSet  bool `json:"-" yaml:"-"`
+	legacyParameters   bool `json:"-" yaml:"-"`
+	parametersInjected bool `json:"-" yaml:"-"`
+	objectSet          bool `json:"-" yaml:"-"`
 }
 
 // UnmarshalJSON captures unknown upstream item fields so Kubernetes and
@@ -1181,6 +1188,7 @@ func cleanupHomerConfig(config *HomerConfig) {
 			item.Source = "crd"
 			item.Namespace = "dashboard"
 			item.LastUpdate = "crd-defined"
+			item.crdFoundation = false
 
 			validItems = append(validItems, item)
 		}
@@ -1501,14 +1509,66 @@ func CreateConfigMap(
 	services []corev1.Service,
 	owner client.Object,
 ) (corev1.ConfigMap, error) {
+	return CreateConfigMapWithDiscoveryConfig(config, name, namespace, ingresses, services, owner, nil)
+}
+
+// DiscoveryConfig controls how discovered Kubernetes resources are converted
+// into Homer services and items.
+type DiscoveryConfig struct {
+	ServiceGrouping *ServiceGroupingConfig
+	HealthCheck     *ServiceHealthConfig
+	ValidationLevel ValidationLevel
+	// IngressDomainFilters contains filters authorized for each discovered
+	// Ingress. A single Ingress may contain both matching and non-matching
+	// hosts, so filtering the resource before generation is not sufficient.
+	IngressDomainFilters map[string][]string
+	// HTTPRouteDomainFilters contains filters explicitly authorized by the
+	// ClusterManager. Keys must be produced with HTTPRouteDomainFilterKey;
+	// arbitrary resource annotations are never trusted as filter authority.
+	HTTPRouteDomainFilters map[string][]string
+}
+
+// HTTPRouteDomainFilterKey returns the stable in-memory key used to associate
+// ClusterManager-authorized domain filters with a discovered HTTPRoute.
+func HTTPRouteDomainFilterKey(httproute *gatewayv1.HTTPRoute) string {
+	if httproute == nil {
+		return ""
+	}
+	return httproute.Namespace + "\x00" + discoveredResourceSource("httproute/"+httproute.Name, httproute.Annotations)
+}
+
+// IngressDomainFilterKey returns the stable in-memory key used to associate
+// Dashboard-authorized domain filters with a discovered Ingress.
+func IngressDomainFilterKey(ingress *networkingv1.Ingress) string {
+	if ingress == nil {
+		return ""
+	}
+	return ingress.Namespace + "\x00" + discoveredResourceSource("ingress/"+ingress.Name, ingress.Annotations)
+}
+
+// CreateConfigMapWithDiscoveryConfig creates a ConfigMap while applying the
+// Dashboard's discovery feature configuration.
+func CreateConfigMapWithDiscoveryConfig(
+	config *HomerConfig,
+	name string,
+	namespace string,
+	ingresses networkingv1.IngressList,
+	services []corev1.Service,
+	owner client.Object,
+	discoveryConfig *DiscoveryConfig,
+) (corev1.ConfigMap, error) {
 	cleanupHomerConfig(config)
 
 	for _, ingress := range ingresses.Items {
-		UpdateHomerConfigIngress(config, ingress, nil)
+		updateHomerConfigIngress(config, ingress, nil, discoveryConfig)
 	}
 
 	for _, svc := range services {
-		UpdateHomerConfigService(config, svc)
+		updateHomerConfigService(config, svc, discoveryConfig)
+	}
+
+	if discoveryConfig != nil && discoveryConfig.HealthCheck != nil && discoveryConfig.HealthCheck.Enabled {
+		enhanceHomerConfigWithAggregation(config, discoveryConfig.HealthCheck)
 	}
 
 	if err := ValidateHomerConfig(config); err != nil {
@@ -1548,11 +1608,13 @@ func CreateConfigMapWithHTTPRoutes(
 	owner client.Object,
 	domainFilters []string,
 ) (corev1.ConfigMap, error) {
-	return createConfigMapWithHTTPRoutesAndHealth(
+	return CreateConfigMapWithHTTPRoutesAndDiscoveryConfig(
 		config, name, namespace, ingresses, httproutes, services, owner, domainFilters, nil)
 }
 
-func createConfigMapWithHTTPRoutesAndHealth(
+// CreateConfigMapWithHTTPRoutesAndDiscoveryConfig creates a ConfigMap with
+// Ingress, HTTPRoute, and Service discovery feature configuration applied.
+func CreateConfigMapWithHTTPRoutesAndDiscoveryConfig(
 	config *HomerConfig,
 	name string,
 	namespace string,
@@ -1561,29 +1623,29 @@ func createConfigMapWithHTTPRoutesAndHealth(
 	services []corev1.Service,
 	owner client.Object,
 	domainFilters []string,
-	healthConfig *ServiceHealthConfig,
+	discoveryConfig *DiscoveryConfig,
 ) (corev1.ConfigMap, error) {
 	originalConfig := *config
 
 	cleanupHomerConfig(config)
 
 	for _, ingress := range ingresses.Items {
-		UpdateHomerConfigIngress(config, ingress, domainFilters)
+		updateHomerConfigIngress(config, ingress, domainFilters, discoveryConfig)
 	}
 	for _, httproute := range httproutes {
-		UpdateHomerConfigHTTPRoute(config, &httproute, domainFilters)
+		updateHomerConfigWithHTTPRoutes(config, &httproute, domainFilters, discoveryConfig)
 	}
 
 	for _, svc := range services {
-		UpdateHomerConfigService(config, svc)
+		updateHomerConfigService(config, svc, discoveryConfig)
 	}
 
 	if err := validateCRDServicePreservation(&originalConfig, config); err != nil {
 		slog.Warn("CRD service preservation check failed", "error", err)
 	}
 
-	if healthConfig != nil {
-		enhanceHomerConfigWithAggregation(config, healthConfig)
+	if discoveryConfig != nil && discoveryConfig.HealthCheck != nil && discoveryConfig.HealthCheck.Enabled {
+		enhanceHomerConfigWithAggregation(config, discoveryConfig.HealthCheck)
 	}
 
 	// Validate configuration before creating ConfigMap
@@ -1653,6 +1715,7 @@ func createDeploymentInternal(
 	if configSyncImage == "" {
 		configSyncImage = "alpine:3.18"
 	}
+	assetVolumeName := AssetVolumeName(config.AssetsConfigMapName)
 
 	// Base volumes
 	volumes := []corev1.Volume{
@@ -1683,7 +1746,7 @@ func createDeploymentInternal(
 	// Add custom assets ConfigMap volume if provided
 	if config.AssetsConfigMapName != "" {
 		volumes = append(volumes, corev1.Volume{
-			Name: config.AssetsConfigMapName,
+			Name: assetVolumeName,
 			VolumeSource: corev1.VolumeSource{
 				ConfigMap: &corev1.ConfigMapVolumeSource{
 					LocalObjectReference: corev1.LocalObjectReference{
@@ -2017,12 +2080,25 @@ func buildSidecarVolumeMounts(config *DeploymentConfig) []corev1.VolumeMount {
 	// Add custom assets mount if configured
 	if config != nil && config.AssetsConfigMapName != "" {
 		mounts = append(mounts, corev1.VolumeMount{
-			Name:      config.AssetsConfigMapName,
+			Name:      AssetVolumeName(config.AssetsConfigMapName),
 			MountPath: "/custom-assets",
 		})
 	}
 
 	return mounts
+}
+
+// AssetVolumeName returns the stable Pod volume name used for an asset
+// ConfigMap. ConfigMap names are DNS subdomains and can exceed the stricter
+// DNS-1123 label constraints for volume and volume-mount names, so the source
+// name is represented by a deterministic hash. The reserved prefix keeps the
+// derived name separate from the fixed operator volumes.
+func AssetVolumeName(configMapName string) string {
+	if configMapName == "" {
+		return ""
+	}
+	digest := sha256.Sum256([]byte("homer-operator/assets/" + configMapName))
+	return assetVolumeNamePrefix + hex.EncodeToString(digest[:])[:48]
 }
 
 // CreateDeploymentWithAssets creates a Deployment with custom asset support and PWA manifest
@@ -2244,7 +2320,7 @@ func GeneratePWAManifest(
 		display = "standalone"
 	}
 	if startURL == "" {
-		startURL = "/"
+		startURL = "../"
 	}
 	if themeColor == "" {
 		themeColor = "#3367d6"
@@ -2264,6 +2340,7 @@ func GeneratePWAManifest(
 		ShortName       string         `json:"short_name"`
 		Description     string         `json:"description"`
 		StartURL        string         `json:"start_url"`
+		Scope           string         `json:"scope"`
 		Display         string         `json:"display"`
 		ThemeColor      string         `json:"theme_color"`
 		BackgroundColor string         `json:"background_color"`
@@ -2301,7 +2378,7 @@ func GeneratePWAManifest(
 			}
 			return truncateString(title, 12)
 		}(),
-		Description: description, StartURL: startURL, Display: display,
+		Description: description, StartURL: startURL, Scope: "../", Display: display,
 		ThemeColor: themeColor, BackgroundColor: backgroundColor, Icons: iconEntries,
 	}, "", "  ")
 	if err != nil {
@@ -2345,7 +2422,7 @@ func CreateService(name string, namespace string, owner client.Object) corev1.Se
 	return *s
 }
 func UpdateHomerConfigIngress(homerConfig *HomerConfig, ingress networkingv1.Ingress, domainFilters []string) {
-	UpdateHomerConfigIngressWithGrouping(homerConfig, ingress, domainFilters, nil)
+	updateHomerConfigIngress(homerConfig, ingress, domainFilters, nil)
 }
 
 // UpdateHomerConfigIngressWithGrouping updates Homer config with custom grouping strategy
@@ -2355,20 +2432,46 @@ func UpdateHomerConfigIngressWithGrouping(
 	domainFilters []string,
 	groupingConfig *ServiceGroupingConfig,
 ) {
+	updateHomerConfigIngress(homerConfig, ingress, domainFilters, &DiscoveryConfig{ServiceGrouping: groupingConfig})
+}
+
+func updateHomerConfigIngress(
+	homerConfig *HomerConfig,
+	ingress networkingv1.Ingress,
+	domainFilters []string,
+	discoveryConfig *DiscoveryConfig,
+) {
+	var groupingConfig *ServiceGroupingConfig
+	if discoveryConfig != nil {
+		groupingConfig = discoveryConfig.ServiceGrouping
+	}
+	// Remove existing items before validating rules so an update that removes
+	// every rule also removes the old discovered cards.
+	removeItemsFromSource(
+		homerConfig,
+		discoveredResourceSource("ingress/"+ingress.ObjectMeta.Name, ingress.ObjectMeta.Annotations),
+		ingress.ObjectMeta.Namespace,
+	)
+
+	effectiveDomainFilters := domainFilters
+	if discoveryConfig != nil {
+		if authorizedFilters, ok := discoveryConfig.IngressDomainFilters[IngressDomainFilterKey(&ingress)]; ok {
+			effectiveDomainFilters = authorizedFilters
+		}
+	}
+
 	// Setup service configuration
 	service := setupIngressService(homerConfig, ingress, groupingConfig)
 
 	// Validate ingress has rules
 	if len(ingress.Spec.Rules) == 0 {
-		return // Skip Ingress resources without rules
+		return // The source was removed above; there is nothing to add.
 	}
 
-	// Remove existing items and process service annotations
-	removeItemsFromSource(homerConfig, ingress.ObjectMeta.Name, ingress.ObjectMeta.Namespace)
 	processServiceAnnotations(&service, ingress.ObjectMeta.Annotations)
 
 	// Create items from ingress rules
-	items := createIngressItems(ingress, domainFilters)
+	items := createIngressItems(ingress, effectiveDomainFilters, discoveryValidationLevel(discoveryConfig))
 
 	// Update service if we have matching items
 	if len(items) > 0 {
@@ -2378,7 +2481,7 @@ func UpdateHomerConfigIngressWithGrouping(
 
 // UpdateHomerConfigService updates Homer config from a Kubernetes Service resource
 func UpdateHomerConfigService(homerConfig *HomerConfig, svc corev1.Service) {
-	UpdateHomerConfigServiceWithGrouping(homerConfig, svc, nil)
+	updateHomerConfigService(homerConfig, svc, nil)
 }
 
 // UpdateHomerConfigServiceWithGrouping updates Homer config from a K8s Service with custom grouping
@@ -2387,13 +2490,41 @@ func UpdateHomerConfigServiceWithGrouping(
 	svc corev1.Service,
 	groupingConfig *ServiceGroupingConfig,
 ) {
+	updateHomerConfigService(homerConfig, svc, &DiscoveryConfig{ServiceGrouping: groupingConfig})
+}
+
+func updateHomerConfigService(
+	homerConfig *HomerConfig,
+	svc corev1.Service,
+	discoveryConfig *DiscoveryConfig,
+) {
+	var groupingConfig *ServiceGroupingConfig
+	if discoveryConfig != nil {
+		groupingConfig = discoveryConfig.ServiceGrouping
+	}
 	serviceGroup := setupK8sServiceGroup(homerConfig, svc, groupingConfig)
 
-	removeItemsFromSource(homerConfig, "svc/"+svc.Name, svc.Namespace)
+	removeItemsFromSource(
+		homerConfig,
+		discoveredResourceSource("svc/"+svc.Name, svc.Annotations),
+		svc.Namespace,
+	)
 	processServiceAnnotations(&serviceGroup, svc.Annotations)
 
 	item := createK8sServiceItem(svc)
-	processItemAnnotations(&item, svc.Annotations)
+	processItemAnnotationsWithValidation(&item, svc.Annotations, discoveryValidationLevel(discoveryConfig))
+
+	if clusterName := svc.Annotations["homer.rajsingh.info/cluster"]; clusterName != "" && clusterName != LocalCluster && !hasExplicitServiceURL(svc.Annotations) {
+		// A cluster-internal DNS name for a remote Service resolves in the
+		// operator's cluster, not the source cluster. Keep the discovered item
+		// visible, but remove the misleading default link unless the user
+		// supplied an explicit URL (or a CRD foundation later supplies one).
+		slog.Warn("omitting default URL for remote Service without an explicit item URL annotation",
+			"service", svc.Namespace+"/"+svc.Name, "cluster", clusterName,
+			"annotation", "item.homer.rajsingh.info/url")
+		item.URL = ""
+		delete(item.Parameters, URLField)
+	}
 
 	// Apply cluster-name-suffix after annotation processing so it takes precedence
 	if clusterName, ok := svc.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != LocalCluster {
@@ -2409,6 +2540,11 @@ func UpdateHomerConfigServiceWithGrouping(
 	}
 
 	updateOrAddServiceItems(homerConfig, serviceGroup, []Item{item})
+}
+
+func hasExplicitServiceURL(annotations map[string]string) bool {
+	url, ok := annotations["item.homer.rajsingh.info/url"]
+	return ok && strings.TrimSpace(url) != ""
 }
 
 // setupK8sServiceGroup creates the Homer service group for a K8s Service
@@ -2454,10 +2590,7 @@ func createK8sServiceItem(svc corev1.Service) Item {
 	setItemParameter(&item, "url", fmt.Sprintf("%s://%s.%s.svc.cluster.local%s", protocol, name, namespace, portSuffix))
 
 	// Set source metadata for conflict detection (prefix with "svc/" to avoid collisions with Ingress items)
-	item.Source = "svc/" + name
-	if clusterName, ok := svc.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != LocalCluster {
-		item.Source = "svc/" + name + "@" + clusterName
-	}
+	item.Source = discoveredResourceSource("svc/"+name, svc.Annotations)
 	item.Namespace = namespace
 	item.LastUpdate = svc.CreationTimestamp.Time.Format("2006-01-02T15:04:05Z")
 
@@ -2495,7 +2628,7 @@ func setupIngressService(
 }
 
 // createIngressItems creates dashboard items from ingress rules
-func createIngressItems(ingress networkingv1.Ingress, domainFilters []string) []Item {
+func createIngressItems(ingress networkingv1.Ingress, domainFilters []string, validationLevel ValidationLevel) []Item {
 	items := make([]Item, 0, len(ingress.Spec.Rules))
 
 	// First pass: count valid rules for naming
@@ -2514,7 +2647,7 @@ func createIngressItems(ingress networkingv1.Ingress, domainFilters []string) []
 		}
 
 		item := createIngressItem(ingress, host, validRuleCount)
-		processItemAnnotations(&item, ingress.ObjectMeta.Annotations)
+		processItemAnnotationsWithValidation(&item, ingress.ObjectMeta.Annotations, validationLevel)
 
 		// Append cluster name suffix from label AFTER processing annotations
 		// so that it takes precedence over any name annotations
@@ -2577,10 +2710,7 @@ func createIngressItem(ingress networkingv1.Ingress, host string, validRuleCount
 
 	// Set metadata for conflict detection
 	// For remote clusters, include cluster name in Source to make it unique
-	item.Source = ingress.ObjectMeta.Name
-	if clusterName, ok := ingress.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != LocalCluster {
-		item.Source = ingress.ObjectMeta.Name + "@" + clusterName
-	}
+	item.Source = discoveredResourceSource("ingress/"+ingress.ObjectMeta.Name, ingress.ObjectMeta.Annotations)
 	item.Namespace = ingress.ObjectMeta.Namespace
 	item.LastUpdate = ingress.ObjectMeta.CreationTimestamp.Time.Format("2006-01-02T15:04:05Z")
 
@@ -2623,8 +2753,12 @@ func updateHomerConfigWithHTTPRoutes(
 	homerConfig *HomerConfig,
 	httproute *gatewayv1.HTTPRoute,
 	domainFilters []string,
-	groupingConfig *ServiceGroupingConfig,
+	discoveryConfig *DiscoveryConfig,
 ) {
+	var groupingConfig *ServiceGroupingConfig
+	if discoveryConfig != nil {
+		groupingConfig = discoveryConfig.ServiceGrouping
+	}
 	service := Service{}
 
 	// Determine service group using CRD-aware flexible grouping and set parameters
@@ -2642,7 +2776,11 @@ func updateHomerConfigWithHTTPRoutes(
 	processServiceAnnotations(&service, httproute.ObjectMeta.Annotations)
 
 	// FIRST: Remove any existing items from this HTTPRoute source to ensure clean slate
-	removeItemsFromSource(homerConfig, httproute.ObjectMeta.Name, httproute.ObjectMeta.Namespace)
+	removeItemsFromSource(
+		homerConfig,
+		discoveredResourceSource("httproute/"+httproute.ObjectMeta.Name, httproute.ObjectMeta.Annotations),
+		httproute.ObjectMeta.Namespace,
+	)
 
 	// Determine protocol based on parent Gateway listener configuration
 	protocol := determineProtocolFromHTTPRoute(httproute)
@@ -2654,13 +2792,13 @@ func updateHomerConfigWithHTTPRoutes(
 		// This allows for cleanup when all hostnames are removed
 		return
 	} else {
-		// Check if HTTPRoute has per-cluster domain filters annotation
+		// Only filters explicitly supplied by the ClusterManager are honored.
+		// The similarly named resource annotation is user-controlled and must not
+		// be able to filter a remote cluster whose configuration omitted filters.
 		effectiveDomainFilters := domainFilters
-		if filterAnnotation, ok := httproute.ObjectMeta.Annotations["homer.rajsingh.info/domain-filters"]; ok && filterAnnotation != "" {
-			// Use per-cluster domain filters from annotation
-			effectiveDomainFilters = strings.Split(filterAnnotation, ",")
-			for i := range effectiveDomainFilters {
-				effectiveDomainFilters[i] = strings.TrimSpace(effectiveDomainFilters[i])
+		if discoveryConfig != nil {
+			if authorizedFilters, ok := discoveryConfig.HTTPRouteDomainFilters[HTTPRouteDomainFilterKey(httproute)]; ok {
+				effectiveDomainFilters = authorizedFilters
 			}
 		}
 
@@ -2688,14 +2826,11 @@ func updateHomerConfigWithHTTPRoutes(
 
 			// Set metadata for conflict detection
 			// For remote clusters, include cluster name in Source to make it unique
-			item.Source = httproute.ObjectMeta.Name
-			if clusterName, ok := httproute.ObjectMeta.Annotations["homer.rajsingh.info/cluster"]; ok && clusterName != "" && clusterName != LocalCluster {
-				item.Source = httproute.ObjectMeta.Name + "@" + clusterName
-			}
+			item.Source = discoveredResourceSource("httproute/"+httproute.ObjectMeta.Name, httproute.ObjectMeta.Annotations)
 			item.Namespace = httproute.ObjectMeta.Namespace
 			item.LastUpdate = httproute.ObjectMeta.CreationTimestamp.Time.Format("2006-01-02T15:04:05Z")
 
-			processItemAnnotations(&item, httproute.ObjectMeta.Annotations)
+			processItemAnnotationsWithValidation(&item, httproute.ObjectMeta.Annotations, discoveryValidationLevel(discoveryConfig))
 
 			// Append cluster name suffix from label AFTER processing annotations
 			// so that it takes precedence over any name annotations
@@ -2768,6 +2903,7 @@ func updateOrAddServiceItems(homerConfig *HomerConfig, service Service, items []
 
 		if existingServiceName == serviceName {
 			// Service exists, smart merge items
+			crdClaims := make(map[int]string)
 			for _, newItem := range items {
 				updated := false
 				// Get new item name from Parameters map
@@ -2775,9 +2911,10 @@ func updateOrAddServiceItems(homerConfig *HomerConfig, service Service, items []
 
 				// Check if item already exists
 				for ix, existingItem := range s.Items {
-					existingItemName := getItemName(&existingItem)
-
-					if existingItemName == newItemName {
+					if itemsRepresentSameResource(existingItem, newItem, newItemName, crdClaims[ix]) {
+						if existingItem.Source == CRDSource && newItem.Source != CRDSource && newItem.Source != "" {
+							crdClaims[ix] = discoveredItemIdentity(newItem)
+						}
 						// Smart merge: preserve CRD foundation, enhance with discovered data
 						smartMergeItems(&homerConfig.Services[sx].Items[ix], &newItem)
 						updated = true
@@ -2798,6 +2935,37 @@ func updateOrAddServiceItems(homerConfig *HomerConfig, service Service, items []
 	homerConfig.Services = append(homerConfig.Services, service)
 }
 
+// itemsRepresentSameResource determines whether a discovered item should
+// update an existing item or be added as a separate item. Display names are
+// intentionally user-facing and are not guaranteed to be unique across
+// clusters, namespaces, or resource types. For discovered resources, Source
+// plus Namespace is the stable identity; CRD items are matched by name so a
+// discovered resource can still enhance a user-authored foundation item.
+func itemsRepresentSameResource(existing, incoming Item, incomingName, crdClaim string) bool {
+	if getItemName(&existing) != incomingName {
+		return false
+	}
+
+	if existing.crdFoundation {
+		return existing.Source == incoming.Source && existing.Namespace == incoming.Namespace
+	}
+
+	if existing.Source == CRDSource && incoming.Source != CRDSource && incoming.Source != "" {
+		return crdClaim == "" || crdClaim == discoveredItemIdentity(incoming)
+	}
+
+	if existing.Source != "" && incoming.Source != "" &&
+		existing.Source != CRDSource && incoming.Source != CRDSource {
+		return existing.Source == incoming.Source && existing.Namespace == incoming.Namespace
+	}
+
+	return true
+}
+
+func discoveredItemIdentity(item Item) string {
+	return item.Source + "\x00" + item.Namespace
+}
+
 // smartMergeItems intelligently merges items prioritizing CRD foundation with discovered enhancements
 func smartMergeItems(existingItem, newItem *Item) {
 	if existingItem.Parameters == nil {
@@ -2807,7 +2975,7 @@ func smartMergeItems(existingItem, newItem *Item) {
 		existingItem.NestedObjects = make(map[string]map[string]string)
 	}
 
-	isCRDExisting := existingItem.Source == CRDSource
+	isCRDExisting := existingItem.Source == CRDSource || existingItem.crdFoundation
 	isDiscoveredNew := newItem.Source != CRDSource && newItem.Source != ""
 	mergeLegacyItemParameters(existingItem, newItem, isCRDExisting, isDiscoveredNew)
 	mergeDirectItemFields(existingItem, newItem, isCRDExisting, isDiscoveredNew)
@@ -2819,10 +2987,9 @@ func smartMergeItems(existingItem, newItem *Item) {
 
 	if isDiscoveredNew {
 		existingItem.LastUpdate = newItem.LastUpdate
-		if !isCRDExisting {
-			existingItem.Source = newItem.Source
-			existingItem.Namespace = newItem.Namespace
-		}
+		existingItem.Source = newItem.Source
+		existingItem.Namespace = newItem.Namespace
+		existingItem.crdFoundation = isCRDExisting
 	}
 }
 
@@ -3029,6 +3196,20 @@ func determineProtocolFromHTTPRoute(httproute *gatewayv1.HTTPRoute) string {
 // processItemAnnotations safely processes item annotations without reflection
 func processItemAnnotations(item *Item, annotations map[string]string) {
 	processItemAnnotationsWithValidation(item, annotations, ValidationLevelNone)
+}
+
+func discoveryValidationLevel(config *DiscoveryConfig) ValidationLevel {
+	if config == nil || config.ValidationLevel == "" {
+		// Dashboard.spec.validationLevel defaults to "warn" in the CRD. Keep
+		// the same behavior for objects constructed in-process or read before
+		// API-server defaulting has been applied. The legacy public helpers pass
+		// a nil DiscoveryConfig and continue to use ValidationLevelNone.
+		if config == nil {
+			return ValidationLevelNone
+		}
+		return ValidationLevelWarn
+	}
+	return config.ValidationLevel
 }
 
 // processItemAnnotationsWithValidation processes item annotations with validation
@@ -3400,10 +3581,12 @@ func findBestMatchingCRDServiceGroup(
 	return bestMatch
 }
 
-// hasCRDItems checks if a service has any items from CRD source
+// hasCRDItems checks if a service has any items from CRD source. A discovered
+// item that enhanced a CRD foundation keeps crdFoundation set after its source
+// changes, so the service remains eligible for CRD-aware grouping.
 func hasCRDItems(service Service) bool {
 	for _, item := range service.Items {
-		if item.Source == CRDSource {
+		if item.Source == CRDSource || item.crdFoundation {
 			return true
 		}
 	}
@@ -4713,6 +4896,17 @@ func optimizeServiceLayout(services []Service, _ []ServiceDependency) []Service 
 	})
 
 	return optimizedServices
+}
+
+// discoveredResourceSource returns the stable source key used by discovered
+// resources. Remote cluster names are part of the key so resources with the
+// same name and namespace in different clusters remain independent.
+func discoveredResourceSource(resourceName string, annotations map[string]string) string {
+	clusterName := annotations["homer.rajsingh.info/cluster"]
+	if clusterName != "" && clusterName != LocalCluster {
+		return resourceName + "@" + clusterName
+	}
+	return resourceName
 }
 
 // removeItemsFromSource removes all items that originated from a specific source

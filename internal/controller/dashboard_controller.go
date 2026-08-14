@@ -21,12 +21,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"maps"
 	"net/url"
 	"path"
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -37,16 +39,20 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apiMeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
@@ -57,7 +63,12 @@ type DashboardReconciler struct {
 	EnableGatewayAPI bool
 	HomerImage       string
 	ConfigSyncImage  string
+	// ClusterManager is an optional injected manager used by direct callers and
+	// tests. Production reconciliation keeps managers isolated per Dashboard in
+	// clusterManagers so same-named remote clusters cannot share state.
 	ClusterManager   *ClusterManager
+	clusterManagers  map[client.ObjectKey]*ClusterManager
+	clusterManagerMu sync.Mutex
 }
 
 // discoveredClusterResources contains the results from the discovery pass used
@@ -96,39 +107,41 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, err
 	}
 
-	// Initialize ClusterManager if not already done
-	if r.ClusterManager == nil {
-		r.ClusterManager = NewClusterManager(r.Client, r.Scheme)
+	clusterManager := r.clusterManagerForDashboard(&dashboard)
+
+	// Load and validate the effective configuration before doing any remote
+	// discovery. In external-config mode the inline HomerConfig is only a
+	// stale API default and must not control validation or PWA defaults.
+	effectiveHomerConfig, err := r.buildHomerConfig(ctx, &dashboard)
+	if err != nil {
+		return r.reconcileFailure(ctx, &dashboard, err)
+	}
+	if err := r.validateDashboardConfig(effectiveHomerConfig); err != nil {
+		return r.reconcileFailure(ctx, &dashboard, err)
 	}
 
 	// Update cluster connections based on dashboard configuration
-	if err := r.ClusterManager.UpdateClusters(ctx, &dashboard); err != nil {
-		log := log.FromContext(ctx)
-		log.Error(err, "Failed to update cluster connections")
-		// Continue with local cluster discovery even if remote clusters fail
+	if err := clusterManager.UpdateClusters(ctx, &dashboard); err != nil {
+		return r.reconcileFailure(ctx, &dashboard, err)
 	}
 
 	// Discover resources from all clusters
 	filteredIngressList, discoveredIngresses, err := r.getMultiClusterFilteredIngresses(ctx, &dashboard)
 	if err != nil {
-		return ctrl.Result{}, err
+		return r.reconcileFailure(ctx, &dashboard, err)
 	}
 
 	filteredServices, discoveredServices, err := r.getMultiClusterFilteredServices(ctx, &dashboard)
 	if err != nil {
-		return ctrl.Result{}, err
+		return r.reconcileFailure(ctx, &dashboard, err)
 	}
 
-	if err := r.validateDashboardConfig(&dashboard); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	resources, _, discoveredHTTPRoutes, err := r.prepareResources(ctx, &dashboard, filteredIngressList, filteredServices)
+	resources, _, discoveredHTTPRoutes, err := r.prepareResources(ctx, &dashboard, filteredIngressList, filteredServices, effectiveHomerConfig)
 	if err != nil {
-		return ctrl.Result{}, err
+		return r.reconcileFailure(ctx, &dashboard, err)
 	}
 	if err := r.cleanupStaleAssetMirrors(ctx, &dashboard); err != nil {
-		return ctrl.Result{}, err
+		return r.reconcileFailure(ctx, &dashboard, err)
 	}
 
 	// Check if resources need updating to avoid unnecessary API calls
@@ -147,7 +160,7 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	if err := r.createOrUpdateResources(ctx, resources, dashboard.Name); err != nil {
-		return ctrl.Result{}, err
+		return r.reconcileFailure(ctx, &dashboard, err)
 	}
 
 	if !dashboard.DeletionTimestamp.IsZero() {
@@ -160,9 +173,59 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
+		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{RequeueAfter: time.Minute * 5}, nil
+}
+
+// reconcileFailure records a negative Ready condition before returning the
+// original error. Without this update, a Dashboard that was previously ready
+// can continue to advertise Ready=true while its new configuration is
+// invalid, unreadable, or otherwise failed to reconcile.
+func (r *DashboardReconciler) reconcileFailure(ctx context.Context, dashboard *homerv1alpha1.Dashboard, reconcileErr error) (ctrl.Result, error) {
+	if dashboard.DeletionTimestamp.IsZero() {
+		if err := r.markReconcileFailure(ctx, dashboard, reconcileErr); err != nil {
+			log.FromContext(ctx).Error(err, "Failed to record Dashboard reconcile failure", "dashboard", dashboard.Name)
+		}
+	}
+	return ctrl.Result{}, reconcileErr
+}
+
+func (r *DashboardReconciler) markReconcileFailure(ctx context.Context, dashboard *homerv1alpha1.Dashboard, reconcileErr error) error {
+	previousStatus := dashboard.Status.DeepCopy()
+	dashboard.Status.Ready = false
+	dashboard.Status.ObservedGeneration = dashboard.Generation
+	apiMeta.SetStatusCondition(&dashboard.Status.Conditions, metav1.Condition{
+		Type:               "Ready",
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: dashboard.Generation,
+		LastTransitionTime: metav1.Now(),
+		Reason:             "ReconcileError",
+		Message:            truncateConditionMessage(reconcileErr),
+	})
+	if equality.Semantic.DeepEqual(*previousStatus, dashboard.Status) {
+		return nil
+	}
+	if err := r.Status().Update(ctx, dashboard); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func truncateConditionMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	const maxConditionMessageLength = 1024
+	message := err.Error()
+	if len(message) > maxConditionMessageLength {
+		return message[:maxConditionMessageLength-3] + "..."
+	}
+	return message
 }
 
 // resourcesNeedUpdate checks if resources actually need updating to avoid unnecessary API calls
@@ -186,25 +249,61 @@ func (r *DashboardReconciler) resourcesNeedUpdate(ctx context.Context, resources
 			return true
 		}
 
-		// For ConfigMaps, check if the data has changed
-		if configMap, ok := resource.(*corev1.ConfigMap); ok {
-			if existingCM, ok := existing.(*corev1.ConfigMap); ok {
-				if !reflect.DeepEqual(configMap.Data, existingCM.Data) ||
-					!reflect.DeepEqual(configMap.BinaryData, existingCM.BinaryData) {
-					log.V(1).Info("ConfigMap data changed, needs update")
-					return true
-				}
+		if r.resourceDiffers(ctx, resource, existing) {
+			log.V(1).Info("Resource differs, needs update", "type", resource.GetObjectKind().GroupVersionKind().Kind, "name", resource.GetName())
+			return true
+		}
+	}
+
+	return false
+}
+
+// resourceDiffers compares only fields owned by this controller. Server
+// metadata and allocated fields must not make an otherwise equal resource
+// appear out of date.
+func (r *DashboardReconciler) resourceDiffers(ctx context.Context, desired, existing client.Object) bool {
+	switch desired := desired.(type) {
+	case *corev1.ConfigMap:
+		existingConfigMap, ok := existing.(*corev1.ConfigMap)
+		return !ok || !reflect.DeepEqual(desired.Data, existingConfigMap.Data) ||
+			!reflect.DeepEqual(desired.BinaryData, existingConfigMap.BinaryData)
+	case *appsv1.Deployment:
+		existingDeployment, ok := existing.(*appsv1.Deployment)
+		return !ok || r.deploymentSpecsDiffer(ctx, desired, existingDeployment)
+	case *corev1.Service:
+		existingService, ok := existing.(*corev1.Service)
+		return !ok || serviceSpecsDiffer(desired, existingService)
+	default:
+		// A new managed resource type must be explicitly added here so it
+		// cannot silently skip reconciliation.
+		return true
+	}
+}
+
+// serviceSpecsDiffer compares the Service fields owned by the operator. The
+// API server may default Protocol and allocate NodePort, neither of which
+// should cause perpetual updates when omitted from the desired Service.
+func serviceSpecsDiffer(desired, existing *corev1.Service) bool {
+	if !reflect.DeepEqual(desired.Spec.Selector, existing.Spec.Selector) {
+		return true
+	}
+
+	if len(desired.Spec.Ports) != len(existing.Spec.Ports) {
+		return true
+	}
+
+	matched := make([]bool, len(existing.Spec.Ports))
+	for _, desiredPort := range desired.Spec.Ports {
+		found := false
+		for i, existingPort := range existing.Spec.Ports {
+			if !matched[i] && servicePortsMatch(desiredPort, existingPort) {
+				matched[i] = true
+				found = true
+				break
 			}
 		}
-
-		// For Deployments, check if meaningful spec fields have changed
-		if deployment, ok := resource.(*appsv1.Deployment); ok {
-			if existingDep, ok := existing.(*appsv1.Deployment); ok {
-				if r.deploymentSpecsDiffer(ctx, deployment, existingDep) {
-					log.V(1).Info("Deployment spec changed, needs update")
-					return true
-				}
-			}
+		if !found {
+			return true
 		}
 	}
 
@@ -226,61 +325,131 @@ func (r *DashboardReconciler) deploymentSpecsDiffer(ctx context.Context, desired
 		log.V(1).Info("Replicas differ", "desired", *desiredReplicas, "existing", *existingReplicas)
 		return true
 	}
-
-	// Check image changes in containers
-	if len(desired.Spec.Template.Spec.Containers) != len(existing.Spec.Template.Spec.Containers) {
-		log.V(1).Info("Container count differs", "desired", len(desired.Spec.Template.Spec.Containers), "existing", len(existing.Spec.Template.Spec.Containers))
+	if !desiredLabelsMatch(desired.Spec.Selector.MatchLabels, existing.Spec.Selector.MatchLabels) ||
+		!desiredLabelsMatch(desired.Spec.Template.Labels, existing.Spec.Template.Labels) {
+		log.V(1).Info("Deployment selector or pod template labels differ")
 		return true
 	}
 
-	for i, container := range desired.Spec.Template.Spec.Containers {
-		existingContainer := existing.Spec.Template.Spec.Containers[i]
-
-		// Compare container image
-		if container.Image != existingContainer.Image {
-			log.V(1).Info("Container image differs", "index", i, "desired", container.Image, "existing", existingContainer.Image)
-			return true
-		}
-		if !reflect.DeepEqual(container.Command, existingContainer.Command) ||
-			!reflect.DeepEqual(container.Args, existingContainer.Args) {
-			log.V(1).Info("Container command or args differ", "index", i)
-			return true
-		}
-
-		// Compare container resources
-		if !reflect.DeepEqual(container.Resources, existingContainer.Resources) {
-			log.V(1).Info("Container resources differ", "index", i)
-			return true
-		}
-
-		// Check volume mounts
-		if !reflect.DeepEqual(container.VolumeMounts, existingContainer.VolumeMounts) {
-			log.V(1).Info("Container volume mounts differ", "index", i)
-			return true
-		}
-
-		// Compare environment variables (ignoring order)
-		if !r.envVarsEqual(container.Env, existingContainer.Env) {
-			log.V(1).Info("Container env vars differ", "index", i)
-			return true
-		}
-	}
-
-	// Check volume changes (comparing names and sources)
-	if !r.volumesEqual(desired.Spec.Template.Spec.Volumes, existing.Spec.Template.Spec.Volumes) {
-		log.V(1).Info("Volumes differ")
-		return true
-	}
-
-	if desired.Spec.Template.Spec.DNSPolicy != existing.Spec.Template.Spec.DNSPolicy ||
-		!reflect.DeepEqual(desired.Spec.Template.Spec.DNSConfig, existing.Spec.Template.Spec.DNSConfig) ||
-		!reflect.DeepEqual(desired.Spec.Template.Spec.SecurityContext, existing.Spec.Template.Spec.SecurityContext) {
-		log.V(1).Info("Pod DNS or security configuration differs")
+	desiredPodSpec := normalizeManagedPodSpec(desired.Spec.Template.Spec)
+	existingPodSpec := normalizeManagedPodSpec(existing.Spec.Template.Spec)
+	if !reflect.DeepEqual(desiredPodSpec, existingPodSpec) {
+		log.V(1).Info("Managed pod or container fields differ")
 		return true
 	}
 
 	log.V(1).Info("No differences found, deployment specs are equal")
 	return false
+}
+
+func desiredLabelsMatch(desired, existing map[string]string) bool {
+	for key, value := range desired {
+		if existing[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+// normalizeManagedPodSpec projects the Pod fields generated by this
+// controller and normalizes API-server defaults before comparison.
+func normalizeManagedPodSpec(spec corev1.PodSpec) corev1.PodSpec {
+	managed := corev1.PodSpec{
+		InitContainers:  normalizeContainers(spec.InitContainers),
+		Containers:      normalizeContainers(spec.Containers),
+		Volumes:         normalizeVolumes(spec.Volumes),
+		DNSPolicy:       spec.DNSPolicy,
+		DNSConfig:       spec.DNSConfig,
+		SecurityContext: spec.SecurityContext,
+	}
+	if managed.DNSPolicy == "" {
+		managed.DNSPolicy = corev1.DNSClusterFirst
+	}
+	if len(managed.InitContainers) == 0 {
+		managed.InitContainers = nil
+	}
+	if len(managed.Volumes) == 0 {
+		managed.Volumes = nil
+	}
+	return managed
+}
+
+func normalizeContainers(containers []corev1.Container) []corev1.Container {
+	if len(containers) == 0 {
+		return nil
+	}
+	normalized := make([]corev1.Container, len(containers))
+	for i := range containers {
+		normalized[i] = *containers[i].DeepCopy()
+		container := &normalized[i]
+		slices.SortFunc(container.Env, func(a, b corev1.EnvVar) int {
+			return strings.Compare(a.Name, b.Name)
+		})
+		if container.ImagePullPolicy == "" {
+			container.ImagePullPolicy = defaultImagePullPolicy(container.Image)
+		}
+		if container.TerminationMessagePath == "" {
+			container.TerminationMessagePath = corev1.TerminationMessagePathDefault
+		}
+		if container.TerminationMessagePolicy == "" {
+			container.TerminationMessagePolicy = corev1.TerminationMessageReadFile
+		}
+		for j := range container.Ports {
+			if container.Ports[j].Protocol == "" {
+				container.Ports[j].Protocol = corev1.ProtocolTCP
+			}
+		}
+		normalizeProbe(container.LivenessProbe)
+		normalizeProbe(container.ReadinessProbe)
+		normalizeProbe(container.StartupProbe)
+	}
+	return normalized
+}
+
+func normalizeVolumes(volumes []corev1.Volume) []corev1.Volume {
+	if len(volumes) == 0 {
+		return nil
+	}
+	normalized := make([]corev1.Volume, len(volumes))
+	for i := range volumes {
+		normalized[i] = *volumes[i].DeepCopy()
+		if source := normalized[i].ConfigMap; source != nil && source.DefaultMode == nil {
+			mode := corev1.ConfigMapVolumeSourceDefaultMode
+			source.DefaultMode = &mode
+		}
+		if source := normalized[i].Secret; source != nil && source.DefaultMode == nil {
+			mode := corev1.SecretVolumeSourceDefaultMode
+			source.DefaultMode = &mode
+		}
+	}
+	return normalized
+}
+
+func normalizeProbe(probe *corev1.Probe) {
+	if probe == nil {
+		return
+	}
+	if probe.TimeoutSeconds == 0 {
+		probe.TimeoutSeconds = 1
+	}
+	if probe.PeriodSeconds == 0 {
+		probe.PeriodSeconds = 10
+	}
+	if probe.SuccessThreshold == 0 {
+		probe.SuccessThreshold = 1
+	}
+	if probe.FailureThreshold == 0 {
+		probe.FailureThreshold = 3
+	}
+}
+
+func defaultImagePullPolicy(image string) corev1.PullPolicy {
+	lastSlash := strings.LastIndex(image, "/")
+	lastColon := strings.LastIndex(image, ":")
+	if lastColon <= lastSlash || strings.HasSuffix(image, ":latest") {
+		return corev1.PullAlways
+	}
+	return corev1.PullIfNotPresent
 }
 
 // envVarsEqual compares environment variables ignoring order
@@ -289,64 +458,18 @@ func (r *DashboardReconciler) envVarsEqual(desired, existing []corev1.EnvVar) bo
 		return false
 	}
 
-	desiredMap := make(map[string]string)
+	desiredMap := make(map[string]corev1.EnvVar)
 	for _, env := range desired {
-		desiredMap[env.Name] = env.Value
+		desiredMap[env.Name] = env
 	}
 
 	for _, env := range existing {
-		if val, exists := desiredMap[env.Name]; !exists || val != env.Value {
+		if desiredEnv, exists := desiredMap[env.Name]; !exists || !reflect.DeepEqual(desiredEnv, env) {
 			return false
 		}
 	}
 
 	return true
-}
-
-// volumesEqual compares volumes by name and source, ignoring metadata and Kubernetes defaults
-func (r *DashboardReconciler) volumesEqual(desired, existing []corev1.Volume) bool {
-	if len(desired) != len(existing) {
-		return false
-	}
-
-	desiredMap := make(map[string]corev1.Volume)
-	for _, vol := range desired {
-		desiredMap[vol.Name] = vol
-	}
-
-	for _, vol := range existing {
-		desiredVol, exists := desiredMap[vol.Name]
-		if !exists {
-			return false
-		}
-
-		if !r.volumeSourcesEqual(desiredVol.VolumeSource, vol.VolumeSource) {
-			return false
-		}
-	}
-
-	return true
-}
-
-// volumeSourcesEqual compares volume sources with tolerance for Kubernetes defaults
-func (r *DashboardReconciler) volumeSourcesEqual(desired, existing corev1.VolumeSource) bool {
-	// Compare ConfigMap volumes
-	if desired.ConfigMap != nil && existing.ConfigMap != nil {
-		return desired.ConfigMap.Name == existing.ConfigMap.Name
-	}
-
-	// Compare EmptyDir volumes (always considered equal if both are EmptyDir)
-	if desired.EmptyDir != nil && existing.EmptyDir != nil {
-		return true
-	}
-
-	// Compare Secret volumes
-	if desired.Secret != nil && existing.Secret != nil {
-		return desired.Secret.SecretName == existing.Secret.SecretName
-	}
-
-	// For other volume types, fall back to deep equal
-	return reflect.DeepEqual(desired, existing)
 }
 
 func (r *DashboardReconciler) handleFinalization(ctx context.Context, dashboard *homerv1alpha1.Dashboard) (bool, error) {
@@ -360,12 +483,45 @@ func (r *DashboardReconciler) handleFinalization(ctx context.Context, dashboard 
 			if err := r.cleanupResources(ctx, dashboard); err != nil {
 				return true, err
 			}
+			r.forgetClusterManager(dashboard)
 			controllerutil.RemoveFinalizer(dashboard, dashboardFinalizer)
 			return true, r.Update(ctx, dashboard)
 		}
 		return true, nil
 	}
 	return false, nil
+}
+
+// clusterManagerForDashboard returns the manager associated with one
+// Dashboard. A manually injected ClusterManager retains its historical
+// behavior; managers created by the controller are keyed by namespaced
+// Dashboard identity, not by remote cluster name alone.
+func (r *DashboardReconciler) clusterManagerForDashboard(dashboard *homerv1alpha1.Dashboard) *ClusterManager {
+	if r.ClusterManager != nil {
+		return r.ClusterManager
+	}
+
+	key := client.ObjectKeyFromObject(dashboard)
+	r.clusterManagerMu.Lock()
+	defer r.clusterManagerMu.Unlock()
+	if r.clusterManagers == nil {
+		r.clusterManagers = make(map[client.ObjectKey]*ClusterManager)
+	}
+	if manager, ok := r.clusterManagers[key]; ok {
+		return manager
+	}
+	manager := NewClusterManager(r.Client, r.Scheme)
+	r.clusterManagers[key] = manager
+	return manager
+}
+
+func (r *DashboardReconciler) forgetClusterManager(dashboard *homerv1alpha1.Dashboard) {
+	if r.ClusterManager != nil {
+		return
+	}
+	r.clusterManagerMu.Lock()
+	defer r.clusterManagerMu.Unlock()
+	delete(r.clusterManagers, client.ObjectKeyFromObject(dashboard))
 }
 
 func (r *DashboardReconciler) getFilteredIngresses(ctx context.Context, dashboard *homerv1alpha1.Dashboard) (networkingv1.IngressList, error) {
@@ -393,32 +549,25 @@ func (r *DashboardReconciler) getMultiClusterFilteredIngresses(ctx context.Conte
 	allIngresses := []networkingv1.Ingress{}
 	var discoveredIngresses map[string][]networkingv1.Ingress
 
-	// Use ClusterManager if available and remote clusters are configured
-	if r.ClusterManager != nil && len(dashboard.Spec.RemoteClusters) > 0 {
+	// Use the Dashboard-scoped ClusterManager when remote clusters are configured.
+	if manager := r.clusterManagerForDashboard(dashboard); manager != nil && len(dashboard.Spec.RemoteClusters) > 0 {
 		var err error
-		discoveredIngresses, err = r.ClusterManager.DiscoverIngresses(ctx, dashboard)
+		discoveredIngresses, err = manager.DiscoverIngresses(ctx, dashboard)
 		if err != nil {
 			log := log.FromContext(ctx)
 			log.Error(err, "Failed to discover ingresses from clusters")
 			// Continue with partial results
 		}
 
-		// Aggregate all discovered ingresses
-		for clusterName, ingresses := range discoveredIngresses {
+		// ClusterManager has already applied each cluster's own selectors and
+		// domain filters. Dashboard-level filters are local-cluster filters and
+		// must not be applied again to remote resources here.
+		for _, clusterName := range sortedClusterNames(discoveredIngresses) {
+			ingresses := discoveredIngresses[clusterName]
 			log := log.FromContext(ctx)
 			log.V(1).Info("Discovered ingresses from cluster", "cluster", clusterName, "count", len(ingresses))
 
-			// Apply domain filters
-			for i := range ingresses {
-				shouldInclude, err := r.shouldIncludeIngress(ctx, &ingresses[i], dashboard)
-				if err != nil {
-					log.Error(err, "Error checking ingress inclusion", "ingress", ingresses[i].Name, "cluster", clusterName)
-					continue
-				}
-				if shouldInclude {
-					allIngresses = append(allIngresses, ingresses[i])
-				}
-			}
+			allIngresses = append(allIngresses, ingresses...)
 		}
 	} else {
 		// Fall back to single-cluster discovery
@@ -448,16 +597,16 @@ func (r *DashboardReconciler) getFilteredServices(ctx context.Context, dashboard
 }
 
 func (r *DashboardReconciler) getMultiClusterFilteredServices(ctx context.Context, dashboard *homerv1alpha1.Dashboard) ([]corev1.Service, map[string][]corev1.Service, error) {
-	if r.ClusterManager != nil && len(dashboard.Spec.RemoteClusters) > 0 {
-		clusterServices, err := r.ClusterManager.DiscoverServices(ctx, dashboard)
+	if manager := r.clusterManagerForDashboard(dashboard); manager != nil && len(dashboard.Spec.RemoteClusters) > 0 {
+		clusterServices, err := manager.DiscoverServices(ctx, dashboard)
 		if err != nil {
 			log := log.FromContext(ctx)
 			log.Error(err, "Failed to discover Services from clusters")
 		}
 
 		var allServices []corev1.Service
-		for _, services := range clusterServices {
-			allServices = append(allServices, services...)
+		for _, clusterName := range sortedClusterNames(clusterServices) {
+			allServices = append(allServices, clusterServices[clusterName]...)
 		}
 		return allServices, clusterServices, nil
 	}
@@ -466,22 +615,17 @@ func (r *DashboardReconciler) getMultiClusterFilteredServices(ctx context.Contex
 	return filtered, nil, err
 }
 
-func (r *DashboardReconciler) validateDashboardConfig(dashboard *homerv1alpha1.Dashboard) error {
-	if err := homer.ValidateTheme(dashboard.Spec.HomerConfig.Theme); err != nil {
+func (r *DashboardReconciler) validateDashboardConfig(config *homer.HomerConfig) error {
+	if err := homer.ValidateTheme(config.Theme); err != nil {
 		return err
 	}
-	return homer.ValidateHomerConfig(&dashboard.Spec.HomerConfig)
+	return homer.ValidateHomerConfig(config)
 }
 
-func (r *DashboardReconciler) prepareResources(ctx context.Context, dashboard *homerv1alpha1.Dashboard, filteredIngressList networkingv1.IngressList, filteredServices []corev1.Service) ([]client.Object, *homer.HomerConfig, map[string][]gatewayv1.HTTPRoute, error) {
-	deploymentConfig := r.buildDeploymentConfig(dashboard)
+func (r *DashboardReconciler) prepareResources(ctx context.Context, dashboard *homerv1alpha1.Dashboard, filteredIngressList networkingv1.IngressList, filteredServices []corev1.Service, homerConfig *homer.HomerConfig) ([]client.Object, *homer.HomerConfig, map[string][]gatewayv1.HTTPRoute, error) {
+	deploymentConfig := r.buildDeploymentConfig(dashboard, homerConfig)
 	deployment := homer.CreateDeployment(dashboard.Name, dashboard.Namespace, dashboard.Spec.Replicas, dashboard, deploymentConfig)
 	service := homer.CreateService(dashboard.Name, dashboard.Namespace, dashboard)
-
-	homerConfig, err := r.buildHomerConfig(ctx, dashboard)
-	if err != nil {
-		return nil, nil, nil, err
-	}
 
 	configMap, discoveredHTTPRoutes, err := r.createConfigMap(ctx, homerConfig, dashboard, filteredIngressList, filteredServices)
 	if err != nil {
@@ -498,15 +642,15 @@ func (r *DashboardReconciler) prepareResources(ctx context.Context, dashboard *h
 	return resources, homerConfig, discoveredHTTPRoutes, nil
 }
 
-func (r *DashboardReconciler) buildDeploymentConfig(dashboard *homerv1alpha1.Dashboard) *homer.DeploymentConfig {
-	pwaManifest := r.generatePWAManifest(dashboard)
+func (r *DashboardReconciler) buildDeploymentConfig(dashboard *homerv1alpha1.Dashboard, effectiveConfig *homer.HomerConfig) *homer.DeploymentConfig {
+	pwaManifest := r.generatePWAManifest(dashboard, effectiveConfig)
 	deploymentConfig := &homer.DeploymentConfig{
 		PWAManifest:     pwaManifest,
 		HomerImage:      r.HomerImage,
 		ConfigSyncImage: r.ConfigSyncImage,
 	}
 
-	if dashboard.Spec.Assets != nil && dashboard.Spec.Assets.ConfigMapRef != nil {
+	if dashboard.Spec.Assets != nil && dashboard.Spec.Assets.ConfigMapRef != nil && dashboard.Spec.Assets.ConfigMapRef.Name != "" {
 		ref := dashboard.Spec.Assets.ConfigMapRef
 		deploymentConfig.AssetsConfigMapName = ref.Name
 		if ref.Namespace != "" && ref.Namespace != dashboard.Namespace {
@@ -552,7 +696,18 @@ func (r *DashboardReconciler) buildDeploymentConfig(dashboard *homerv1alpha1.Das
 }
 
 func (r *DashboardReconciler) buildHomerConfig(ctx context.Context, dashboard *homerv1alpha1.Dashboard) (*homer.HomerConfig, error) {
+	if err := validateSmartCardSecretReferences(dashboard); err != nil {
+		return nil, err
+	}
+
 	homerConfig := dashboard.Spec.HomerConfig.DeepCopy()
+	if dashboard.Spec.ConfigMap.Name != "" {
+		externalHomerConfig, err := r.getExternalConfig(ctx, dashboard)
+		if err != nil {
+			return nil, err
+		}
+		homerConfig = externalHomerConfig
+	}
 
 	if dashboard.Spec.Secrets != nil {
 		// Handle APIKey secrets
@@ -648,21 +803,42 @@ func (r *DashboardReconciler) buildHomerConfig(ctx context.Context, dashboard *h
 		}
 	}
 
-	if dashboard.Spec.ConfigMap.Name != "" {
-		externalHomerConfig, err := r.getExternalConfig(ctx, dashboard)
-		if err != nil {
-			return nil, err
-		}
-		homerConfig = externalHomerConfig
+	return homerConfig, nil
+}
+
+// validateSmartCardSecretReferences prevents Dashboard authors from causing the
+// operator to copy another namespace's Secret into the generated Homer ConfigMap.
+// Kubeconfig SecretRefs are deliberately not validated here: RemoteCluster uses
+// its own KubeconfigSecretRef type and retains its documented cross-namespace
+// support.
+func validateSmartCardSecretReferences(dashboard *homerv1alpha1.Dashboard) error {
+	if dashboard.Spec.Secrets == nil {
+		return nil
 	}
 
-	return homerConfig, nil
+	refs := []*homerv1alpha1.SecretKeyRef{
+		dashboard.Spec.Secrets.APIKey,
+		dashboard.Spec.Secrets.Token,
+		dashboard.Spec.Secrets.Username,
+		dashboard.Spec.Secrets.Password,
+	}
+	for _, ref := range dashboard.Spec.Secrets.Headers {
+		refs = append(refs, ref)
+	}
+
+	for _, ref := range refs {
+		if ref != nil && ref.Namespace != "" && ref.Namespace != dashboard.Namespace {
+			return fmt.Errorf("smart-card Secret reference %q in namespace %q is not allowed for Dashboard %s/%s: smart-card Secrets must be in the Dashboard namespace %q", ref.Name, ref.Namespace, dashboard.Namespace, dashboard.Name, dashboard.Namespace)
+		}
+	}
+
+	return nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *DashboardReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	builder := ctrl.NewControllerManagedBy(mgr).
-		For(&homerv1alpha1.Dashboard{}).
+		For(&homerv1alpha1.Dashboard{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.Service{}).
@@ -705,115 +881,46 @@ func (r *DashboardReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 // findDashboardsForIngress finds all dashboards that should be reconciled when an ingress changes
 func (r *DashboardReconciler) findDashboardsForIngress(ctx context.Context, obj client.Object) []ctrl.Request {
-	ingress, ok := obj.(*networkingv1.Ingress)
-	if !ok {
+	if _, ok := obj.(*networkingv1.Ingress); !ok {
 		return nil
 	}
-
-	dashboards := &homerv1alpha1.DashboardList{}
-	if err := r.List(ctx, dashboards); err != nil {
-		return nil
-	}
-
-	var requests []ctrl.Request
-	for _, dashboard := range dashboards.Items {
-		if shouldInclude, err := r.shouldIncludeIngress(ctx, ingress, &dashboard); err == nil && shouldInclude {
-			requests = append(requests, ctrl.Request{
-				NamespacedName: client.ObjectKey{
-					Namespace: dashboard.Namespace,
-					Name:      dashboard.Name,
-				},
-			})
-		}
-	}
-
-	return requests
+	return r.allDashboardRequests(ctx)
 }
 
 // findDashboardsForService finds all dashboards that should be reconciled when a Service changes
 func (r *DashboardReconciler) findDashboardsForService(ctx context.Context, obj client.Object) []ctrl.Request {
-	svc, ok := obj.(*corev1.Service)
-	if !ok {
+	if _, ok := obj.(*corev1.Service); !ok {
 		return nil
 	}
-
-	dashboards := &homerv1alpha1.DashboardList{}
-	if err := r.List(ctx, dashboards); err != nil {
-		return nil
-	}
-
-	var requests []ctrl.Request
-	for _, dashboard := range dashboards.Items {
-		if shouldInclude, err := r.shouldIncludeService(ctx, svc, &dashboard); err == nil && shouldInclude {
-			requests = append(requests, ctrl.Request{
-				NamespacedName: client.ObjectKey{
-					Namespace: dashboard.Namespace,
-					Name:      dashboard.Name,
-				},
-			})
-		}
-	}
-
-	return requests
+	return r.allDashboardRequests(ctx)
 }
 
 // findDashboardsForHTTPRoute finds all dashboards that should be reconciled when an HTTPRoute changes
 func (r *DashboardReconciler) findDashboardsForHTTPRoute(ctx context.Context, obj client.Object) []ctrl.Request {
-	httpRoute, ok := obj.(*gatewayv1.HTTPRoute)
-	if !ok {
+	if _, ok := obj.(*gatewayv1.HTTPRoute); !ok {
 		return nil
 	}
-
-	dashboards := &homerv1alpha1.DashboardList{}
-	if err := r.List(ctx, dashboards); err != nil {
-		return nil
-	}
-
-	var requests []ctrl.Request
-	for _, dashboard := range dashboards.Items {
-		if shouldInclude, err := r.shouldIncludeHTTPRoute(ctx, httpRoute, &dashboard); err == nil && shouldInclude {
-			requests = append(requests, ctrl.Request{
-				NamespacedName: client.ObjectKey{
-					Namespace: dashboard.Namespace,
-					Name:      dashboard.Name,
-				},
-			})
-		}
-	}
-
-	return requests
+	return r.allDashboardRequests(ctx)
 }
 
 // findDashboardsForGateway finds all dashboards that should be reconciled when a Gateway changes
 func (r *DashboardReconciler) findDashboardsForGateway(ctx context.Context, obj client.Object) []ctrl.Request {
-	gateway, ok := obj.(*gatewayv1.Gateway)
-	if !ok {
+	if _, ok := obj.(*gatewayv1.Gateway); !ok {
 		return nil
 	}
+	return r.allDashboardRequests(ctx)
+}
 
+func (r *DashboardReconciler) allDashboardRequests(ctx context.Context) []ctrl.Request {
 	dashboards := &homerv1alpha1.DashboardList{}
 	if err := r.List(ctx, dashboards); err != nil {
 		return nil
 	}
 
-	var requests []ctrl.Request
+	requests := make([]ctrl.Request, 0, len(dashboards.Items))
 	for _, dashboard := range dashboards.Items {
-		if dashboard.Spec.GatewaySelector != nil {
-			selector, err := metav1.LabelSelectorAsSelector(dashboard.Spec.GatewaySelector)
-			if err != nil {
-				continue
-			}
-			if selector.Matches(labels.Set(gateway.Labels)) {
-				requests = append(requests, ctrl.Request{
-					NamespacedName: client.ObjectKey{
-						Namespace: dashboard.Namespace,
-						Name:      dashboard.Name,
-					},
-				})
-			}
-		}
+		requests = append(requests, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(&dashboard)})
 	}
-
 	return requests
 }
 
@@ -832,7 +939,16 @@ func (r *DashboardReconciler) findDashboardsForSecret(ctx context.Context, obj c
 	}
 
 	var requests []ctrl.Request
+	seen := make(map[client.ObjectKey]struct{})
 	for _, dashboard := range dashboards.Items {
+		requestKey := client.ObjectKeyFromObject(&dashboard)
+		enqueue := func() {
+			if _, exists := seen[requestKey]; exists {
+				return
+			}
+			seen[requestKey] = struct{}{}
+			requests = append(requests, ctrl.Request{NamespacedName: requestKey})
+		}
 		// Check if this dashboard uses this secret for remote clusters
 		for _, remoteCluster := range dashboard.Spec.RemoteClusters {
 			secretNamespace := remoteCluster.SecretRef.Namespace
@@ -842,17 +958,14 @@ func (r *DashboardReconciler) findDashboardsForSecret(ctx context.Context, obj c
 
 			// If the secret matches, trigger reconciliation
 			if secret.Name == remoteCluster.SecretRef.Name && secret.Namespace == secretNamespace {
-				requests = append(requests, ctrl.Request{
-					NamespacedName: client.ObjectKey{
-						Namespace: dashboard.Namespace,
-						Name:      dashboard.Name,
-					},
-				})
+				enqueue()
 				break // No need to check other clusters once we found a match
 			}
 		}
 
-		// Also check if this secret is used for smart card secrets (existing functionality)
+		// Smart-card secrets are always resolved in the Dashboard namespace. Remote
+		// kubeconfig secrets above intentionally retain their separate cross-namespace
+		// support.
 		if dashboard.Spec.Secrets != nil {
 			secretRefs := []*homerv1alpha1.SecretKeyRef{
 				dashboard.Spec.Secrets.APIKey,
@@ -863,17 +976,8 @@ func (r *DashboardReconciler) findDashboardsForSecret(ctx context.Context, obj c
 
 			for _, ref := range secretRefs {
 				if ref != nil {
-					secretNamespace := ref.Namespace
-					if secretNamespace == "" {
-						secretNamespace = dashboard.Namespace
-					}
-					if secret.Name == ref.Name && secret.Namespace == secretNamespace {
-						requests = append(requests, ctrl.Request{
-							NamespacedName: client.ObjectKey{
-								Namespace: dashboard.Namespace,
-								Name:      dashboard.Name,
-							},
-						})
+					if secret.Name == ref.Name && secret.Namespace == dashboard.Namespace {
+						enqueue()
 						break
 					}
 				}
@@ -883,17 +987,8 @@ func (r *DashboardReconciler) findDashboardsForSecret(ctx context.Context, obj c
 			if dashboard.Spec.Secrets.Headers != nil {
 				for _, ref := range dashboard.Spec.Secrets.Headers {
 					if ref != nil {
-						secretNamespace := ref.Namespace
-						if secretNamespace == "" {
-							secretNamespace = dashboard.Namespace
-						}
-						if secret.Name == ref.Name && secret.Namespace == secretNamespace {
-							requests = append(requests, ctrl.Request{
-								NamespacedName: client.ObjectKey{
-									Namespace: dashboard.Namespace,
-									Name:      dashboard.Name,
-								},
-							})
+						if secret.Name == ref.Name && secret.Namespace == dashboard.Namespace {
+							enqueue()
 							break
 						}
 					}
@@ -907,26 +1002,13 @@ func (r *DashboardReconciler) findDashboardsForSecret(ctx context.Context, obj c
 
 // findDashboardsForNamespace finds all dashboards that should be reconciled when a namespace's annotations change
 func (r *DashboardReconciler) findDashboardsForNamespace(ctx context.Context, obj client.Object) []ctrl.Request {
-	namespace, ok := obj.(*corev1.Namespace)
+	_, ok := obj.(*corev1.Namespace)
 	if !ok {
 		return nil
 	}
 
-	// Check if namespace has any homer annotations
-	hasHomerAnnotations := false
-	for key := range namespace.Annotations {
-		if strings.HasPrefix(key, serviceAnnotationPrefix) || strings.HasPrefix(key, itemAnnotationPrefix) {
-			hasHomerAnnotations = true
-			break
-		}
-	}
-
-	if !hasHomerAnnotations {
-		return nil
-	}
-
 	// Find all dashboards and trigger reconciliation
-	// The reconciliation will pick up resources from this namespace with the new annotations
+	// for additions, changes, and removals of inherited Homer annotations.
 	dashboards := &homerv1alpha1.DashboardList{}
 	if err := r.List(ctx, dashboards); err != nil {
 		return nil
@@ -1032,22 +1114,6 @@ func (r *DashboardReconciler) shouldIncludeIngress(ctx context.Context, ingress 
 	return true, nil
 }
 
-func (r *DashboardReconciler) shouldIncludeService(ctx context.Context, svc *corev1.Service, dashboard *homerv1alpha1.Dashboard) (bool, error) {
-	log := log.FromContext(ctx)
-
-	if dashboard.Spec.ServiceSelector == nil {
-		return false, nil
-	}
-
-	if match, err := validateLabelSelector(dashboard.Spec.ServiceSelector, svc.Labels, svc.Name, "service", log); err != nil {
-		return false, err
-	} else if !match {
-		return false, nil
-	}
-
-	return true, nil
-}
-
 func (r *DashboardReconciler) shouldIncludeHTTPRoute(ctx context.Context, httproute *gatewayv1.HTTPRoute, dashboard *homerv1alpha1.Dashboard) (bool, error) {
 	log := log.FromContext(ctx)
 
@@ -1116,6 +1182,10 @@ func (r *DashboardReconciler) createOrUpdateResources(ctx context.Context, resou
 			log.Error(err, "unable to fetch resource", "type", resource.GetObjectKind().GroupVersionKind().Kind, "name", resource.GetName())
 			return err
 		default:
+			resource.SetResourceVersion(newResource.GetResourceVersion())
+			if desiredService, ok := resource.(*corev1.Service); ok {
+				preserveServiceFields(desiredService, newResource.(*corev1.Service))
+			}
 			if configMap, ok := resource.(*corev1.ConfigMap); ok {
 				err = utils.UpdateConfigMapWithRetry(ctx, r.Client, configMap, dashboardName)
 			} else {
@@ -1129,6 +1199,57 @@ func (r *DashboardReconciler) createOrUpdateResources(ctx context.Context, resou
 		}
 	}
 	return nil
+}
+
+// preserveServiceFields keeps fields allocated or owned by the API server (or
+// by another service controller) when applying the fields generated by Homer.
+// In particular, sending an empty ClusterIP or NodePort during an update can
+// make an otherwise valid Service update fail validation.
+func preserveServiceFields(desired, existing *corev1.Service) {
+	desiredSelector := desired.Spec.Selector
+	desiredPorts := append([]corev1.ServicePort(nil), desired.Spec.Ports...)
+
+	// Homer owns only the selector and ports. Preserve the complete remainder
+	// of the existing spec, including Type, ClusterIP(s), IP family fields,
+	// and any fields managed by Kubernetes or another controller.
+	desired.Spec = existing.Spec
+	desired.Spec.Selector = desiredSelector
+	desired.Spec.Ports = desiredPorts
+
+	for i := range desired.Spec.Ports {
+		desiredPort := &desired.Spec.Ports[i]
+		if desiredPort.NodePort != 0 {
+			continue
+		}
+
+		for _, existingPort := range existing.Spec.Ports {
+			if servicePortsMatch(*desiredPort, existingPort) {
+				desiredPort.NodePort = existingPort.NodePort
+				break
+			}
+		}
+	}
+}
+
+func servicePortsMatch(desired, existing corev1.ServicePort) bool {
+	if desired.Name != "" && desired.Name != existing.Name {
+		return false
+	}
+
+	desiredProtocol := desired.Protocol
+	if desiredProtocol == "" {
+		desiredProtocol = corev1.ProtocolTCP
+	}
+	existingProtocol := existing.Protocol
+	if existingProtocol == "" {
+		existingProtocol = corev1.ProtocolTCP
+	}
+
+	return desired.Port == existing.Port &&
+		desired.TargetPort == existing.TargetPort &&
+		desiredProtocol == existingProtocol &&
+		reflect.DeepEqual(desired.AppProtocol, existing.AppProtocol) &&
+		(desired.NodePort == 0 || desired.NodePort == existing.NodePort)
 }
 
 func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *homer.HomerConfig, dashboard *homerv1alpha1.Dashboard, filteredIngressList networkingv1.IngressList, filteredServices []corev1.Service) (corev1.ConfigMap, map[string][]gatewayv1.HTTPRoute, error) {
@@ -1155,9 +1276,9 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 		filteredHTTPRoutes := []gatewayv1.HTTPRoute{}
 		var discoveredHTTPRoutes map[string][]gatewayv1.HTTPRoute
 
-		// Use ClusterManager for multi-cluster discovery if available
-		if r.ClusterManager != nil && len(dashboard.Spec.RemoteClusters) > 0 {
-			clusterHTTPRoutes, err := r.ClusterManager.DiscoverHTTPRoutes(ctx, dashboard)
+		// Use the Dashboard-scoped ClusterManager for multi-cluster discovery.
+		if manager := r.clusterManagerForDashboard(dashboard); manager != nil && len(dashboard.Spec.RemoteClusters) > 0 {
+			clusterHTTPRoutes, err := manager.DiscoverHTTPRoutes(ctx, dashboard)
 			discoveredHTTPRoutes = clusterHTTPRoutes
 			if err != nil {
 				log := log.FromContext(ctx)
@@ -1166,7 +1287,8 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 			}
 
 			// Aggregate all discovered HTTPRoutes (already filtered by ClusterManager)
-			for clusterName, httproutes := range clusterHTTPRoutes {
+			for _, clusterName := range sortedClusterNames(clusterHTTPRoutes) {
+				httproutes := clusterHTTPRoutes[clusterName]
 				log := log.FromContext(ctx)
 				log.V(1).Info("Discovered HTTPRoutes from cluster", "cluster", clusterName, "count", len(httproutes))
 
@@ -1200,9 +1322,22 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 			mergedHTTPRoutes[i] = *httprouteCopy
 		}
 
-		// Pass domain filters for single-cluster mode (local cluster uses dashboard-level filters)
-		// Multi-cluster HTTPRoutes already have domain filters stored in annotations
-		configMap, err := homer.CreateConfigMapWithHTTPRoutes(homerConfig, dashboard.Name, dashboard.Namespace, mergedIngressList, mergedHTTPRoutes, mergedServices, dashboard, dashboard.Spec.DomainFilters)
+		// In multi-cluster mode each discovered route carries its cluster's
+		// filters in an annotation. Passing dashboard filters globally would
+		// incorrectly apply local-cluster filters to remote routes without an
+		// explicit per-cluster filter.
+		domainFilters := dashboard.Spec.DomainFilters
+		discoveryConfig := discoveryConfigForDashboard(dashboard)
+		discoveryConfig.IngressDomainFilters = authorizedIngressDomainFilters(dashboard, mergedIngressList.Items)
+		if len(dashboard.Spec.RemoteClusters) > 0 {
+			domainFilters = nil
+			discoveryConfig.HTTPRouteDomainFilters = authorizedHTTPRouteDomainFilters(dashboard, discoveredHTTPRoutes)
+		}
+		configMap, err := homer.CreateConfigMapWithHTTPRoutesAndDiscoveryConfig(
+			homerConfig, dashboard.Name, dashboard.Namespace, mergedIngressList,
+			mergedHTTPRoutes, mergedServices, dashboard, domainFilters,
+			discoveryConfig,
+		)
 		if err != nil {
 			return corev1.ConfigMap{}, nil, err
 		}
@@ -1212,7 +1347,12 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 		return configMap, discoveredHTTPRoutes, nil
 	}
 
-	configMap, err := homer.CreateConfigMap(homerConfig, dashboard.Name, dashboard.Namespace, mergedIngressList, mergedServices, dashboard)
+	discoveryConfig := discoveryConfigForDashboard(dashboard)
+	discoveryConfig.IngressDomainFilters = authorizedIngressDomainFilters(dashboard, mergedIngressList.Items)
+	configMap, err := homer.CreateConfigMapWithDiscoveryConfig(
+		homerConfig, dashboard.Name, dashboard.Namespace, mergedIngressList,
+		mergedServices, dashboard, discoveryConfig,
+	)
 	if err != nil {
 		return corev1.ConfigMap{}, nil, err
 	}
@@ -1222,8 +1362,82 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 	return configMap, nil, nil
 }
 
+func discoveryConfigForDashboard(dashboard *homerv1alpha1.Dashboard) *homer.DiscoveryConfig {
+	config := &homer.DiscoveryConfig{ValidationLevel: homer.ValidationLevel(dashboard.Spec.ValidationLevel)}
+	if grouping := dashboard.Spec.ServiceGrouping; grouping != nil {
+		config.ServiceGrouping = &homer.ServiceGroupingConfig{
+			Strategy:    homer.ServiceGroupingStrategy(grouping.Strategy),
+			LabelKey:    grouping.LabelKey,
+			CustomRules: make([]homer.GroupingRule, len(grouping.CustomRules)),
+		}
+		for i, rule := range grouping.CustomRules {
+			config.ServiceGrouping.CustomRules[i] = homer.GroupingRule{
+				Name: rule.Name, Condition: maps.Clone(rule.Condition), Priority: rule.Priority,
+			}
+		}
+	}
+	if health := dashboard.Spec.HealthCheck; health != nil {
+		config.HealthCheck = &homer.ServiceHealthConfig{
+			Enabled: health.Enabled, Interval: health.Interval, Timeout: health.Timeout,
+			HealthPath: health.HealthPath, ExpectedCode: health.ExpectedCode,
+			Headers: maps.Clone(health.Headers),
+		}
+	}
+	return config
+}
+
+func authorizedHTTPRouteDomainFilters(
+	dashboard *homerv1alpha1.Dashboard,
+	discovered map[string][]gatewayv1.HTTPRoute,
+) map[string][]string {
+	authorized := make(map[string][]string)
+	for clusterName, routes := range discovered {
+		for i := range routes {
+			resourceCluster := routes[i].Annotations["homer.rajsingh.info/cluster"]
+			if resourceCluster == "" {
+				resourceCluster = clusterName
+			}
+			filters, configuredCluster := domainFiltersForCluster(dashboard, resourceCluster)
+			if !configuredCluster {
+				continue
+			}
+			authorized[homer.HTTPRouteDomainFilterKey(&routes[i])] = append([]string(nil), filters...)
+		}
+	}
+	return authorized
+}
+
+func authorizedIngressDomainFilters(
+	dashboard *homerv1alpha1.Dashboard,
+	ingresses []networkingv1.Ingress,
+) map[string][]string {
+	authorized := make(map[string][]string, len(ingresses))
+	for i := range ingresses {
+		resourceCluster := ingresses[i].Annotations["homer.rajsingh.info/cluster"]
+		filters, configuredCluster := domainFiltersForCluster(dashboard, resourceCluster)
+		if !configuredCluster {
+			continue
+		}
+		authorized[homer.IngressDomainFilterKey(&ingresses[i])] = append([]string(nil), filters...)
+	}
+	return authorized
+}
+
+func domainFiltersForCluster(dashboard *homerv1alpha1.Dashboard, clusterName string) ([]string, bool) {
+	if clusterName == "" || clusterName == homer.LocalCluster {
+		return dashboard.Spec.DomainFilters, true
+	}
+	for i := range dashboard.Spec.RemoteClusters {
+		cluster := &dashboard.Spec.RemoteClusters[i]
+		if cluster.Name == clusterName && cluster.Enabled {
+			return cluster.DomainFilters, true
+		}
+	}
+	return nil, false
+}
+
 func iconAliases(dashboard *homerv1alpha1.Dashboard) map[string][]string {
-	if dashboard.Spec.Assets == nil || dashboard.Spec.Assets.Icons == nil || dashboard.Spec.Assets.ConfigMapRef == nil {
+	if dashboard.Spec.Assets == nil || dashboard.Spec.Assets.Icons == nil || dashboard.Spec.Assets.ConfigMapRef == nil || dashboard.Spec.Assets.ConfigMapRef.Name == "" {
 		return nil
 	}
 	icons := dashboard.Spec.Assets.Icons
@@ -1332,7 +1546,7 @@ func cloneBinaryData(data map[string][]byte) map[string][]byte {
 }
 
 // generatePWAManifest generates PWA manifest if enabled, returns empty string if disabled
-func (r *DashboardReconciler) generatePWAManifest(dashboard *homerv1alpha1.Dashboard) string {
+func (r *DashboardReconciler) generatePWAManifest(dashboard *homerv1alpha1.Dashboard, effectiveConfig *homer.HomerConfig) string {
 	if dashboard.Spec.Assets == nil || dashboard.Spec.Assets.PWA == nil || !dashboard.Spec.Assets.PWA.Enabled {
 		return ""
 	}
@@ -1342,7 +1556,9 @@ func (r *DashboardReconciler) generatePWAManifest(dashboard *homerv1alpha1.Dashb
 	// Set defaults if not provided
 	name := pwa.Name
 	if name == "" {
-		name = dashboard.Spec.HomerConfig.Title
+		if effectiveConfig != nil {
+			name = effectiveConfig.Title
+		}
 	}
 	if name == "" {
 		name = dashboard.Name
@@ -1355,7 +1571,9 @@ func (r *DashboardReconciler) generatePWAManifest(dashboard *homerv1alpha1.Dashb
 
 	description := pwa.Description
 	if description == "" {
-		description = dashboard.Spec.HomerConfig.Subtitle
+		if effectiveConfig != nil {
+			description = effectiveConfig.Subtitle
+		}
 	}
 	if description == "" {
 		description = "Personal Dashboard"
@@ -1378,7 +1596,7 @@ func (r *DashboardReconciler) generatePWAManifest(dashboard *homerv1alpha1.Dashb
 
 	startURL := pwa.StartURL
 	if startURL == "" {
-		startURL = "/"
+		startURL = "../"
 	}
 
 	// Build icons map
@@ -1397,8 +1615,12 @@ func (r *DashboardReconciler) generatePWAManifest(dashboard *homerv1alpha1.Dashb
 }
 
 func stagedIconPath(dashboard *homerv1alpha1.Dashboard, source, destination string) string {
-	if dashboard.Spec.Assets == nil || dashboard.Spec.Assets.ConfigMapRef == nil || !isStageableAssetPath(source) {
+	if !isStageableAssetPath(source) {
 		return source
+	}
+	if dashboard.Spec.Assets == nil || dashboard.Spec.Assets.ConfigMapRef == nil || dashboard.Spec.Assets.ConfigMapRef.Name == "" {
+		slog.Warn("skipping relative PWA icon without an assets ConfigMap", "source", source)
+		return ""
 	}
 	return destination
 }
@@ -1490,7 +1712,7 @@ func (r *DashboardReconciler) cleanupResources(ctx context.Context, dashboard *h
 				continue
 			}
 			log.Error(err, "failed to get resource for cleanup", "type", resource.name, "name", resourceName)
-			continue // Continue cleaning up other resources
+			return fmt.Errorf("failed to get %s %s for cleanup: %w", resource.name, resourceName, err)
 		}
 
 		// Check if this resource is owned by our Dashboard
@@ -1513,10 +1735,11 @@ func (r *DashboardReconciler) cleanupResources(ctx context.Context, dashboard *h
 		(dashboard.Spec.Assets.ConfigMapRef.Namespace == "" || dashboard.Spec.Assets.ConfigMapRef.Namespace == dashboard.Namespace) {
 		assetsConfigMapName := dashboard.Spec.Assets.ConfigMapRef.Name
 		assetsConfigMap := &corev1.ConfigMap{}
-		if err := r.Get(ctx, client.ObjectKey{
+		err := r.Get(ctx, client.ObjectKey{
 			Name:      assetsConfigMapName,
 			Namespace: namespace,
-		}, assetsConfigMap); err == nil {
+		}, assetsConfigMap)
+		if err == nil {
 			if isOwnedByDashboard(assetsConfigMap, dashboard) {
 				if err := r.Delete(ctx, assetsConfigMap); err != nil && !apierrors.IsNotFound(err) {
 					log.Error(err, "failed to delete assets ConfigMap", "name", assetsConfigMapName)
@@ -1525,6 +1748,9 @@ func (r *DashboardReconciler) cleanupResources(ctx context.Context, dashboard *h
 					log.Info("Successfully deleted assets ConfigMap", "name", assetsConfigMapName)
 				}
 			}
+		} else if !apierrors.IsNotFound(err) {
+			log.Error(err, "failed to get assets ConfigMap for cleanup", "name", assetsConfigMapName)
+			return fmt.Errorf("failed to get assets ConfigMap %s for cleanup: %w", assetsConfigMapName, err)
 		}
 	}
 
@@ -1595,6 +1821,7 @@ func validateHTTPRouteDomainFilters(httproute *gatewayv1.HTTPRoute, domainFilter
 // updateDashboardStatusComplete updates both deployment and service discovery status in one call
 func (r *DashboardReconciler) updateStatus(ctx context.Context, dashboard *homerv1alpha1.Dashboard, discovered *discoveredClusterResources) error {
 	log := log.FromContext(ctx)
+	previousStatus := dashboard.Status.DeepCopy()
 
 	// Check if Dashboard is being deleted
 	if !dashboard.DeletionTimestamp.IsZero() {
@@ -1611,6 +1838,8 @@ func (r *DashboardReconciler) updateStatus(ctx context.Context, dashboard *homer
 
 	// Simplified status logic: Ready = deployment exists and Available condition is true
 	ready := false
+	readyReason := "DeploymentNotReady"
+	readyMessage := "Homer Deployment is not available"
 	availableReplicas := int32(0)
 	readyReplicas := int32(0)
 	replicas := int32(1) // Default value
@@ -1634,6 +1863,8 @@ func (r *DashboardReconciler) updateStatus(ctx context.Context, dashboard *homer
 		for _, condition := range deployment.Status.Conditions {
 			if condition.Type == appsv1.DeploymentAvailable && condition.Status == corev1.ConditionTrue {
 				ready = true
+				readyReason = "DeploymentAvailable"
+				readyMessage = "Homer Deployment is available"
 				break
 			}
 		}
@@ -1650,30 +1881,49 @@ func (r *DashboardReconciler) updateStatus(ctx context.Context, dashboard *homer
 	} else {
 		// Error getting deployment - not ready
 		log.V(1).Info("Error getting deployment for status check", "error", err)
+		readyReason = "DeploymentStatusUnknown"
+		readyMessage = truncateConditionMessage(fmt.Errorf("unable to read Homer Deployment: %w", err))
 	}
 
-	// Update status using patch to avoid conflicts
-	patch := client.MergeFrom(dashboard.DeepCopy())
+	// Status.Ready is required by the CRD, so use a status update rather than a
+	// merge patch. A merge patch omits an unchanged false boolean and the API
+	// server then rejects the status object as missing its required field.
 	dashboard.Status.Ready = ready
 	dashboard.Status.Replicas = replicas
 	dashboard.Status.ReadyReplicas = readyReplicas
 	dashboard.Status.AvailableReplicas = availableReplicas
 	dashboard.Status.ObservedGeneration = dashboard.Generation
+	conditionStatus := metav1.ConditionFalse
+	if ready {
+		conditionStatus = metav1.ConditionTrue
+	}
+	apiMeta.SetStatusCondition(&dashboard.Status.Conditions, metav1.Condition{
+		Type:               "Ready",
+		Status:             conditionStatus,
+		ObservedGeneration: dashboard.Generation,
+		LastTransitionTime: metav1.Now(),
+		Reason:             readyReason,
+		Message:            readyMessage,
+	})
 
-	// Update cluster connection statuses if ClusterManager is available
-	if r.ClusterManager != nil {
-		clusterStatuses := r.ClusterManager.GetClusterStatuses()
+	// Update cluster connection statuses from this Dashboard's manager only.
+	if manager := r.clusterManagerForDashboard(dashboard); manager != nil {
+		clusterStatuses := manager.GetClusterStatuses()
 
 		// Use the resources discovered during reconciliation. Re-discovering here
 		// causes duplicate remote API calls and can overwrite a successful pass.
 		if discovered != nil && len(dashboard.Spec.RemoteClusters) > 0 {
-			clusterStatuses = r.ClusterManager.UpdateClusterStatuses(clusterStatuses, discovered.ingresses, discovered.httpRoutes, discovered.services)
+			clusterStatuses = manager.UpdateClusterStatuses(clusterStatuses, discovered.ingresses, discovered.httpRoutes, discovered.services)
 		}
 
 		dashboard.Status.ClusterStatuses = clusterStatuses
 	}
 
-	if err := r.Status().Patch(ctx, dashboard, patch); err != nil {
+	if equality.Semantic.DeepEqual(*previousStatus, dashboard.Status) {
+		return nil
+	}
+
+	if err := r.Status().Update(ctx, dashboard); err != nil {
 		if apierrors.IsNotFound(err) {
 			log.V(2).Info("Dashboard was deleted during status update")
 			return nil // Don't return error if Dashboard was deleted

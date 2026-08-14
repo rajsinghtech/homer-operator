@@ -1,4 +1,8 @@
 {{- if .Values.highAvailability.podDisruptionBudget.enabled }}
+{{- $pdb := .Values.highAvailability.podDisruptionBudget }}
+{{- if and (eq $pdb.minAvailable nil) (eq $pdb.maxUnavailable nil) }}
+{{- fail "highAvailability.podDisruptionBudget requires minAvailable or maxUnavailable" }}
+{{- end }}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -8,11 +12,10 @@ metadata:
   labels:
     {{- include "homer-operator.labels" . | nindent 4 }}
 spec:
-  {{- if .Values.highAvailability.podDisruptionBudget.minAvailable }}
-  minAvailable: {{ .Values.highAvailability.podDisruptionBudget.minAvailable }}
-  {{- end }}
-  {{- if .Values.highAvailability.podDisruptionBudget.maxUnavailable }}
-  maxUnavailable: {{ .Values.highAvailability.podDisruptionBudget.maxUnavailable }}
+  {{- if ne $pdb.maxUnavailable nil }}
+  maxUnavailable: {{ $pdb.maxUnavailable }}
+  {{- else }}
+  minAvailable: {{ $pdb.minAvailable }}
   {{- end }}
   selector:
     matchLabels:

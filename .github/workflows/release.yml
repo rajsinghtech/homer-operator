@@ -11,12 +11,158 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  GO_VERSION: '1.26.3'
+  GO_VERSION: '1.26.5'
 
 jobs:
+  verify-release:
+    name: Verify versioned release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.21.3
+
+      - name: Install verification tools
+        run: |
+          set -euo pipefail
+          KUBECONFORM_VERSION=0.6.7
+          ACTIONLINT_VERSION=1.7.7
+          curl -fsSL "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP" kubeconform
+          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_x86_64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP" actionlint
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Verify generation, code, and installers
+        run: |
+          set -euo pipefail
+          make manifests
+          git diff --exit-code
+          make generate
+          git diff --exit-code
+          make lint
+          go vet ./...
+          mapfile -t go_packages < <(go list ./... | grep -v '/e2e$')
+          go test "${go_packages[@]}"
+          go build ./...
+          make build-installer IMG=ghcr.io/rajsinghtech/homer-operator:main
+          git diff --exit-code
+          ./scripts/check-manifest-generation.sh ./bin/kustomize
+          ./scripts/check-installer-sync.sh ./bin/kustomize
+
+      - name: Verify Helm, workflows, and packaging surfaces
+        run: |
+          set -euo pipefail
+          helm lint charts/homer-operator -f charts/homer-operator/ci/values.yaml
+          ./scripts/chart_packaging_test.sh
+          ./scripts/metrics_surface_test.sh
+          ./scripts/release_surface_test.sh
+          ./scripts/sync-crd-to-helm_test.sh
+          shellcheck scripts/*.sh
+          actionlint
+          git diff --check
+
+  verify-release-e2e:
+    name: Verify versioned release on isolated kind
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: verify-release
+    if: startsWith(github.ref, 'refs/tags/')
+    env:
+      NAMESPACE: homer-operator-system
+      DASHBOARD_NAMESPACE: public
+      E2E_OPERATOR_NAMESPACE: homer-operator-system
+      E2E_OPERATOR_DEPLOYMENT: homer-operator
+      IMG: homer-operator:release-e2e
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.21.3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build operator image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ${{ env.IMG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Create isolated kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: homer-operator-release
+
+      - name: Load image into kind
+        run: kind load docker-image "${IMG}" --name homer-operator-release
+
+      - name: Install chart
+        run: |
+          helm install homer-operator charts/homer-operator \
+            --namespace "${NAMESPACE}" \
+            --create-namespace \
+            --set image.repository=homer-operator \
+            --set image.tag=release-e2e \
+            --set image.pullPolicy=Never \
+            --wait --timeout 120s
+
+      - name: Wait for operator rollout
+        run: kubectl rollout status deployment/homer-operator -n "${NAMESPACE}" --timeout=120s
+
+      - name: Deploy sample Dashboard
+        run: |
+          kubectl create namespace "${DASHBOARD_NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
+          kubectl apply -f config/samples/homer_v1alpha1_dashboard.yaml
+
+      - name: Wait for Dashboard rollout
+        run: kubectl wait --for=condition=Available deployment/dashboard-sample-homer -n "${DASHBOARD_NAMESPACE}" --timeout=180s
+
+      - name: Verify sample page configuration
+        run: kubectl get configmap dashboard-sample-homer -n "${DASHBOARD_NAMESPACE}" -o jsonpath='{.data.status\.yml}' | grep -F 'A second Homer page'
+
+      - name: Run black-box E2E suite
+        run: go test ./test/e2e -v -ginkgo.v
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl describe pods -n "${NAMESPACE}" || true
+          kubectl describe pods -n "${DASHBOARD_NAMESPACE}" || true
+          kubectl logs -n "${NAMESPACE}" -l app.kubernetes.io/name=homer-operator --all-containers --tail=-1 || true
+          kubectl logs -n "${DASHBOARD_NAMESPACE}" -l dashboard.homer.rajsingh.info/name=dashboard-sample --all-containers --tail=-1 || true
+
   build-image:
     name: Build and Push Image
     runs-on: ubuntu-latest
+    needs: [verify-release, verify-release-e2e]
+    if: ${{ always() && (!startsWith(github.ref, 'refs/tags/') || (needs.verify-release.result == 'success' && needs.verify-release-e2e.result == 'success')) }}
     permissions:
       contents: write
       packages: write
@@ -32,14 +178,18 @@ jobs:
       - name: Extract version
         id: version
         run: |
+          if [[ "$GITHUB_REF" == refs/tags/* && ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tags must match vMAJOR.MINOR.PATCH; got $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
           if [[ $GITHUB_REF == refs/tags/* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/v}
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
-            echo "is_release=true" >> $GITHUB_OUTPUT
+            VERSION="${GITHUB_REF#refs/tags/v}"
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
             echo "Version: $VERSION"
           else
-            echo "version=0.0.0-latest" >> $GITHUB_OUTPUT
-            echo "is_release=false" >> $GITHUB_OUTPUT
+            echo "version=0.0.0-latest" >> "$GITHUB_OUTPUT"
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
             echo "Version: 0.0.0-latest (development)"
           fi
 
@@ -99,12 +249,13 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
           TAGS: ${{ steps.meta.outputs.tags }}
         run: |
-          echo "$TAGS" | while IFS= read -r tag; do
+          set -euo pipefail
+          while IFS= read -r tag; do
             if [[ -n "$tag" ]]; then
               echo "Signing: $tag@${DIGEST}"
-              cosign sign --yes "$tag@${DIGEST}" || echo "::warning::Failed to sign $tag"
+              cosign sign --yes "$tag@${DIGEST}"
             fi
-          done
+          done <<< "$TAGS"
 
       - name: Generate SBOM
         uses: anchore/sbom-action@v0.24.0
@@ -122,7 +273,10 @@ jobs:
   release-helm:
     name: Release Helm Chart
     runs-on: ubuntu-latest
-    needs: build-image
+    needs: [build-image, verify-release]
+    # Development chart publication is handled by helm-release.yml. This job
+    # must only publish the chart that belongs to a versioned release tag.
+    if: ${{ startsWith(github.ref, 'refs/tags/') && needs.verify-release.result == 'success' }}
     permissions:
       contents: read
       packages: write
@@ -147,26 +301,36 @@ jobs:
           DIGEST: ${{ needs.build-image.outputs.digest }}
           VERSION: ${{ needs.build-image.outputs.version }}
         run: |
+          set -euo pipefail
+
+          if [[ -z "$DIGEST" || ! "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            echo "Invalid or missing image digest: $DIGEST" >&2
+            exit 1
+          fi
+
           # Update Chart.yaml versions
           sed -i "s/version: .*/version: $VERSION/" charts/homer-operator/Chart.yaml
           sed -i "s/appVersion: .*/appVersion: \"$VERSION\"/" charts/homer-operator/Chart.yaml
 
           # Update values.yaml to use the specific digest
           REPO_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          IMAGE_WITH_DIGEST="${{ env.REGISTRY }}/${REPO_NAME}@${DIGEST}"
 
-          # Update the image repository and tag in values.yaml (only main image, not rbac-proxy)
+          # Update the main image repository and immutable digest. The digest
+          # takes precedence over tag in the chart helper.
           sed -i "s|^  repository: .*|  repository: ${{ env.REGISTRY }}/${REPO_NAME}|" charts/homer-operator/values.yaml
-          sed -i "s|^  tag: .*|  tag: \"$VERSION\"|" charts/homer-operator/values.yaml
+          sed -i "s|^  digest: .*|  digest: \"$DIGEST\"|" charts/homer-operator/values.yaml
 
           echo "Updated Chart.yaml and values.yaml"
           echo "Version: $VERSION"
-          echo "Image: $IMAGE_WITH_DIGEST"
+          echo "Image: ${{ env.REGISTRY }}/${REPO_NAME}@${DIGEST}"
 
       - name: Validate updated chart
         run: |
+          REPO_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          EXPECTED_IMAGE="${{ env.REGISTRY }}/${REPO_NAME}@${{ needs.build-image.outputs.digest }}"
           helm lint charts/homer-operator
-          helm template test charts/homer-operator --dry-run > /dev/null
+          helm template test charts/homer-operator --dry-run --set crd.create=true > rendered-chart.yaml
+          grep -F "image: $EXPECTED_IMAGE" rendered-chart.yaml
           echo "✅ Updated chart validation passed"
 
       - name: Package and Push Helm Chart
@@ -211,7 +375,7 @@ jobs:
 
             ### Docker Image
             ```bash
-            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build-image.outputs.version }}
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build-image.outputs.digest }}
             ```
 
             **Digest:** `${{ needs.build-image.outputs.digest }}`
@@ -224,5 +388,28 @@ jobs:
               --create-namespace
             ```
 
-            ### Release Notes
+            ### Highlights
+
+            - Align the Dashboard API and generated CRD with upstream Homer ([#104](https://github.com/rajsinghtech/homer-operator/pull/104)): direct service and item fields; pages; links and quick links; themes, colors, defaults, headers, footer, refresh values, message mappings, smart-card fields, and open-ended Homer configuration values.
+            - Preserve unknown fields and explicit empty, null, false, and zero values across CRD and YAML/JSON round trips, including handwritten deep-copy support for open-ended configuration and nil array entries.
+            - Add external and binary asset support, nested asset staging, icon aliases, PWA icon paths and `manifest.json`, cross-namespace asset references and mirrors, replacement/stale-mirror cleanup, and referenced ConfigMap watches ([#104](https://github.com/rajsinghtech/homer-operator/pull/104), [#105](https://github.com/rajsinghtech/homer-operator/pull/105)).
+            - Add configurable config-sync image settings and deployment handling, improve deployment diff detection, and preserve dashboard-owned configuration during updates.
+            - Add living sample documentation and a black-box Kubernetes E2E suite covering operator health, Dashboard creation, updates, ConfigMap watches, cleanup, pages/assets, and Ingress discovery ([#105](https://github.com/rajsinghtech/homer-operator/pull/105)).
+
+            ### Fixes and hardening
+
+            - Persist Dashboard status through the CRD status subresource, propagate update errors, and retry transient remote-cluster failures and kubeconfig Secret rotation.
+            - Preserve Kubernetes resource versions and server-assigned Service fields, including ClusterIP/IP families, NodePorts, and existing Service fields during reconciliation.
+            - Apply per-cluster selectors and domain filters correctly, keep local and remote filtering distinct, enrich discovered resources with cluster metadata, and make multi-cluster aggregation deterministic.
+            - Keep same-named resources from different clusters, namespaces, or resource kinds independent; qualify Ingress and HTTPRoute source keys, clean up the correct source, and allow a CRD item to enhance only its intended discovered resource.
+            - Watch configuration and asset references, deduplicate reconciliation requests, and keep generated assets and PWA paths synchronized after updates or removals.
+            - Remove obsolete kube-rbac-proxy resources, secure metrics with the required RBAC, gate metrics resources consistently, and publish release charts with immutable image digests.
+            - Generate a status-enabled CRD, prevent duplicate CRDs in installer manifests, and verify Kustomize, Helm, generated manifests, metrics, and CRD synchronization in CI.
+            - Correct Helm uninstall and installation documentation, validate release tags as `vMAJOR.MINOR.PATCH`, and remove obsolete tag-handling paths from the development chart workflow.
+
+            ### Resolved issues and project status
+
+            - Resolves [#14](https://github.com/rajsinghtech/homer-operator/issues/14) (Homer Pages), [#43](https://github.com/rajsinghtech/homer-operator/issues/43) (black-box E2E coverage and living documentation), and [#95](https://github.com/rajsinghtech/homer-operator/issues/95) (configurable config-sync image).
+            - [#10](https://github.com/rajsinghtech/homer-operator/issues/10) remains intentionally open: it is Renovate's Dependency Dashboard, not an unresolved product defect.
+
             GitHub-generated release notes are appended below this release description.

@@ -56,6 +56,8 @@ spec:
         {{- if .Values.operator.metrics.secureMetrics }}
         - --metrics-secure
         {{- end }}
+        {{- else }}
+        - --metrics-bind-address=0
         {{- end }}
         - --health-probe-bind-address={{ .Values.operator.healthProbe.bindAddress }}
         {{- if .Values.operator.enableGatewayAPI }}
@@ -87,8 +89,20 @@ spec:
         readinessProbe:
           {{- toYaml .Values.readinessProbe | nindent 10 }}
         {{- if .Values.startupProbe.enabled }}
+        {{- $startupProbe := omit .Values.startupProbe "enabled" "httpGet" "exec" "tcpSocket" "grpc" }}
+        {{- if .Values.startupProbe.exec }}
+        {{- $_ := set $startupProbe "exec" .Values.startupProbe.exec }}
+        {{- else if .Values.startupProbe.grpc }}
+        {{- $_ := set $startupProbe "grpc" .Values.startupProbe.grpc }}
+        {{- else if .Values.startupProbe.tcpSocket }}
+        {{- $_ := set $startupProbe "tcpSocket" .Values.startupProbe.tcpSocket }}
+        {{- else if .Values.startupProbe.httpGet }}
+        {{- $_ := set $startupProbe "httpGet" .Values.startupProbe.httpGet }}
+        {{- else }}
+        {{- fail "startupProbe requires one of httpGet, exec, grpc, or tcpSocket" }}
+        {{- end }}
         startupProbe:
-          {{- toYaml .Values.startupProbe | nindent 10 }}
+          {{- toYaml $startupProbe | nindent 10 }}
         {{- end }}
         resources:
           {{- toYaml .Values.resources | nindent 10 }}

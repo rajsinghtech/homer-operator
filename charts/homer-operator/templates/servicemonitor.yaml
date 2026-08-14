@@ -1,4 +1,28 @@
-{{- if and .Values.serviceMonitor.enabled .Values.operator.metrics.enabled }}
+{{- $secureMetricsScrape := and .Values.serviceMonitor.enabled .Values.operator.metrics.enabled .Values.services.metrics.enabled .Values.operator.metrics.secureMetrics }}
+{{- if $secureMetricsScrape }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "homer-operator.metricsScraperServiceAccountName" . }}
+  namespace: {{ include "homer-operator.namespace" . }}
+  labels:
+    {{- include "homer-operator.labels" . | nindent 4 }}
+automountServiceAccountToken: true
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "homer-operator.metricsScraperTokenSecretName" . }}
+  namespace: {{ include "homer-operator.namespace" . }}
+  labels:
+    {{- include "homer-operator.labels" . | nindent 4 }}
+  annotations:
+    kubernetes.io/service-account.name: {{ include "homer-operator.metricsScraperServiceAccountName" . }}
+type: kubernetes.io/service-account-token
+{{- end }}
+
+{{- if and .Values.serviceMonitor.enabled .Values.operator.metrics.enabled .Values.services.metrics.enabled }}
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
@@ -21,10 +45,16 @@ spec:
       control-plane: controller-manager
   endpoints:
   - port: https
-    scheme: https
+    scheme: {{ ternary "https" "http" .Values.operator.metrics.secureMetrics }}
     interval: {{ .Values.serviceMonitor.interval }}
     scrapeTimeout: {{ .Values.serviceMonitor.scrapeTimeout }}
-    bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+    {{- if $secureMetricsScrape }}
+    authorization:
+      type: Bearer
+      credentials:
+        name: {{ include "homer-operator.metricsScraperTokenSecretName" . }}
+        key: token
     tlsConfig:
       insecureSkipVerify: true
+    {{- end }}
 {{- end }}

@@ -123,9 +123,17 @@ func TestClusterManager_UpdateClusters_WithDisabledCluster(t *testing.T) {
 		t.Errorf("Unexpected error: %v", err)
 	}
 
-	// Should not have disabled cluster
-	if _, ok := cm.clients["disabled-cluster"]; ok {
-		t.Error("Expected disabled cluster to not be present")
+	// Disabled clusters remain in the manager so their status is visible, but
+	// they must not have an active client connection.
+	disabled, ok := cm.clients["disabled-cluster"]
+	if !ok {
+		t.Fatal("Expected disabled cluster to remain present for status reporting")
+	}
+	if disabled.Connected {
+		t.Error("Expected disabled cluster to be disconnected")
+	}
+	if statuses := cm.GetClusterStatuses(); len(statuses) != 1 || statuses[0].Name != "disabled-cluster" || statuses[0].Connected {
+		t.Errorf("disabled cluster status = %#v, want one disconnected status", statuses)
 	}
 
 	// Should still have local cluster

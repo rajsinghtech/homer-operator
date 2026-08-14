@@ -39,7 +39,13 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Dashboard is the Schema for the dashboards API
+        description: |-
+          Dashboard is the Schema for the dashboards API
+
+          Smart-card credentials are copied into the generated Homer ConfigMap and
+          resolve only in the Dashboard namespace. Remote-cluster kubeconfig references
+          are deliberately separate at spec.remoteClusters[].secretRef and retain their
+          existing cross-namespace behavior.
         properties:
           apiVersion:
             description: |-
@@ -750,7 +756,8 @@ spec:
                     domainFilters:
                       description: |-
                         DomainFilters optionally filters HTTPRoutes and Ingresses by domain names in this cluster.
-                        If not specified, the main dashboard domainFilters will be used.
+                        Remote clusters do not inherit the main dashboard domainFilters. If this
+                        field is not specified, all domains in this cluster are included.
                         If specified, only these domain filters will be applied to resources from this cluster.
                       items:
                         type: string
@@ -1040,7 +1047,9 @@ spec:
                         description: Name of the Secret
                         type: string
                       namespace:
-                        description: Optional namespace (defaults to Dashboard namespace)
+                        description: Namespace is retained for Go API compatibility
+                          but must be omitted.
+                        maxLength: 0
                         type: string
                     required:
                     - key
@@ -1048,7 +1057,11 @@ spec:
                     type: object
                   headers:
                     additionalProperties:
-                      description: SecretKeyRef references a key in a Secret
+                      description: |-
+                        SecretKeyRef references a key in a Secret in the Dashboard's namespace.
+                        Smart-card secret references never support an explicit namespace: omitting
+                        Namespace is required to prevent sensitive data from being exposed through
+                        the generated Homer configuration.
                       properties:
                         key:
                           description: Key in the Secret to use
@@ -1057,7 +1070,9 @@ spec:
                           description: Name of the Secret
                           type: string
                         namespace:
-                          description: Optional namespace (defaults to Dashboard namespace)
+                          description: Namespace is retained for Go API compatibility
+                            but must be omitted.
+                          maxLength: 0
                           type: string
                       required:
                       - key
@@ -1076,7 +1091,9 @@ spec:
                         description: Name of the Secret
                         type: string
                       namespace:
-                        description: Optional namespace (defaults to Dashboard namespace)
+                        description: Namespace is retained for Go API compatibility
+                          but must be omitted.
+                        maxLength: 0
                         type: string
                     required:
                     - key
@@ -1093,7 +1110,9 @@ spec:
                         description: Name of the Secret
                         type: string
                       namespace:
-                        description: Optional namespace (defaults to Dashboard namespace)
+                        description: Namespace is retained for Go API compatibility
+                          but must be omitted.
+                        maxLength: 0
                         type: string
                     required:
                     - key
@@ -1109,7 +1128,9 @@ spec:
                         description: Name of the Secret
                         type: string
                       namespace:
-                        description: Optional namespace (defaults to Dashboard namespace)
+                        description: Namespace is retained for Go API compatibility
+                          but must be omitted.
+                        maxLength: 0
                         type: string
                     required:
                     - key
@@ -1348,4 +1369,5 @@ spec:
     served: true
     storage: true
     subresources:
+      status: {}
 {{- end }}

@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  GO_VERSION: '1.26.3'
+  GO_VERSION: '1.26.5'
 
 jobs:
   test:
@@ -40,6 +40,10 @@ jobs:
         run: |
           make manifests
           git diff --exit-code
+          make verify-manifests
+          make build-installer IMG=ghcr.io/rajsinghtech/homer-operator:main
+          git diff --exit-code
+          ./scripts/check-installer-sync.sh ./bin/kustomize
 
       - name: Verify code generation
         run: |
@@ -114,6 +118,9 @@ jobs:
         run: |
           helm lint charts/homer-operator
           helm template test charts/homer-operator --dry-run > /dev/null
+          ./scripts/release_surface_test.sh
+          ./scripts/metrics_surface_test.sh
+          ./scripts/sync-crd-to-helm_test.sh
           echo "Helm chart validation passed"
 
   helm-e2e:

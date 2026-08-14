@@ -9,8 +9,8 @@ metadata:
     app.kubernetes.io/created-by: homer-operator
     app.kubernetes.io/part-of: homer-operator
     app.kubernetes.io/managed-by: kustomize
-  name: controller-manager-metrics-monitor
-  namespace: system
+  name: homer-operator-controller-manager-metrics-monitor
+  namespace: homer-operator-system
 spec:
   endpoints:
     - path: /metrics

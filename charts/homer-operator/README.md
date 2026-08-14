@@ -4,7 +4,7 @@ A Helm chart for deploying the Homer Operator on Kubernetes. The Homer Operator 
 
 ## Prerequisites
 
-- Kubernetes 1.19+
+- Kubernetes 1.21+ (Kubernetes 1.23+ when enabling the optional HPA)
 - Helm 3.8+
 
 ## Installation
@@ -13,7 +13,7 @@ A Helm chart for deploying the Homer Operator on Kubernetes. The Homer Operator 
 
 ```bash
 helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator \
-  --version 1.2.2 -n homer-operator --create-namespace
+  --version 1.2.3 -n homer-operator --create-namespace
 ```
 
 ### Install from Source
@@ -33,6 +33,7 @@ The following table lists the configurable parameters of the Homer Operator char
 | `replicaCount` | Number of operator replicas | `1` |
 | `image.repository` | Operator image repository | `ghcr.io/rajsinghtech/homer-operator` |
 | `image.tag` | Operator image tag | `Chart.appVersion` |
+| `image.digest` | Immutable operator image digest; takes precedence over `image.tag` | `""` |
 | `image.pullPolicy` | Image pull policy | `Always` |
 | `operator.enableGatewayAPI` | Enable Gateway API support | `false` |
 | `homer.image.repository` | Homer dashboard image repository | `b4bz/homer` |
@@ -41,17 +42,28 @@ The following table lists the configurable parameters of the Homer Operator char
 | `operator.metrics.enabled` | Enable metrics collection | `true` |
 | `operator.metrics.secureMetrics` | Use secure metrics serving | `true` |
 | `operator.metrics.bindAddress` | Metrics bind address | `:8443` |
+| `services.metrics.enabled` | Create the metrics Service when operator metrics are enabled | `true` |
+| `services.metrics.type` | Metrics Service type | `ClusterIP` |
+| `services.metrics.port` | Metrics Service port | `8443` |
 | `operator.healthProbe.bindAddress` | Health probe bind address | `:8081` |
 | `serviceAccount.create` | Create service account | `true` |
 | `rbac.create` | Create RBAC resources | `true` |
 | `crd.create` | Create CustomResourceDefinitions | `true` |
 | `serviceMonitor.enabled` | Create a Prometheus ServiceMonitor | `false` |
+| `serviceMonitor.auth.serviceAccountName` | Override the generated secure-metrics scraper ServiceAccount name | `""` |
+| `serviceMonitor.auth.tokenSecretName` | Override the generated secure-metrics token Secret name | `""` |
 | `resources.limits.memory` | Memory limit | `128Mi` |
 | `resources.limits.cpu` | CPU limit | `200m` |
 | `resources.requests.memory` | Memory request | `64Mi` |
 | `resources.requests.cpu` | CPU request | `50m` |
 | `highAvailability.podDisruptionBudget.enabled` | Create a PodDisruptionBudget | `true` |
+| `highAvailability.podDisruptionBudget.minAvailable` | Minimum available Pods; rendered when `maxUnavailable` is null | `1` |
+| `highAvailability.podDisruptionBudget.maxUnavailable` | Maximum unavailable Pods or percentage; takes precedence when set | `null` |
 | `highAvailability.autoscaling.enabled` | Create an HPA | `false` |
+
+Legacy values for operator log formatting, reconcile tuning, leader-election
+timers, and `homer.image.pullPolicy` are intentionally unsupported because the
+operator binary has no corresponding runtime settings; Helm rejects them.
 
 ## Examples
 
@@ -159,11 +171,19 @@ ConfigMap in another namespace. The operator watches that source and creates a
 namespace-local mirror for the Dashboard pod. Leaving `namespace` empty uses
 the Dashboard's namespace.
 
-Asset files are staged below Homer’s `/www/assets` directory with their
-relative paths preserved. Icon mappings can populate Homer’s canonical icon
-paths, and enabled PWA configuration generates `manifest.json` with matching
-icon URLs. Cross-namespace mirrors are updated when their source changes and
-removed when the Dashboard switches references.
+Asset files are staged below Homer’s `/www/assets` directory. Use flat
+filenames in the referenced ConfigMap: the operator mounts ConfigMap keys at
+the asset root and does not create `items[].path` projections, so nested names
+such as `assets/tools/sample.png` are not a portable `ConfigMap` representation.
+Icon mappings can populate Homer’s canonical icon paths, and enabled PWA
+configuration generates `manifest.json` with matching icon URLs.
+Cross-namespace mirrors are updated when their source changes and removed when
+the Dashboard switches references.
+
+For remote-cluster Service discovery, the operator omits the generated
+cluster-internal DNS URL because it would resolve in the operator’s cluster.
+Add `item.homer.rajsingh.info/url` when the remote Service has a reachable URL;
+otherwise the item remains visible without a link.
 
 ## Troubleshooting
 
@@ -182,7 +202,17 @@ To enable Gateway API support, set `operator.enableGatewayAPI=true`. This requir
 ## Monitoring
 
 The operator exposes authenticated HTTPS Prometheus metrics on port 8443. Its
-health and readiness probes listen on port 8081. To enable monitoring:
+health and readiness probes listen on port 8081. The metrics Service is created
+only when both `operator.metrics.enabled` and `services.metrics.enabled` are
+true; disabling operator metrics also removes the Service and ServiceMonitor.
+Secure metrics use controller-runtime's TokenReview/SubjectAccessReview filter,
+so the operator ServiceAccount needs `create` access to
+`authentication.k8s.io/tokenreviews` and
+`authorization.k8s.io/subjectaccessreviews`. With secure metrics and
+`serviceMonitor.enabled`, the chart also creates a dedicated scraper
+ServiceAccount, service-account-token Secret, metrics-reader ClusterRole, and
+ClusterRoleBinding; the ServiceMonitor references that Secret directly. Keep
+`rbac.create=true` for this self-contained path. To enable monitoring:
 
 ```yaml
 operator:
@@ -193,6 +223,11 @@ serviceMonitor:
   enabled: true
   interval: 30s
 ```
+
+When `operator.metrics.secureMetrics` is false, the ServiceMonitor uses HTTP and
+does not create or send a secure-metrics bearer token or TLS settings. The
+Prometheus Operator must support the ServiceMonitor endpoint `authorization`
+field for secure scraping.
 
 ## Security
 
@@ -209,10 +244,12 @@ The operator follows security best practices:
 helm uninstall homer-operator -n homer-operator
 ```
 
-Note: This will not remove the CustomResourceDefinitions or the namespace. To remove them:
+The Dashboard CRD is rendered as a normal Helm template, so uninstalling the
+chart removes the CRD and Kubernetes consequently removes all Dashboard
+resources. The namespace is retained. Back up any Dashboard resources first if
+you need to preserve them. To remove the namespace separately:
 
 ```bash
-kubectl delete crd dashboards.homer.rajsingh.info
 kubectl delete namespace homer-operator
 ```
 

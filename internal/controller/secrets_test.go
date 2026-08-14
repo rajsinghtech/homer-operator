@@ -23,6 +23,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -410,7 +411,7 @@ var _ = Describe("Secret Integration Tests", func() {
 		})
 	})
 
-	Context("When creating Dashboard with cross-namespace secret reference", func() {
+	Context("When creating Dashboard with cross-namespace smart-card secret reference", func() {
 		const dashboardName = "test-dashboard-cross-ns-secret"
 		const secretName = "cross-namespace-secret"
 		const secretNamespace = "secret-namespace"
@@ -487,7 +488,6 @@ var _ = Describe("Secret Integration Tests", func() {
 					},
 				},
 			}
-			Expect(k8sClient.Create(ctx, dashboard)).To(Succeed())
 		})
 
 		AfterEach(func() {
@@ -517,33 +517,12 @@ var _ = Describe("Secret Integration Tests", func() {
 			}
 		})
 
-		It("should resolve secrets from different namespace", func() {
-			By("Reconciling the Dashboard with cross-namespace secret reference")
-			controllerReconciler := &DashboardReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
-			}
-
-			namespacedName := types.NamespacedName{
-				Name:      dashboardName,
-				Namespace: dashboardNs.Name, // Use generated namespace name
-			}
-
-			reconcileDashboardTwice(ctx, controllerReconciler, namespacedName)
-
-			By("Checking that ConfigMap contains resolved cross-namespace secret")
-			configMap := &corev1.ConfigMap{}
-			Eventually(func() bool {
-				err := k8sClient.Get(ctx, types.NamespacedName{
-					Name:      dashboardName + "-homer",
-					Namespace: dashboardNs.Name,
-				}, configMap)
-				return err == nil
-			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
-
-			configYaml := configMap.Data["config.yml"]
-			Expect(configYaml).To(ContainSubstring("cross-namespace-secret-value"))
-			Expect(configYaml).To(ContainSubstring("Cross-NS Smart Card"))
+		It("should be rejected by CRD admission", func() {
+			By("Creating a Dashboard with a smart-card Secret in another namespace")
+			err := k8sClient.Create(ctx, dashboard)
+			Expect(err).To(HaveOccurred())
+			Expect(apierrors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("spec.secrets.apiKey.namespace"))
 		})
 	})
 

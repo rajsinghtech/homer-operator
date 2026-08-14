@@ -87,6 +87,20 @@ rules:
   - get
   - list
   - watch
+{{- if and .Values.operator.metrics.enabled .Values.operator.metrics.secureMetrics }}
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+{{- end }}
 {{- if .Values.operator.enableGatewayAPI }}
 - apiGroups:
   - gateway.networking.k8s.io
@@ -246,7 +260,7 @@ subjects:
 - kind: ServiceAccount
   name: {{ include "homer-operator.serviceAccountName" . }}
   namespace: {{ include "homer-operator.namespace" . }}
-{{- if .Values.operator.metrics.enabled }}
+{{- if and .Values.operator.metrics.enabled .Values.operator.metrics.secureMetrics .Values.serviceMonitor.enabled .Values.services.metrics.enabled }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -265,33 +279,9 @@ rules:
   - get
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: {{ include "homer-operator.proxyRoleName" . }}
-  labels:
-    {{- include "homer-operator.labels" . | nindent 4 }}
-  {{- with .Values.rbac.annotations }}
-  annotations:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
-rules:
-- apiGroups:
-  - authentication.k8s.io
-  resources:
-  - tokenreviews
-  verbs:
-  - create
-- apiGroups:
-  - authorization.k8s.io
-  resources:
-  - subjectaccessreviews
-  verbs:
-  - create
----
-apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "homer-operator.proxyRoleBindingName" . }}
+  name: {{ include "homer-operator.metricsReaderRoleName" . }}
   labels:
     {{- include "homer-operator.labels" . | nindent 4 }}
   {{- with .Values.rbac.annotations }}
@@ -301,10 +291,10 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ include "homer-operator.proxyRoleName" . }}
+  name: {{ include "homer-operator.metricsReaderRoleName" . }}
 subjects:
 - kind: ServiceAccount
-  name: {{ include "homer-operator.serviceAccountName" . }}
+  name: {{ include "homer-operator.metricsScraperServiceAccountName" . }}
   namespace: {{ include "homer-operator.namespace" . }}
 {{- end }}
 {{- end }}

@@ -6,12 +6,13 @@ image:
   repository: ghcr.io/rajsinghtech/homer-operator
   pullPolicy: Always
   tag: ""
+  # Set by the release workflow for immutable production images.
+  digest: ""
 
 homer:
   image:
     repository: b4bz/homer
     tag: latest
-    pullPolicy: IfNotPresent
   # Image used by Dashboard pods to copy ConfigMap content into Homer assets.
   configSyncImage: alpine:3.18
 
@@ -22,17 +23,8 @@ fullnameOverride: ""
 # Operator configuration
 operator:
   enableGatewayAPI: false
-  # Operator behavior configuration
-  reconcileInterval: "30s"
-  maxConcurrentReconciles: 1
-  # Logging configuration
-  logLevel: "info"
-  logFormat: "json"
   leaderElection:
     enabled: true
-    leaseDuration: "15s"
-    renewDeadline: "10s"
-    retryPeriod: "2s"
   # Metrics configuration. Secured directly by controller-runtime's built-in
   # authn/authz filter (TokenReview/SubjectAccessReview) - no sidecar proxy.
   metrics:
@@ -80,12 +72,8 @@ securityContext:
 
 # Service configurations
 services:
-  # Webhook service (main service)
-  webhook:
-    type: ClusterIP
-    port: 8443
-    annotations: {}
-  # Metrics service
+  # The metrics Service is rendered only when both this flag and
+  # operator.metrics.enabled are true.
   metrics:
     enabled: true
     type: ClusterIP
@@ -99,6 +87,12 @@ serviceMonitor:
   scrapeTimeout: 10s
   labels: {}
   annotations: {}
+  # When secure metrics and the ServiceMonitor are enabled, the chart creates
+  # a dedicated ServiceAccount, service-account-token Secret, metrics reader
+  # ClusterRole, and ClusterRoleBinding for Prometheus scraping.
+  auth:
+    serviceAccountName: ""
+    tokenSecretName: ""
 
 resources:
   limits:
@@ -147,7 +141,10 @@ volumeMounts: []
 highAvailability:
   podDisruptionBudget:
     enabled: true
+    # Configure one of these. If both are supplied through merged values,
+    # maxUnavailable takes precedence so the rendered PDB remains valid.
     minAvailable: 1
+    maxUnavailable: null
   autoscaling:
     enabled: false
     minReplicas: 1

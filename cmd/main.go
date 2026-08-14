@@ -124,29 +124,9 @@ func main() {
 		EnableGatewayAPI: enableGatewayAPI,
 		HomerImage:       homerImage,
 		ConfigSyncImage:  configSyncImage,
-		ClusterManager:   controller.NewClusterManager(mgr.GetClient(), mgr.GetScheme()),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Dashboard")
 		os.Exit(1)
-	}
-	ingressController := &controller.GenericResourceReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}
-	if err = ingressController.SetupIngressController(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Ingress")
-		os.Exit(1)
-	}
-
-	if enableGatewayAPI {
-		httpRouteController := &controller.GenericResourceReconciler{
-			Client: mgr.GetClient(),
-			Scheme: mgr.GetScheme(),
-		}
-		if err = httpRouteController.SetupHTTPRouteController(mgr); err != nil {
-			setupLog.Error(err, "unable to create controller", "controller", "HTTPRoute")
-			os.Exit(1)
-		}
 	}
 	//+kubebuilder:scaffold:builder
 

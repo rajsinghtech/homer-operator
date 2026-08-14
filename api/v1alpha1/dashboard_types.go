@@ -145,7 +145,8 @@ type RemoteCluster struct {
 	GatewaySelector *metav1.LabelSelector `json:"gatewaySelector,omitempty"`
 
 	// DomainFilters optionally filters HTTPRoutes and Ingresses by domain names in this cluster.
-	// If not specified, the main dashboard domainFilters will be used.
+	// Remote clusters do not inherit the main dashboard domainFilters. If this
+	// field is not specified, all domains in this cluster are included.
 	// If specified, only these domain filters will be applied to resources from this cluster.
 	DomainFilters []string `json:"domainFilters,omitempty"`
 }
@@ -220,6 +221,11 @@ type ClusterConnectionStatus struct {
 //+kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Dashboard is the Schema for the dashboards API
+//
+// Smart-card credentials are copied into the generated Homer ConfigMap and
+// resolve only in the Dashboard namespace. Remote-cluster kubeconfig references
+// are deliberately separate at spec.remoteClusters[].secretRef and retain their
+// existing cross-namespace behavior.
 type Dashboard struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -300,13 +306,17 @@ type PWAConfig struct {
 	StartURL string `json:"startUrl,omitempty"`
 }
 
-// SecretKeyRef references a key in a Secret
+// SecretKeyRef references a key in a Secret in the Dashboard's namespace.
+// Smart-card secret references never support an explicit namespace: omitting
+// Namespace is required to prevent sensitive data from being exposed through
+// the generated Homer configuration.
 type SecretKeyRef struct {
 	// Name of the Secret
 	Name string `json:"name"`
 	// Key in the Secret to use
 	Key string `json:"key"`
-	// Optional namespace (defaults to Dashboard namespace)
+	// Namespace is retained for Go API compatibility but must be omitted.
+	// +kubebuilder:validation:MaxLength=0
 	Namespace string `json:"namespace,omitempty"`
 }
 

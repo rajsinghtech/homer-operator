@@ -1,13 +1,245 @@
 package homer
 
 import (
+	"maps"
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
+
+func TestRemoteResourceCleanupIsScopedToCluster(t *testing.T) {
+	const (
+		resourceName = "shared-app"
+		namespace    = "shared-ns"
+		clusterA     = "cluster-a"
+		clusterB     = "cluster-b"
+	)
+
+	tests := []struct {
+		name       string
+		sourceBase string
+		add        func(*HomerConfig, string)
+		remove     func(*HomerConfig, string)
+	}{
+		{
+			name:       "Ingress",
+			sourceBase: "ingress/" + resourceName,
+			add: func(config *HomerConfig, cluster string) {
+				ingress := networkingv1.Ingress{
+					ObjectMeta: remoteObjectMeta(resourceName, namespace, cluster),
+					Spec: networkingv1.IngressSpec{
+						Rules: []networkingv1.IngressRule{{Host: cluster + ".example.com"}},
+					},
+				}
+				UpdateHomerConfigIngress(config, ingress, nil)
+			},
+			remove: func(config *HomerConfig, cluster string) {
+				ingress := networkingv1.Ingress{
+					ObjectMeta: remoteObjectMeta(resourceName, namespace, cluster),
+					Spec: networkingv1.IngressSpec{
+						Rules: []networkingv1.IngressRule{{Host: cluster + ".example.com"}},
+					},
+				}
+				UpdateHomerConfigIngress(config, ingress, []string{"excluded.example.com"})
+			},
+		},
+		{
+			name:       "HTTPRoute",
+			sourceBase: "httproute/" + resourceName,
+			add: func(config *HomerConfig, cluster string) {
+				route := &gatewayv1.HTTPRoute{
+					ObjectMeta: remoteObjectMeta(resourceName, namespace, cluster),
+					Spec: gatewayv1.HTTPRouteSpec{
+						Hostnames: []gatewayv1.Hostname{gatewayv1.Hostname(cluster + ".example.com")},
+					},
+				}
+				UpdateHomerConfigHTTPRoute(config, route, nil)
+			},
+			remove: func(config *HomerConfig, cluster string) {
+				route := &gatewayv1.HTTPRoute{
+					ObjectMeta: remoteObjectMeta(resourceName, namespace, cluster),
+				}
+				UpdateHomerConfigHTTPRoute(config, route, nil)
+			},
+		},
+		{
+			name:       "Service",
+			sourceBase: "svc/" + resourceName,
+			add: func(config *HomerConfig, cluster string) {
+				service := corev1.Service{
+					ObjectMeta: remoteObjectMeta(resourceName, namespace, cluster),
+					Spec: corev1.ServiceSpec{
+						Ports: []corev1.ServicePort{{Port: 8080}},
+					},
+				}
+				UpdateHomerConfigService(config, service)
+			},
+			remove: func(config *HomerConfig, cluster string) {
+				service := corev1.Service{
+					ObjectMeta: remoteObjectMeta(resourceName, namespace, cluster),
+				}
+				service.Annotations["item.homer.rajsingh.info/hide"] = "true"
+				UpdateHomerConfigService(config, service)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := &HomerConfig{}
+			tt.add(config, clusterA)
+			tt.add(config, clusterB)
+
+			assertSources(t, config, map[string]bool{
+				tt.sourceBase + "@" + clusterA: true,
+				tt.sourceBase + "@" + clusterB: true,
+			})
+
+			tt.remove(config, clusterA)
+
+			assertSources(t, config, map[string]bool{
+				tt.sourceBase + "@" + clusterB: true,
+			})
+		})
+	}
+}
+
+func TestRemoteSameNamedResourcesRemainDistinctWithoutSuffix(t *testing.T) {
+	config := &HomerConfig{}
+
+	for _, cluster := range []string{"cluster-a", "cluster-b"} {
+		ingress := networkingv1.Ingress{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "shared-app",
+				Namespace: "shared-ns",
+				Annotations: map[string]string{
+					"homer.rajsingh.info/cluster": cluster,
+				},
+			},
+			Spec: networkingv1.IngressSpec{
+				Rules: []networkingv1.IngressRule{{Host: cluster + ".example.com"}},
+			},
+		}
+		UpdateHomerConfigIngress(config, ingress, nil)
+	}
+
+	if len(config.Services) != 1 || len(config.Services[0].Items) != 2 {
+		t.Fatalf("same-named remote resources were merged: %#v", config.Services)
+	}
+
+	sources := map[string]bool{}
+	for _, item := range config.Services[0].Items {
+		sources[item.Source] = true
+	}
+	for _, want := range []string{"ingress/shared-app@cluster-a", "ingress/shared-app@cluster-b"} {
+		if !sources[want] {
+			t.Errorf("missing distinct source %q in %v", want, sources)
+		}
+	}
+}
+
+func TestCRDFoundationClaimsOnlyOneSameNamedRemoteResource(t *testing.T) {
+	config := &HomerConfig{
+		Services: []Service{{
+			Name: "shared-ns",
+			Items: []Item{{
+				Name:      "shared-app",
+				URL:       "https://manual.example.com",
+				Source:    CRDSource,
+				Namespace: "dashboard",
+			}},
+		}},
+	}
+
+	for _, cluster := range []string{"cluster-a", "cluster-b"} {
+		ingress := networkingv1.Ingress{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "shared-app",
+				Namespace: "shared-ns",
+				Annotations: map[string]string{
+					"homer.rajsingh.info/cluster": cluster,
+				},
+			},
+			Spec: networkingv1.IngressSpec{
+				Rules: []networkingv1.IngressRule{{Host: cluster + ".example.com"}},
+			},
+		}
+		UpdateHomerConfigIngress(config, ingress, nil)
+	}
+
+	if len(config.Services) != 1 || len(config.Services[0].Items) != 2 {
+		t.Fatalf("CRD foundation absorbed both remote resources: %#v", config.Services)
+	}
+
+	var remoteCount int
+	for _, item := range config.Services[0].Items {
+		if item.Source == "ingress/shared-app@cluster-b" {
+			remoteCount++
+		}
+	}
+	if remoteCount != 1 {
+		t.Fatalf("expected the second remote resource to remain distinct: %#v", config.Services[0].Items)
+	}
+}
+
+func TestIngressAndHTTPRouteSourcesAreKindQualified(t *testing.T) {
+	config := &HomerConfig{}
+	clusterAnnotations := map[string]string{"homer.rajsingh.info/cluster": "cluster-a"}
+
+	ingress := networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{Name: "shared-app", Namespace: "shared-ns", Annotations: maps.Clone(clusterAnnotations)},
+		Spec:       networkingv1.IngressSpec{Rules: []networkingv1.IngressRule{{Host: "ingress.example.com"}}},
+	}
+	route := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "shared-app", Namespace: "shared-ns", Annotations: maps.Clone(clusterAnnotations)},
+		Spec:       gatewayv1.HTTPRouteSpec{Hostnames: []gatewayv1.Hostname{"route.example.com"}},
+	}
+
+	UpdateHomerConfigIngress(config, ingress, nil)
+	UpdateHomerConfigHTTPRoute(config, route, nil)
+
+	if len(config.Services) != 1 || len(config.Services[0].Items) != 2 {
+		t.Fatalf("Ingress and HTTPRoute were merged: %#v", config.Services)
+	}
+}
+
+//nolint:unparam // Keeping the resource-name argument makes the fixtures read like the objects they create.
+func remoteObjectMeta(name, namespace, cluster string) metav1.ObjectMeta {
+	return metav1.ObjectMeta{
+		Name:      name,
+		Namespace: namespace,
+		Annotations: map[string]string{
+			"homer.rajsingh.info/cluster": cluster,
+		},
+		Labels: map[string]string{
+			"cluster-name-suffix": "@" + cluster,
+		},
+	}
+}
+
+func assertSources(t *testing.T, config *HomerConfig, want map[string]bool) {
+	t.Helper()
+
+	got := make(map[string]bool)
+	for _, service := range config.Services {
+		for _, item := range service.Items {
+			got[item.Source] = true
+		}
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("sources = %v, want %v", got, want)
+	}
+	for source := range want {
+		if !got[source] {
+			t.Errorf("source %q was removed or not created; got %v", source, got)
+		}
+	}
+}
 
 func TestHTTPRouteHostnameRemovalCleanup(t *testing.T) {
 	config := &HomerConfig{}
@@ -183,6 +415,46 @@ func TestIngressHostnameRemovalCleanup(t *testing.T) {
 	}
 }
 
+func TestIngressWithNoRulesRemovesItsExistingItems(t *testing.T) {
+	config := &HomerConfig{}
+	ingress := networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{Name: "empty-on-update", Namespace: "apps"},
+		Spec:       networkingv1.IngressSpec{Rules: []networkingv1.IngressRule{{Host: "app.example.com"}}},
+	}
+	UpdateHomerConfigIngress(config, ingress, nil)
+	if len(config.Services) != 1 || len(config.Services[0].Items) != 1 {
+		t.Fatalf("initial Ingress item was not created: %#v", config.Services)
+	}
+
+	ingress.Spec.Rules = nil
+	UpdateHomerConfigIngress(config, ingress, nil)
+	if len(config.Services) != 0 {
+		t.Fatalf("empty Ingress left stale services: %#v", config.Services)
+	}
+}
+
+func TestEnhancedCRDItemStillSelectsItsCRDServiceGroup(t *testing.T) {
+	config := &HomerConfig{Services: []Service{{
+		Parameters: map[string]string{"name": "apps"},
+		Items:      []Item{{Parameters: map[string]string{"name": "api"}, Source: CRDSource}},
+	}}}
+	apiService := corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "apps"},
+		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
+	}
+	UpdateHomerConfigService(config, apiService)
+	if len(config.Services) != 1 || config.Services[0].Items[0].Source != "svc/api" || !config.Services[0].Items[0].crdFoundation {
+		t.Fatalf("CRD foundation was not retained after enhancement: %#v", config.Services)
+	}
+
+	webService := apiService
+	webService.Name = "web"
+	UpdateHomerConfigService(config, webService)
+	if len(config.Services) != 1 || getServiceName(&config.Services[0]) != "apps" || len(config.Services[0].Items) != 2 {
+		t.Fatalf("enhanced CRD service stopped selecting its group: %#v", config.Services)
+	}
+}
+
 func TestCompleteResourceRemoval(t *testing.T) {
 	config := &HomerConfig{}
 
@@ -275,7 +547,7 @@ func TestMultipleResourcesCleanup(t *testing.T) {
 	}
 
 	// Verify it's route2's item
-	if service.Items[0].Source != "route2" {
+	if service.Items[0].Source != "httproute/route2" {
 		t.Errorf("Expected remaining item to be from route2, got source: %s", service.Items[0].Source)
 	}
 }

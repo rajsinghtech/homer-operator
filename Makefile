@@ -62,10 +62,21 @@ vet: ## Run go vet against code.
 test: manifests generate fmt vet envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
-# Utilize Kind or modify the e2e tests to load the image locally, enabling compatibility with other vendors.
-.PHONY: test-e2e  # Run the e2e tests against a Kind k8s instance that is spun up.
-test-e2e:
-	go test ./test/e2e/ -v -ginkgo.v
+# The black-box suite modifies cluster state. Supply the kubeconfig for a
+# dedicated Kind or other isolated test cluster explicitly; never fall back to
+# the caller's active kubeconfig.
+E2E_KUBECONFIG ?=
+.PHONY: test-e2e
+test-e2e: ## Run black-box tests against the explicit isolated E2E_KUBECONFIG cluster.
+	@if [ -z "$(E2E_KUBECONFIG)" ]; then \
+		echo "E2E_KUBECONFIG is required (for example: E2E_KUBECONFIG=\$$PWD/.kube/homer-operator-ci make test-e2e)" >&2; \
+		exit 2; \
+	fi
+	@if [ ! -f "$(E2E_KUBECONFIG)" ]; then \
+		echo "E2E_KUBECONFIG does not exist or is not a file: $(E2E_KUBECONFIG)" >&2; \
+		exit 2; \
+	fi
+	KUBECONFIG="$(E2E_KUBECONFIG)" go test ./test/e2e/ -v -ginkgo.v
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter & yamllint
@@ -116,14 +127,22 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 .PHONY: build-installer
 build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
 	mkdir -p dist
-	@if [ -d "config/crd" ]; then \
-		$(KUSTOMIZE) build config/crd > dist/install.yaml; \
+	@tmpdir=$$(mktemp -d); \
+	trap 'rm -rf "$$tmpdir"' EXIT; \
+	cp -R config "$$tmpdir/config"; \
+	(cd "$$tmpdir/config/manager" && "$(abspath $(KUSTOMIZE))" edit set image "controller=$(IMG)"); \
+	"$(abspath $(KUSTOMIZE))" build "$$tmpdir/config/default" > dist/install.yaml; \
+	crd_count=$$(grep -c '^kind: CustomResourceDefinition$$' dist/install.yaml); \
+	if [ "$$crd_count" -ne 1 ]; then \
+		echo "Expected exactly one CustomResourceDefinition, found $$crd_count" >&2; \
+		exit 1; \
 	fi
-	echo "---" >> dist/install.yaml  # Add a document separator before appending
-	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
-	$(KUSTOMIZE) build config/default >> dist/install.yaml
 	@echo "Updating deploy/operator.yaml..."
 	@cp dist/install.yaml deploy/operator.yaml
+
+.PHONY: verify-manifests
+verify-manifests: kustomize ## Verify the default Kustomize output has one complete CRD.
+	./scripts/check-manifest-generation.sh "$(KUSTOMIZE)"
 
 ##@ Deployment
 

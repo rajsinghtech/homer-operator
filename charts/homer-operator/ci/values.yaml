@@ -34,17 +34,11 @@ rbac:
 crd:
   create: true
 
-namespace:
-  create: true
-
 serviceMonitor:
-  create: false
-
-podDisruptionBudget:
   enabled: false
 
-autoscaling:
-  enabled: false
-
-networkPolicy:
-  enabled: false
+highAvailability:
+  podDisruptionBudget:
+    enabled: false
+  autoscaling:
+    enabled: false

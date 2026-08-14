@@ -7,21 +7,77 @@ on:
     paths:
       - 'charts/homer-operator/Chart.yaml'
       - 'charts/homer-operator/values.yaml'
+      - 'charts/homer-operator/values.schema.json'
       - 'charts/homer-operator/templates/**'
       - '.github/workflows/helm-release.yml'
-    tags:
-      - 'v*.*.*'
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  verify:
+    name: Verify development chart
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.21.3
+
+      - name: Install verification tools
+        run: |
+          set -euo pipefail
+          KUBECONFORM_VERSION=0.6.7
+          ACTIONLINT_VERSION=1.7.7
+          curl -fsSL "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP" kubeconform
+          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_x86_64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP" actionlint
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Run full verification matrix
+        run: |
+          set -euo pipefail
+          make manifests
+          git diff --exit-code
+          make generate
+          git diff --exit-code
+          make lint
+          go vet ./...
+          make test
+          git diff --exit-code
+          make build
+          make build-installer IMG=ghcr.io/rajsinghtech/homer-operator:main
+          git diff --exit-code
+          ./scripts/check-manifest-generation.sh ./bin/kustomize
+          ./scripts/check-installer-sync.sh ./bin/kustomize
+          ./scripts/chart_packaging_test.sh
+          ./scripts/kustomize_metrics_surface_test.sh ./bin/kustomize
+          ./scripts/metrics_surface_test.sh
+          ./scripts/release_surface_test.sh
+          ./scripts/sync-crd-to-helm_test.sh
+          shellcheck scripts/*.sh
+          actionlint
+          git diff --check
+
   publish:
     name: Publish Helm Chart
     runs-on: ubuntu-latest
+    needs: verify
     # Only run on direct pushes, not PRs
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && needs.verify.result == 'success'
     permissions:
       contents: read
       packages: write
@@ -40,9 +96,11 @@ jobs:
       - name: Validate chart
         run: |
           # Use helm lint instead of ct lint to avoid complex ct configuration
-          helm lint charts/homer-operator
+          helm lint charts/homer-operator -f charts/homer-operator/ci/values.yaml
           # Verify template rendering
-          helm template test charts/homer-operator --dry-run > /dev/null
+          helm template test charts/homer-operator --dry-run \
+            -f charts/homer-operator/ci/values.yaml \
+            --set crd.create=true > /dev/null
           echo "Chart validation passed"
 
       - name: Log in to GHCR
@@ -55,60 +113,47 @@ jobs:
       - name: Extract version
         id: meta
         run: |
-          if [[ $GITHUB_REF == refs/tags/* ]]; then
-            # Extract version from tag (remove 'v' prefix)
-            TAG_VERSION=${GITHUB_REF#refs/tags/v}
-            echo "version=$TAG_VERSION" >> $GITHUB_OUTPUT
-            echo "chart_version=$TAG_VERSION" >> $GITHUB_OUTPUT
-            echo "is_release=true" >> $GITHUB_OUTPUT
-            echo "Using tag version: $TAG_VERSION"
-          else
-            # For main branch, use a dev version
-            echo "version=0.0.0-latest" >> $GITHUB_OUTPUT
-            echo "chart_version=0.0.0-latest" >> $GITHUB_OUTPUT
-            echo "is_release=false" >> $GITHUB_OUTPUT
-            echo "Using development version: 0.0.0-latest"
-          fi
+          # This workflow intentionally publishes development charts from main.
+          # Versioned charts are published by release.yml on a validated tag.
+          {
+            echo "version=0.0.0-latest"
+            echo "chart_version=0.0.0-latest"
+            echo "is_release=false"
+          } >> "$GITHUB_OUTPUT"
+          echo "Using development version: 0.0.0-latest"
 
       - name: Update Chart versions
         run: |
           VERSION="${{ steps.meta.outputs.version }}"
-          
-          if [[ $GITHUB_REF == refs/tags/* ]]; then
-            # For tags, update both version and appVersion
-            sed -i "s/version: .*/version: $VERSION/" charts/homer-operator/Chart.yaml
-            sed -i "s/appVersion: .*/appVersion: \"$VERSION\"/" charts/homer-operator/Chart.yaml
-          else
-            # For main branch, only update version (keep appVersion as 'latest')
-            sed -i "s/version: .*/version: $VERSION/" charts/homer-operator/Chart.yaml
-            sed -i "s/appVersion: .*/appVersion: \"latest\"/" charts/homer-operator/Chart.yaml
-          fi
-          
+
+          sed -i "s/^version: .*/version: $VERSION/" charts/homer-operator/Chart.yaml
+          sed -i 's/^appVersion: .*/appVersion: "latest"/' charts/homer-operator/Chart.yaml
+
           echo "Updated chart version to: $VERSION"
 
       - name: Package and Push Helm Chart
         run: |
           CHART_VERSION="${{ steps.meta.outputs.version }}"
           REPO_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          
+
           # Package the chart
           if ! helm package charts/homer-operator --destination ./packaged-charts; then
             echo "Failed to package Helm chart"
             exit 1
           fi
-          
+
           # Verify package was created
           if [[ ! -f "./packaged-charts/homer-operator-${CHART_VERSION}.tgz" ]]; then
             echo "Package file not found: homer-operator-${CHART_VERSION}.tgz"
             exit 1
           fi
-          
+
           # Push to GHCR
           if ! helm push "./packaged-charts/homer-operator-${CHART_VERSION}.tgz" "oci://${{ env.REGISTRY }}/${REPO_NAME}/charts"; then
             echo "Failed to push Helm chart to registry"
             exit 1
           fi
-          
+
           echo "Chart successfully pushed to: oci://${{ env.REGISTRY }}/${REPO_NAME}/charts/homer-operator:${CHART_VERSION}"
 
       - name: Generate summary
@@ -116,31 +161,35 @@ jobs:
           CHART_VERSION="${{ steps.meta.outputs.version }}"
           REPO_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
           IS_RELEASE="${{ steps.meta.outputs.is_release }}"
-          
+
           if [[ $IS_RELEASE == "true" ]]; then
-            echo "## Helm Chart Released" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Chart Version:** \`$CHART_VERSION\`" >> $GITHUB_STEP_SUMMARY
-            echo "**Registry:** \`${{ env.REGISTRY }}/${REPO_NAME}/charts\`" >> $GITHUB_STEP_SUMMARY
-            echo "**Tag:** \`${GITHUB_REF#refs/tags/}\`" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### Installation" >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-            echo "helm install homer-operator oci://${{ env.REGISTRY }}/${REPO_NAME}/charts/homer-operator --version $CHART_VERSION" >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Stable release suitable for production use.**" >> $GITHUB_STEP_SUMMARY
+            {
+              echo "## Helm Chart Released"
+              echo ""
+              echo "**Chart Version:** \`$CHART_VERSION\`"
+              echo "**Registry:** \`${{ env.REGISTRY }}/${REPO_NAME}/charts\`"
+              echo "**Tag:** \`${GITHUB_REF#refs/tags/}\`"
+              echo ""
+              echo "### Installation"
+              echo "\`\`\`bash"
+              echo "helm install homer-operator oci://${{ env.REGISTRY }}/${REPO_NAME}/charts/homer-operator --version $CHART_VERSION"
+              echo "\`\`\`"
+              echo ""
+              echo "**Stable release suitable for production use.**"
+            } >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "## Helm Chart Development Build" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Chart Version:** \`$CHART_VERSION\`" >> $GITHUB_STEP_SUMMARY
-            echo "**Registry:** \`${{ env.REGISTRY }}/${REPO_NAME}/charts\`" >> $GITHUB_STEP_SUMMARY
-            echo "**Branch:** \`${GITHUB_REF#refs/heads/}\`" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### Installation (Development)" >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-            echo "helm install homer-operator oci://${{ env.REGISTRY }}/${REPO_NAME}/charts/homer-operator --version $CHART_VERSION" >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Development build from main branch - not for production use.**" >> $GITHUB_STEP_SUMMARY
+            {
+              echo "## Helm Chart Development Build"
+              echo ""
+              echo "**Chart Version:** \`$CHART_VERSION\`"
+              echo "**Registry:** \`${{ env.REGISTRY }}/${REPO_NAME}/charts\`"
+              echo "**Branch:** \`${GITHUB_REF#refs/heads/}\`"
+              echo ""
+              echo "### Installation (Development)"
+              echo "\`\`\`bash"
+              echo "helm install homer-operator oci://${{ env.REGISTRY }}/${REPO_NAME}/charts/homer-operator --version $CHART_VERSION"
+              echo "\`\`\`"
+              echo ""
+              echo "**Development build from main branch - not for production use.**"
+            } >> "$GITHUB_STEP_SUMMARY"
           fi

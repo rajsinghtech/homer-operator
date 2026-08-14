@@ -9,7 +9,7 @@ To learn more about the release, try:
 
 The Homer Operator is now running in namespace {{ include "homer-operator.namespace" . }}.
 
-{{- if .Values.operator.metrics.enabled }}
+{{- if and .Values.operator.metrics.enabled .Values.services.metrics.enabled }}
 Metrics are enabled and can be scraped from the metrics service.
 {{- if .Values.serviceMonitor.enabled }}
 ServiceMonitor is enabled for Prometheus integration.

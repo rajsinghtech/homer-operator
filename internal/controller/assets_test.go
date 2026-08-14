@@ -80,7 +80,7 @@ var _ = Describe("Asset Management Tests", func() {
 					HomerConfig: homer.HomerConfig{
 						Title:      "Assets Test Dashboard",
 						Subtitle:   "Testing Custom Assets",
-						Stylesheet: []string{"custom.css"},
+						Stylesheet: []string{"assets/custom.css"},
 					},
 					Assets: &homerv1alpha1.AssetsConfig{
 						ConfigMapRef: &homerv1alpha1.AssetConfigMapRef{
@@ -141,9 +141,10 @@ var _ = Describe("Asset Management Tests", func() {
 			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
 
 			// Check that the deployment has the custom assets volume
+			assetVolumeName := homer.AssetVolumeName(assetsConfigMapName)
 			hasCustomAssetsVolume := false
 			for _, volume := range deployment.Spec.Template.Spec.Volumes {
-				if volume.Name == assetsConfigMapName && volume.ConfigMap != nil && volume.ConfigMap.Name == assetsConfigMapName {
+				if volume.Name == assetVolumeName && volume.ConfigMap != nil && volume.ConfigMap.Name == assetsConfigMapName {
 					hasCustomAssetsVolume = true
 					break
 				}
@@ -165,7 +166,7 @@ var _ = Describe("Asset Management Tests", func() {
 
 			hasCustomAssetsMount := false
 			for _, mount := range sidecarContainer.VolumeMounts {
-				if mount.Name == assetsConfigMapName && mount.MountPath == "/custom-assets" {
+				if mount.Name == assetVolumeName && mount.MountPath == "/custom-assets" {
 					hasCustomAssetsMount = true
 					break
 				}
@@ -477,8 +478,9 @@ var _ = Describe("Asset Management Tests", func() {
 			// Should include default display mode
 			Expect(sidecarCommand).To(ContainSubstring("standalone"))
 
-			// Should include default start URL
-			Expect(sidecarCommand).To(ContainSubstring("\"/\""))
+			// Should include relative defaults for dashboards hosted below /
+			Expect(sidecarCommand).To(ContainSubstring("\"../\""))
+			Expect(sidecarCommand).To(ContainSubstring("\"scope\": \"../\""))
 		})
 	})
 
@@ -607,9 +609,10 @@ var _ = Describe("Asset Management Tests", func() {
 			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
 
 			mirrorName := assetMirrorName(assetsConfigMapName, assetsNs.Name, dashboardNs.Name, dashboardName)
+			assetVolumeName := homer.AssetVolumeName(mirrorName)
 			hasCustomAssetsVolume := false
 			for _, volume := range deployment.Spec.Template.Spec.Volumes {
-				if volume.Name == mirrorName && volume.ConfigMap != nil && volume.ConfigMap.Name == mirrorName {
+				if volume.Name == assetVolumeName && volume.ConfigMap != nil && volume.ConfigMap.Name == mirrorName {
 					hasCustomAssetsVolume = true
 					break
 				}

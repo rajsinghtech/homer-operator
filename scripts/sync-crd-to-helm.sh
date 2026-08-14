@@ -49,7 +49,7 @@ metadata:
 spec:
 EOF
 
-# Extract spec section from the CRD (skip first 8 lines of metadata, remove last line)
+# Extract the spec section from the CRD (skip the first 8 lines of metadata).
 # Check if the file has enough lines
 LINE_COUNT=$(wc -l < "$CRD_FILE")
 if [ "$LINE_COUNT" -lt 9 ]; then
@@ -58,7 +58,7 @@ if [ "$LINE_COUNT" -lt 9 ]; then
 fi
 
 # Extract and validate the spec section
-SPEC_CONTENT=$(tail -n +9 "$CRD_FILE" | sed '$d')
+SPEC_CONTENT=$(tail -n +9 "$CRD_FILE")
 if [ -z "$SPEC_CONTENT" ]; then
     echo "Error: No spec content found in CRD file '$CRD_FILE'" >&2
     exit 1

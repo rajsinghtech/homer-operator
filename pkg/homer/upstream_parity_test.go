@@ -443,7 +443,7 @@ func TestSmartMergePreservesDirectCRDFieldsAndRawFields(t *testing.T) {
 	if existing.Type != "Generic" {
 		t.Fatalf("merged direct type = %q, want CRD value", existing.Type)
 	}
-	if string(existing.RawFields["future"]) != `{"enabled":true}` || string(existing.RawFields["discoveredOnly"]) != "true" {
+	if string(existing.RawFields["future"]) != `{"enabled":true}` || string(existing.RawFields["discoveredOnly"]) != BooleanTrue {
 		t.Fatalf("merged raw fields = %#v", existing.RawFields)
 	}
 	if existing.Headers["Authorization"] != "configured" || existing.Headers["X-Discovered"] != "yes" {
@@ -691,5 +691,8 @@ func TestPWAManifestEscapesValuesAndUsesHomerAssetPaths(t *testing.T) {
 	defaults := GeneratePWAManifest("Dashboard", "", "", "", "", "", "", nil)
 	if strings.Contains(defaults, "assets/icons/") || !strings.Contains(defaults, "icons/pwa-192x192.png") {
 		t.Fatalf("default Homer icon path is wrong: %s", defaults)
+	}
+	if !strings.Contains(defaults, `"start_url": "../"`) || !strings.Contains(defaults, `"scope": "../"`) {
+		t.Fatalf("default PWA hosting paths are wrong: %s", defaults)
 	}
 }

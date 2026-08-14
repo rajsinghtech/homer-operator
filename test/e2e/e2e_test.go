@@ -31,6 +31,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -72,21 +73,133 @@ func setupE2ETest() (client.Client, context.Context, string) {
 	return k8sClient, ctx, testNs
 }
 
-func cleanupE2ETest(k8sClient client.Client, ctx context.Context, testNs string) {
+var (
+	e2eCleanupTimeout      = 2 * time.Minute
+	e2eCleanupPollInterval = time.Second
+)
+
+func cleanupE2ETest(k8sClient client.Client, ctx context.Context, testNs string) error {
+	dashboards := &homerv1alpha1.DashboardList{}
+	if err := k8sClient.List(ctx, dashboards, client.InNamespace(testNs)); err != nil {
+		return cleanupFailure(k8sClient, ctx, testNs, "list Dashboards before cleanup", err)
+	}
+
+	for i := range dashboards.Items {
+		dashboard := &dashboards.Items[i]
+		if err := k8sClient.Delete(ctx, dashboard); err != nil && !apierrors.IsNotFound(err) {
+			return cleanupFailure(k8sClient, ctx, testNs, fmt.Sprintf("delete Dashboard %s", dashboard.Name), err)
+		}
+	}
+
+	if err := waitForDashboardsDeleted(k8sClient, ctx, testNs); err != nil {
+		return cleanupFailure(k8sClient, ctx, testNs, "wait for Dashboard finalizers and owned resources", err)
+	}
+
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNs}}
 	err := k8sClient.Delete(ctx, ns)
 	if apierrors.IsNotFound(err) {
-		return
+		return nil
 	}
 	if err != nil {
-		GinkgoT().Logf("Warning: failed to delete test namespace %s: %v", testNs, err)
-		return
+		return cleanupFailure(k8sClient, ctx, testNs, "delete test namespace", err)
 	}
 
-	Eventually(func() bool {
+	if err := wait.PollUntilContextTimeout(ctx, e2eCleanupPollInterval, e2eCleanupTimeout, true, func(ctx context.Context) (bool, error) {
 		err := k8sClient.Get(ctx, types.NamespacedName{Name: testNs}, ns)
-		return apierrors.IsNotFound(err)
-	}, time.Minute, time.Second).Should(BeTrue())
+		if apierrors.IsNotFound(err) {
+			return true, nil
+		}
+		return false, err
+	}); err != nil {
+		return cleanupFailure(k8sClient, ctx, testNs, "wait for test namespace deletion", err)
+	}
+
+	return nil
+}
+
+func waitForDashboardsDeleted(k8sClient client.Client, ctx context.Context, testNs string) error {
+	return wait.PollUntilContextTimeout(ctx, e2eCleanupPollInterval, e2eCleanupTimeout, true, func(ctx context.Context) (bool, error) {
+		dashboards := &homerv1alpha1.DashboardList{}
+		if err := k8sClient.List(ctx, dashboards, client.InNamespace(testNs)); err != nil {
+			return false, err
+		}
+		return len(dashboards.Items) == 0, nil
+	})
+}
+
+func cleanupFailure(k8sClient client.Client, ctx context.Context, testNs, action string, err error) error {
+	return fmt.Errorf("%s for e2e namespace %q: %w\nremaining resources:\n%s", action, testNs, err, cleanupState(k8sClient, ctx, testNs))
+}
+
+func cleanupState(k8sClient client.Client, ctx context.Context, testNs string) string {
+	var state []string
+	appendState := func(kind string, objects []metav1.Object) {
+		if len(objects) == 0 {
+			return
+		}
+
+		for _, object := range objects {
+			deleting := object.GetDeletionTimestamp() != nil
+			state = append(state, fmt.Sprintf("- %s %s/%s finalizers=%v deleting=%t", kind, object.GetNamespace(), object.GetName(), object.GetFinalizers(), deleting))
+		}
+	}
+
+	dashboards := &homerv1alpha1.DashboardList{}
+	if err := k8sClient.List(ctx, dashboards, client.InNamespace(testNs)); err != nil {
+		state = append(state, fmt.Sprintf("- unable to list Dashboards: %v", err))
+	} else {
+		objects := make([]metav1.Object, 0, len(dashboards.Items))
+		for i := range dashboards.Items {
+			objects = append(objects, &dashboards.Items[i])
+		}
+		appendState("Dashboard", objects)
+	}
+
+	deployments := &appsv1.DeploymentList{}
+	if err := k8sClient.List(ctx, deployments, client.InNamespace(testNs)); err != nil {
+		state = append(state, fmt.Sprintf("- unable to list Deployments: %v", err))
+	} else {
+		objects := make([]metav1.Object, 0, len(deployments.Items))
+		for i := range deployments.Items {
+			objects = append(objects, &deployments.Items[i])
+		}
+		appendState("Deployment", objects)
+	}
+
+	services := &corev1.ServiceList{}
+	if err := k8sClient.List(ctx, services, client.InNamespace(testNs)); err != nil {
+		state = append(state, fmt.Sprintf("- unable to list Services: %v", err))
+	} else {
+		objects := make([]metav1.Object, 0, len(services.Items))
+		for i := range services.Items {
+			objects = append(objects, &services.Items[i])
+		}
+		appendState("Service", objects)
+	}
+
+	configMaps := &corev1.ConfigMapList{}
+	if err := k8sClient.List(ctx, configMaps, client.InNamespace(testNs)); err != nil {
+		state = append(state, fmt.Sprintf("- unable to list ConfigMaps: %v", err))
+	} else {
+		objects := make([]metav1.Object, 0, len(configMaps.Items))
+		for i := range configMaps.Items {
+			objects = append(objects, &configMaps.Items[i])
+		}
+		appendState("ConfigMap", objects)
+	}
+
+	namespace := &corev1.Namespace{}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: testNs}, namespace); err != nil && !apierrors.IsNotFound(err) {
+		state = append(state, fmt.Sprintf("- unable to get Namespace %s: %v", testNs, err))
+	} else if err == nil {
+		deleting := namespace.GetDeletionTimestamp() != nil
+		state = append(state, fmt.Sprintf("- Namespace %s finalizers=%v deleting=%t", namespace.Name, namespace.Finalizers, deleting))
+	}
+
+	if len(state) == 0 {
+		return "- none"
+	}
+	return strings.Join(state, "\n")
 }
 
 func environmentValue(name string) string {
@@ -129,7 +242,7 @@ var _ = Describe("Homer Operator E2E Tests", func() {
 	})
 
 	AfterEach(func() {
-		cleanupE2ETest(k8sClient, ctx, testNs)
+		Expect(cleanupE2ETest(k8sClient, ctx, testNs)).To(Succeed())
 	})
 
 	Context("When deploying Homer Operator", func() {
@@ -344,6 +457,16 @@ var _ = Describe("Homer Operator E2E Tests", func() {
 			By("Deleting Dashboard")
 			err = k8sClient.Delete(ctx, dashboard)
 			Expect(err).NotTo(HaveOccurred())
+
+			By("Waiting for Dashboard finalizer removal")
+			Eventually(func() bool {
+				deletedDashboard := &homerv1alpha1.Dashboard{}
+				err := k8sClient.Get(ctx, types.NamespacedName{
+					Name:      "e2e-cleanup-dashboard",
+					Namespace: testNs,
+				}, deletedDashboard)
+				return apierrors.IsNotFound(err)
+			}, time.Minute*2, time.Second*5).Should(BeTrue())
 
 			By("Waiting for Deployment to be deleted")
 			Eventually(func() bool {

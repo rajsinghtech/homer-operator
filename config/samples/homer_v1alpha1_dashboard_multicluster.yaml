@@ -116,7 +116,7 @@ spec:
       cluster: "staging"
       environment: "staging"
 
-    # Optional: Cluster-specific selectors (override main selectors)
+    # Optional: Cluster-specific selectors (apply only to this cluster).
     ingressSelector:
       matchLabels:
         visibility: "public"
@@ -151,7 +151,9 @@ spec:
       matchLabels:
         gateway-class: "production-gateway"
 
-  # Global filters (apply to all clusters including local)
+  # Dashboard-level Ingress/HTTPRoute/Gateway selectors apply only to the local
+  # cluster. Remote clusters use their own selectors above. An omitted remote
+  # selector includes all resources of that type.
   ingressSelector:
     matchLabels:
       dashboard: "enabled"
@@ -164,7 +166,9 @@ spec:
     matchLabels:
       gateway: "public"
 
-  # Domain filters apply to all clusters
+  # Dashboard-level domain filters apply only to the local cluster. Configure
+  # domainFilters under each remote cluster for independent remote filtering;
+  # omission there includes all remote hostnames.
   domainFilters:
   - "example.com"
   - "example.org"
@@ -206,7 +210,7 @@ rules:
   resources: ["httproutes", "gateways"]
   verbs: ["get", "list", "watch"]
 - apiGroups: [""]
-  resources: ["namespaces"]
+  resources: ["namespaces", "services"]
   verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -238,16 +242,16 @@ subjects:
 # apiVersion: v1
 # kind: Config
 # clusters:
-# - name: remote-cluster
+# - name: production
 #   cluster:
 #     certificate-authority-data: <CA_CERT_BASE64>
 #     server: <CLUSTER_SERVER_URL>
 # contexts:
-# - name: homer-operator
+# - name: production
 #   context:
-#     cluster: remote-cluster
+#     cluster: production
 #     user: homer-operator
-# current-context: homer-operator
+# current-context: production
 # users:
 # - name: homer-operator
 #   user:

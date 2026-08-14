@@ -5,7 +5,7 @@
   
   [![Go Report Card](https://goreportcard.com/badge/github.com/rajsinghtech/homer-operator)](https://goreportcard.com/report/github.com/rajsinghtech/homer-operator)
   [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-  [![Kubernetes](https://img.shields.io/badge/Kubernetes-v1.20+-blue.svg)](https://kubernetes.io/)
+  [![Kubernetes](https://img.shields.io/badge/Kubernetes-v1.21+-blue.svg)](https://kubernetes.io/)
 
   **Kubernetes operator for automated Homer dashboard deployment and management**
 
@@ -17,7 +17,7 @@
 ## Quick Start
 
 ### Prerequisites
-- Kubernetes cluster (v1.20+)
+- Kubernetes cluster (v1.21+; v1.23+ when enabling the optional HPA)
 - `kubectl` configured
 - Helm 3.x (recommended)
 
@@ -35,6 +35,20 @@ helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/hom
   --namespace homer-operator \
   --set operator.enableGatewayAPI=true
 ```
+
+### Install with static Kustomize
+
+The default Kustomize installation does not include a Prometheus Operator
+`ServiceMonitor`, so it can be applied to a plain Kubernetes cluster:
+
+```bash
+kubectl apply -k config/default
+```
+
+The operator metrics `Service` is included in this installation. To add the
+optional Prometheus integration, first install the Prometheus Operator and
+then apply the optional operator-plus-monitor overlay documented in
+[`config/prometheus/README.md`](config/prometheus/README.md).
 
 ### Create Your First Dashboard
 
@@ -144,6 +158,11 @@ spec:
               # Note: Configure API key reference in smart card configuration
 ```
 
+Smart-card Secrets must be in the Dashboard's namespace. Cross-namespace
+references are rejected; remote-cluster kubeconfig references under
+`spec.remoteClusters[].secretRef` are separate and may still use an explicit
+namespace.
+
 ### Custom Assets & Styling
 
 ```yaml
@@ -169,7 +188,7 @@ spec:
   homerConfig:
     title: "Custom Dashboard"
     stylesheet:
-      - "custom.css"
+      - "assets/custom.css"
 ```
 
 ### External Homer Configuration and Shared Assets
@@ -204,13 +223,16 @@ spec:
       namespace: platform-assets
 ```
 
-Asset files are staged below Homer’s `/www/assets` directory. Nested files keep
-their relative paths, while configured icon sources can be copied to Homer’s
-canonical `icons/` paths (`favicon.ico`, `apple-touch-icon.png`, and the PWA
-icon paths). When PWA support is enabled, the operator also writes
-`manifest.json`; icon paths in that manifest match the staged paths. Changing
-or replacing a cross-namespace source updates its owned mirror, and stale
-mirrors are removed when the Dashboard reference changes.
+Asset files are staged below Homer’s `/www/assets` directory. Use flat
+filenames in the referenced ConfigMap: the operator mounts ConfigMap keys at
+the asset root and does not create `items[].path` projections, so nested names
+such as `assets/tools/sample.png` are not a portable `ConfigMap` representation.
+Configured icon sources can still be copied to Homer’s canonical `icons/`
+paths (`favicon.ico`, `apple-touch-icon.png`, and the PWA icon paths). When PWA
+support is enabled, the operator also writes `manifest.json`; icon paths in
+that manifest match the staged paths. Changing or replacing a cross-namespace
+source updates its owned mirror, and stale mirrors are removed when the
+Dashboard reference changes.
 
 ---
 
@@ -222,7 +244,7 @@ Enable HTTPRoute processing for modern Kubernetes networking:
 
 ```bash
 # Install Gateway API CRDs
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/standard-install.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.3.0/standard-install.yaml
 
 # Install operator with Gateway API support
 kubectl create namespace homer-operator
@@ -346,7 +368,7 @@ spec:
     - port: 8080
 ```
 
-Service URLs are automatically generated as `http://<name>.<namespace>.svc.cluster.local:<port>`. Unlike Ingress/HTTPRoute discovery, Services are **opt-in** — they are only discovered when `serviceSelector` is specified.
+Service URLs are automatically generated as `http://<name>.<namespace>.svc.cluster.local:<port>` for local-cluster Services. Unlike Ingress/HTTPRoute discovery, Services are **opt-in** — they are only discovered when `serviceSelector` is specified. For remote-cluster Services, the operator keeps the item visible but omits that local-cluster DNS URL unless `item.homer.rajsingh.info/url` supplies an explicit reachable URL; this prevents a link that points at the wrong cluster.
 
 ### Annotation-driven Service Discovery
 
@@ -556,7 +578,7 @@ serviceMonitor:
 kubectl create namespace homer-operator
 helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator \
   --namespace homer-operator \
-  --version 1.2.2 -f values.yaml
+  --version 1.2.3 -f values.yaml
 ```
 
 ---
@@ -576,10 +598,24 @@ helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/hom
   --set serviceMonitor.enabled=true
 ```
 
+For the static Kustomize installation, `config/default` includes the
+authenticated metrics Service but intentionally omits `ServiceMonitor`.
+`kubectl apply -k config/prometheus` adds the monitor only after the
+Prometheus Operator CRD is installed. The overlay cannot infer the Prometheus
+service account, so see its README for the intentional manual binding to
+`homer-operator-metrics-reader`.
+
 **Available Metrics:**
 - `controller_runtime_reconcile_total` - Reconciliation counter
 - `controller_runtime_reconcile_time_seconds` - Reconciliation duration
 - Standard controller-runtime metrics for monitoring operator health
+
+Secure metrics use controller-runtime TokenReview/SubjectAccessReview
+authorization. When `serviceMonitor.enabled=true` and secure metrics remain
+enabled, the Helm chart creates a dedicated scraper ServiceAccount and token
+Secret, grants it `/metrics` access, and references that Secret from the
+ServiceMonitor. Disabling secure metrics switches the ServiceMonitor to HTTP
+and removes the auth resources.
 
 ### Health Endpoints
 
@@ -620,7 +656,7 @@ The operator supports both simultaneously for zero-downtime migration:
 
 2. **Phase 2**: Install Gateway API CRDs and create Gateway resources
    ```bash
-   kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.0.0/standard-install.yaml
+   kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.3.0/standard-install.yaml
    ```
 
 3. **Phase 3**: Migrate services to HTTPRoute resources
@@ -710,16 +746,16 @@ cat > remote-kubeconfig.yaml <<EOF
 apiVersion: v1
 kind: Config
 clusters:
-- name: remote-cluster
+- name: production
   cluster:
     certificate-authority-data: ${CA_CERT}
     server: ${SERVER}
 contexts:
-- name: remote-cluster
+- name: production
   context:
-    cluster: remote-cluster
+    cluster: production
     user: homer-reader
-current-context: remote-cluster
+current-context: production
 users:
 - name: homer-reader
   user:
@@ -766,7 +802,7 @@ spec:
         cluster: production
         region: us-east-1
 
-      # Optional: Apply label selectors
+      # Optional: Apply label selectors to this remote cluster
       ingressSelector:
         matchLabels:
           environment: production
@@ -827,7 +863,8 @@ spec:
         matchLabels:
           homer.rajsingh.info/enabled: "true"
 
-      # Per-cluster domain filtering (optional) - overrides global domainFilters for this cluster
+      # Per-cluster domain filtering (optional); remote clusters do not inherit
+      # the dashboard-level domainFilters.
       domainFilters:
         - "prod.example.com"     # Only production domains from this cluster
         - "api.example.com"      # API endpoints
@@ -858,8 +895,12 @@ Services from remote clusters can also get badge tags with the cluster name when
 
 **Important:** Tags are only added when `cluster-tagstyle` is explicitly configured. You can use both suffix and tags, or just one approach for cluster identification.
 
-**Per-Cluster Domain Filtering:**
-Each cluster can have independent `domainFilters` to control which services are discovered. If not specified for a remote cluster, no domain filtering is applied (all resources pass through). Dashboard-level `spec.domainFilters` only applies to the local cluster.
+**Multi-cluster selector and domain semantics:**
+
+- Dashboard-level `ingressSelector`, `httpRouteSelector`, and `gatewaySelector` apply only to the local cluster. Remote clusters use their corresponding selector, when configured; omission includes all resources of that type.
+- A remote `serviceSelector` overrides the dashboard-level `serviceSelector`. If omitted, the dashboard-level service selector is inherited. Services remain opt-in: without either selector, no Services are discovered.
+- Dashboard-level `domainFilters` apply only to the local cluster. Remote clusters use their own `domainFilters`; omission includes all remote Ingress and HTTPRoute hostnames.
+- `namespaceFilter` limits discovery in that remote cluster. An empty or omitted filter means all namespaces allowed by the remote RBAC rules.
 
 ### Status Monitoring
 
@@ -906,16 +947,12 @@ kubectl logs -n <operator-namespace> deployment/<operator-deployment>
 
 ### Cluster Metadata
 
-Resources discovered from remote clusters are automatically enriched with metadata:
-
-**Labels:**
-- `homer.rajsingh.info/cluster: <cluster-name>`
-- User-defined labels from `clusterLabels`
-
-**Annotations:**
-- `homer.rajsingh.info/source-cluster: <cluster-name>`
-
-This allows filtering and grouping services by cluster in your dashboards.
+Resources discovered through the multi-cluster path carry the source cluster
+in the `homer.rajsingh.info/cluster` annotation. Remote resources also receive
+the user-defined `clusterLabels` as Kubernetes labels; the operator does not
+create a separate `homer.rajsingh.info/source-cluster` annotation. The source
+annotation is used internally for deterministic item cleanup and for optional
+cluster suffixes/tags in the generated Homer configuration.
 
 ### Security Considerations
 
@@ -974,10 +1011,12 @@ make deploy IMG=your-registry/homer-operator:dev
 # Run unit tests
 make test
 
-# Run the black-box suite against the documented Helm installation
+# Run the black-box suite against a dedicated, isolated cluster
+E2E_KUBECONFIG=$PWD/.kube/homer-operator-e2e \
 make test-e2e
 
 # For the default Kustomize installation, override the operator location
+E2E_KUBECONFIG=$PWD/.kube/homer-operator-e2e \
 E2E_OPERATOR_NAMESPACE=homer-operator-system \
 E2E_OPERATOR_DEPLOYMENT=homer-operator-controller-manager \
 make test-e2e
@@ -1001,6 +1040,8 @@ This project is licensed under the [Apache License 2.0](LICENSE).
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=rajsinghtech/homer-operator&type=Date)](https://star-history.com/#rajsinghtech/homer-operator&Date)
+
+Release notes are published in [GitHub Releases](https://github.com/rajsinghtech/homer-operator/releases).
 
 ---
 
