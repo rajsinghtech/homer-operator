@@ -599,7 +599,9 @@ func (m *ClusterManager) discoverClusterHTTPRoutes(ctx context.Context, cluster 
 			if clusterHTTPRoutes.Items[i].Annotations == nil {
 				clusterHTTPRoutes.Items[i].Annotations = make(map[string]string)
 			}
-			clusterHTTPRoutes.Items[i].Annotations["homer.rajsingh.info/cluster"] = cluster.Name
+			// Preserve the source cluster on the in-memory copy so the dashboard
+			// rebuild does not resolve a remote route against local Gateways.
+			clusterHTTPRoutes.Items[i].Annotations[httpRouteClusterAnnotation] = cluster.Name
 
 			// Store domain filters as annotation so Homer config generator knows which hostnames to show
 			if len(domainFilters) > 0 {

@@ -1321,7 +1321,13 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 			// Create a copy to avoid mutating the original
 			httprouteCopy := httproute.DeepCopy()
 			httprouteCopy.Annotations = r.mergeNamespaceAnnotations(ctx, httproute.Namespace, httproute.Annotations)
-			setHTTPRouteProtocol(ctx, r.Client, httprouteCopy)
+			// Remote discovery already resolved this route against its source
+			// cluster's Gateway objects. Re-resolving it with the local reader can
+			// select an unrelated same-name local Gateway and overwrite the source
+			// protocol.
+			if shouldResolveHTTPRouteProtocolLocally(httprouteCopy) {
+				setHTTPRouteProtocol(ctx, r.Client, httprouteCopy)
+			}
 			mergedHTTPRoutes[i] = *httprouteCopy
 		}
 
