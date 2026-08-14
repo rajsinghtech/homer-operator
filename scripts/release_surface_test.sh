@@ -315,7 +315,11 @@ for publication_marker in \
     'primaryPackagePurpose' \
     'versionInfo' \
     'CONTAINER' \
-    "kubeconform -strict -ignore-missing-schemas -summary \"\$installer_path\""; do
+    "kubeconform -strict -ignore-missing-schemas -summary \"\$installer_path\"" \
+    'for attempt in 1 2 3 4 5; do' \
+    'if promoted_inspect=' \
+    'sleep 2' \
+    'after 5 inspection attempts'; do
     if ! grep -Fq -- "$publication_marker" "$RELEASE_WORKFLOW"; then
         echo "release workflow is missing publication verification: $publication_marker" >&2
         exit 1

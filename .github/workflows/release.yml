@@ -575,9 +575,24 @@ jobs:
                 --tag "$tag" \
                 "${STAGING_TAG}@${DIGEST}"
 
-              promoted_digest="$(docker buildx imagetools inspect "$tag" | awk '$1 == "Digest:" { print $2; exit }')"
+              promoted_digest=""
+              promoted_inspect=""
+              for attempt in 1 2 3 4 5; do
+                promoted_digest=""
+                if promoted_inspect="$(docker buildx imagetools inspect "$tag" 2>&1)"; then
+                  promoted_digest="$(awk '$1 == "Digest:" { print $2; exit }' <<< "$promoted_inspect")"
+                  if [[ "$promoted_digest" == "$DIGEST" ]]; then
+                    break
+                  fi
+                else
+                  echo "Promotion inspection attempt ${attempt}/5 failed for ${tag}: ${promoted_inspect}" >&2
+                fi
+                if [[ "$attempt" -lt 5 ]]; then
+                  sleep 2
+                fi
+              done
               if [[ "$promoted_digest" != "$DIGEST" ]]; then
-                echo "Promoted tag ${tag} resolved to ${promoted_digest}, expected ${DIGEST}" >&2
+                echo "Promoted tag ${tag} did not resolve to ${DIGEST} after 5 inspection attempts; last result: ${promoted_inspect}" >&2
                 exit 1
               fi
 
