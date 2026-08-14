@@ -307,9 +307,12 @@ for publication_marker in \
     'chart_digest=' \
     'OCI chart digest' \
     "charts/homer-operator@\${{ needs.release-helm.outputs.chart_digest }}" \
-    'jq -e --arg digest' \
+    'jq -e --arg image' \
+    '--arg digest' \
     'upload-artifact: false' \
-    'documentNamespace' \
+    'primaryPackagePurpose' \
+    'versionInfo' \
+    'CONTAINER' \
     "kubeconform -strict -ignore-missing-schemas -summary \"\$installer_path\""; do
     if ! grep -Fq -- "$publication_marker" "$RELEASE_WORKFLOW"; then
         echo "release workflow is missing publication verification: $publication_marker" >&2

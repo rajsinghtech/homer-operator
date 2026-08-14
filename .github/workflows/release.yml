@@ -505,17 +505,20 @@ jobs:
       - name: Validate SBOM
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         run: |
           set -euo pipefail
           test -s sbom.spdx.json
-          jq -e --arg digest "$DIGEST" '
+          jq -e --arg image "$IMAGE_REF" --arg digest "$DIGEST" '
             (.spdxVersion | type == "string" and startswith("SPDX-")) and
             (.SPDXID == "SPDXRef-DOCUMENT") and
             (.packages | type == "array") and
-            (((.name // "") | contains($digest)) or
-             ((.documentNamespace // "") | contains($digest)))
+            any(.packages[]?;
+              ((.name // "") == $image) and
+              ((.versionInfo // "") == $digest) and
+              ((.primaryPackagePurpose // "") == "CONTAINER"))
           ' sbom.spdx.json >/dev/null
-          echo "Validated SPDX JSON SBOM for image digest ${DIGEST}"
+          echo "Validated SPDX JSON SBOM for ${IMAGE_REF}@${DIGEST}"
 
       # Repository tag protection/immutability is required for race-free
       # publication; this check is immediately before artifact handoff.
@@ -792,6 +795,7 @@ jobs:
             - Retain last-good remote discovery results only for the same cluster identity and discovery configuration; invalidate them on selector, label, namespace, Secret, or disabled-state changes, fail closed on transient discovery/protocol read failures, and treat missing remote APIs as authoritative empty results.
             - Propagate remote discovery, Gateway-selector, and Gateway protocol read failures instead of silently dropping or downgrading routes, persist connection errors and last-known resource counts in Dashboard status, and retain the last successful connection time across disconnects.
             - Remove obsolete kube-rbac-proxy resources, secure metrics with the required RBAC, gate metrics resources consistently, and publish release charts with immutable image digests.
+            - Validate the generated SPDX SBOM against Syft's container package name, purpose, and exact published image digest before attaching it to the GitHub Release.
             - Generate a status-enabled CRD, prevent duplicate CRDs in installer manifests, and verify Kustomize, Helm, generated manifests, metrics, CRD synchronization, image signatures, and the published chart in CI.
             - Publish and verify a signed SLSA container provenance attestation alongside the image.
             - Correct Helm uninstall and installation documentation, validate release tags as `vMAJOR.MINOR.PATCH`, and remove obsolete tag-handling paths from the development chart workflow.
