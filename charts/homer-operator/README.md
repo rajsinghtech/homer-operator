@@ -172,10 +172,18 @@ spec:
 ```
 
 The `services` and `pages` blocks follow upstream Homer's direct configuration
-format. Legacy `parameters` blocks remain supported for existing dashboards.
-Item request headers use the upstream `headers` object form. Secret-backed
-headers configured under `spec.secrets.headers` are injected into each item as
-that same `headers` object.
+format. Legacy `parameters` blocks remain supported for existing dashboards and
+annotation/discovery compatibility. In legacy parameter data, use `headers` or
+`headers.<Header-Name>`; legacy `customHeaders.<Header-Name>` annotation/object
+notation is also normalized to Homer's `item.headers` object. A bare
+`customHeaders` value in an item `parameters` map is not interpreted as a
+header map.
+
+Secret-backed headers configured under `spec.secrets.headers` are resolved for
+configured smart-card service items (items with a `type`) in the Dashboard's
+Homer configuration. They are not automatically applied to items discovered
+from Ingress, HTTPRoute, or Service resources. Smart-card Secret references
+must resolve in the Dashboard's namespace.
 
 The checked-in sample at `config/samples/homer_v1alpha1_dashboard.yaml` is
 used by the Helm kind smoke test. It exercises direct Homer fields, a second
@@ -219,6 +227,13 @@ helm upgrade --install homer-operator charts/homer-operator -n homer-operator --
 ## Gateway API Support
 
 To enable Gateway API support, set `operator.enableGatewayAPI=true`. This requires Gateway API CRDs to be installed in your cluster.
+
+HTTPRoute `parentRefs` without a `namespace` refer to a Gateway in the
+HTTPRoute's namespace. Gateway listeners default to accepting routes from
+their own namespace (`allowedRoutes.namespaces.from: Same`). For a
+cross-namespace attachment, set `parentRefs.namespace` and configure the
+Gateway listener's `allowedRoutes.namespaces` with `All` or an appropriate
+`Selector`.
 
 ## Monitoring
 

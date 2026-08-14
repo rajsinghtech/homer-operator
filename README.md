@@ -110,6 +110,12 @@ kubectl apply -f dashboard.yaml
 upstream Homer. The older `parameters`/annotation-oriented form remains
 supported for existing dashboards and discovery workflows.
 
+For legacy parameter data, use `headers` or `headers.<Header-Name>`; these are
+normalized to Homer's `item.headers` object. Legacy
+`item.homer.rajsingh.info/customHeaders.<Header-Name>` annotations are also
+normalized to `headers`. A bare `customHeaders` value inside an item
+`parameters` map is not interpreted as a header map.
+
 ---
 
 ## Configuration Examples
@@ -175,10 +181,14 @@ spec:
               libraryType: "series" # music, series, or movies
 ```
 
-Smart-card Secrets must be in the Dashboard's namespace. Cross-namespace
-references are rejected; remote-cluster kubeconfig references under
-`spec.remoteClusters[].secretRef` are separate and may still use an explicit
-namespace.
+Smart-card Secrets must be in the Dashboard's namespace. Secret references are
+resolved for configured smart-card service items (items with a `type`) in
+`homerConfig.services`; they are not applied to items discovered from Ingress,
+HTTPRoute, or Service resources. For custom headers, use
+`spec.secrets.headers`; resolved values are emitted in the item's upstream
+`headers` object. Cross-namespace references are rejected; remote-cluster
+kubeconfig references under `spec.remoteClusters[].secretRef` are separate and
+may still use an explicit namespace.
 
 ### Custom Assets & Styling
 
@@ -269,6 +279,14 @@ helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/hom
   --namespace homer-operator \
   --set operator.enableGatewayAPI=true
 ```
+
+HTTPRoute `parentRefs` without a `namespace` refer to a Gateway in the
+HTTPRoute's namespace. Gateway listeners default to accepting routes from
+their own namespace (`allowedRoutes.namespaces.from: Same`). For a
+cross-namespace attachment, set `parentRefs.namespace` and configure the
+Gateway listener's `allowedRoutes.namespaces` with `All` or an appropriate
+`Selector`. The checked-in example at `homer/httpRouteExample.yaml` keeps the
+HTTPRoute and Gateway in `default` and relies on the same-namespace default.
 
 #### Advanced Filtering Options
 
@@ -540,7 +558,9 @@ The system automatically detects parameter types using intelligent patterns:
 
 - **Booleans**: Parameters ending in `_enabled`, `_flag` or named `usecredentials`, `legacyapi`, `hide`
 - **Integers**: Parameters ending in `Interval`, `_value`, `Value` or named `timeout`, `limit`
-- **Objects**: Parameters named `headers` and `mapping`; `customHeaders` is a legacy alias for `headers`
+- **Objects**: `headers` and `mapping` use object notation; legacy
+  `customHeaders.<Header-Name>` annotations are normalized to `headers`, while
+  parameter maps should use `headers` or `headers.<Header-Name>`
 - **Arrays**: Comma-separated values (automatically cleaned and trimmed)
 - **Validation**: Built-in validation for `url`, `target`, numeric values
 

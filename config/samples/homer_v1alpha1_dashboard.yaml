@@ -9,7 +9,7 @@ metadata:
     tier: frontend
 spec:
   replicas: 2
-  
+
   # DNS Configuration (optional)
   # Controls DNS policy and configuration for dashboard pods
   # dnsPolicy: "ClusterFirst"  # ClusterFirst, ClusterFirstWithHostNet, Default, None
@@ -22,7 +22,7 @@ spec:
   #       {"name": "timeout", "value": "5"}
   #     ]
   #   }
-  
+
   # Resource Requirements (optional)
   # Define CPU and memory limits/requests for the Homer container
   # resources:
@@ -66,12 +66,12 @@ spec:
         card-shadow: none
         link: "#e2b185"            # Light warm tan (for contrast in dark mode)
         link-hover: "#f5cda3"      # Brighter hover tan
-    
+
     # Default layout settings
     defaults:
       layout: "columns"
       colorTheme: "auto"
-    
+
     # Enhanced links with targets
     links:
     - name: "Homer-Operator GitHub"
@@ -113,7 +113,7 @@ spec:
           tag: "network"
           tagstyle: "is-info"
           url: "https://login.tailscale.com/admin/machines"
-    
+
     - parameters:
         name: "Development Tools"
         icon: "fas fa-code"
@@ -134,7 +134,7 @@ spec:
           tagstyle: "is-primary"
           url: "https://argocd.rajsingh.info"
           target: "_blank"
-  
+
     - parameters:
         name: "Home"
         icon: "fas fa-home"
@@ -155,7 +155,7 @@ spec:
         items:
         - name: "Example"
           url: "https://example.com"
-  
+
   # Custom assets and PWA configuration
   # Enables custom branding, icons, and Progressive Web App features
   # assets:
@@ -176,7 +176,7 @@ spec:
   #     backgroundColor: "#ffffff"               # Background color for splash screen
   #     display: "standalone"                    # Display mode: standalone, fullscreen, minimal-ui, browser
   #     startUrl: "/"                            # Starting URL when launched from home screen
-  
+
   # Secret references for smart cards and authentication
   # Enables secure storage of sensitive data for Homer smart cards
   # Smart-card Secrets must be created in this Dashboard's namespace.
@@ -193,16 +193,17 @@ spec:
   #   username:
   #     name: "dashboard-secrets"
   #     key: "username"
-  #   headers:  # Injected into Homer items as item.headers objects
+  #   headers:  # Resolved into item.headers for configured smart-card service items
+  #             # (discovered Ingress/HTTPRoute/Service items are not modified)
   #     Authorization:
   #       name: "dashboard-secrets"
   #       key: "bearer-token"
   #     X-API-Key:
   #       name: "dashboard-secrets"
   #       key: "api-key"
-  
+
   # Optional selectors and filters for controlling which resources are included
-  
+
   # Gateway selector for filtering HTTPRoutes by Gateway labels (optional)
   # If not specified, all HTTPRoutes matching annotation criteria are included
   gatewaySelector:
@@ -245,7 +246,7 @@ spec:
     - "rajsingh.info"
   #   - "mycompany.com"
   #   - "internal.local"
-  
+
   # Service Grouping Configuration (optional)
   # Controls how discovered services are organized into groups
   # serviceGrouping:
@@ -267,11 +268,11 @@ spec:
   #     condition:
   #       "app.kubernetes.io/component": "database"
   #     priority: 1
-  
+
   # Validation Level (optional)
   # Controls strictness of annotation validation
   # validationLevel: "warn"  # strict, warn, none
-  
+
   # Health Check Configuration (optional)
   # Enables automatic health checking of discovered services
   # healthCheck:
@@ -283,7 +284,7 @@ spec:
   #   headers:               # Custom headers for health requests
   #     Authorization: "Bearer token"
   #     X-Health-Check: "true"
-  
+
   # Advanced Features Configuration (optional)
   # Enables advanced dashboard features and optimizations
   # advanced:
@@ -296,4 +297,4 @@ spec:
   # ConfigMap for Homer configuration
   # configMap:
   #   name: "dashboard-sample-homer-config"
-  #   key: "config.yml" 
+  #   key: "config.yml"
