@@ -150,7 +150,7 @@ fi
 
 if ! awk '
     /^  release-helm:/ { in_job = 1; next }
-    in_job && /if:.*startsWith\(github\.ref, .refs\/tags\// { found = 1 }
+    in_job && /if:.*needs\.verify-release\.result == .success./ { found = 1 }
     in_job && /^  [A-Za-z0-9_-]+:/ { job_done = 1; exit found ? 0 : 1 }
     END { exit found && (job_done || in_job) ? 0 : 1 }
 ' "$RELEASE_WORKFLOW"; then
@@ -273,6 +273,51 @@ fi
 
 if [ -e "$REPO_ROOT/CHANGELOG.md" ]; then
     echo "release notes must remain GitHub Releases only; remove CHANGELOG.md" >&2
+    exit 1
+fi
+
+if grep -Eq '^  workflow_dispatch:|^      - main$' "$RELEASE_WORKFLOW"; then
+    echo "versioned release workflow must not publish development images" >&2
+    exit 1
+fi
+
+DEV_IMAGE_WORKFLOW="$REPO_ROOT/.github/workflows/dev-image.yml"
+for development_marker in \
+    'name: Development Image' \
+    "github.ref == 'refs/heads/main'" \
+    'type=raw,value=main' \
+    'type=raw,value=latest' \
+    'packages: write' \
+    'attestations: write' \
+    '.github/workflows/dev-image.yml@refs/heads/main$'; do
+    if ! grep -Fq -- "$development_marker" "$DEV_IMAGE_WORKFLOW"; then
+        echo "development image workflow is missing safety marker: $development_marker" >&2
+        exit 1
+    fi
+done
+
+if ! sed -n '/^  verify-release-e2e:/,/^  build-image:/p' "$RELEASE_WORKFLOW" |
+    grep -Fq '      contents: read'; then
+    echo "versioned release E2E job does not have read-only contents permissions" >&2
+    exit 1
+fi
+
+for publication_marker in \
+    "cmp --silent \"\$local_chart\" \"\$pulled_chart\"" \
+    'chart_digest=' \
+    'OCI chart digest' \
+    'jq -e --arg digest' \
+    'upload-artifact: false' \
+    'documentNamespace' \
+    "kubeconform -strict -ignore-missing-schemas -summary \"\$installer_path\""; do
+    if ! grep -Fq -- "$publication_marker" "$RELEASE_WORKFLOW"; then
+        echo "release workflow is missing publication verification: $publication_marker" >&2
+        exit 1
+    fi
+done
+
+if [[ "$(grep -c 'Final tag consistency check before' "$RELEASE_WORKFLOW")" -lt 7 ]]; then
+    echo "release workflow is missing final tag checks before publication steps" >&2
     exit 1
 fi
 

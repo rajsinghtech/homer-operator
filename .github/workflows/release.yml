@@ -2,16 +2,15 @@ name: Release
 
 on:
   push:
-    branches:
-      - main
     tags:
       - 'v*.*.*'
-  workflow_dispatch:
 
 concurrency:
-  # A tag can be moved while a workflow is running.  Cancel the older run
-  # for that ref, and let the explicit tag check below reject any run that
-  # still survives cancellation with a stale commit.
+  # Release tags must be protected/immutable in repository settings for
+  # race-free publication. These checks narrow the race for mutable refs, but
+  # a workflow cannot atomically read a tag and publish all of its artifacts.
+  # Cancel the older run for a ref, and let the explicit checks reject runs
+  # that survive cancellation with a stale commit.
   group: release-${{ github.ref }}
   cancel-in-progress: true
 
@@ -149,6 +148,8 @@ jobs:
     timeout-minutes: 15
     needs: verify-release
     if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: read
     env:
       NAMESPACE: homer-operator-system
       DASHBOARD_NAMESPACE: public
@@ -248,7 +249,7 @@ jobs:
     name: Build and Push Image
     runs-on: ubuntu-latest
     needs: [verify-release, verify-release-e2e]
-    if: ${{ always() && (!startsWith(github.ref, 'refs/tags/') || (needs.verify-release.result == 'success' && needs.verify-release-e2e.result == 'success')) }}
+    if: ${{ needs.verify-release.result == 'success' && needs.verify-release-e2e.result == 'success' }}
     permissions:
       contents: read
       packages: write
@@ -265,7 +266,6 @@ jobs:
           fetch-depth: 0
 
       - name: Reject stale release tag
-        if: startsWith(github.ref, 'refs/tags/')
         env:
           EXPECTED_SHA: ${{ github.sha }}
         run: |
@@ -279,23 +279,17 @@ jobs:
             exit 1
           fi
 
-      - name: Extract version
+      - name: Extract release version
         id: version
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/* && ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          set -euo pipefail
+          if [[ ! "$GITHUB_REF" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Release tags must match vMAJOR.MINOR.PATCH; got $GITHUB_REF_NAME" >&2
             exit 1
           fi
-          if [[ $GITHUB_REF == refs/tags/* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/v}"
-            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-            echo "is_release=true" >> "$GITHUB_OUTPUT"
-            echo "Version: $VERSION"
-          else
-            echo "version=0.0.0-latest" >> "$GITHUB_OUTPUT"
-            echo "is_release=false" >> "$GITHUB_OUTPUT"
-            echo "Version: 0.0.0-latest (development)"
-          fi
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -322,6 +316,22 @@ jobs:
             type=raw,value=latest
             type=sha,prefix=sha-
 
+      - name: Final tag consistency check before image publication
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Repository tag protection/immutability is still required for a
+          # race-free release; this is the last observable check before push.
+          git ls-remote --exit-code --refs origin "refs/tags/${GITHUB_REF_NAME}" >/dev/null
+          git fetch --force --no-tags origin \
+            "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          tag_sha="$(git rev-parse --verify "refs/tags/${GITHUB_REF_NAME}^{commit}")"
+          if [[ "$tag_sha" != "$EXPECTED_SHA" ]]; then
+            echo "Refusing to publish image for stale tag ${GITHUB_REF_NAME}: ${tag_sha} != ${EXPECTED_SHA}" >&2
+            exit 1
+          fi
+
       - name: Build and push Docker image
         id: build
         uses: docker/build-push-action@v6
@@ -345,6 +355,31 @@ jobs:
           echo "✅ Docker build successful"
           echo "Digest: ${{ steps.build.outputs.digest }}"
 
+      - name: Install kubeconform for installer validation
+        run: |
+          set -euo pipefail
+          KUBECONFORM_VERSION=0.6.7
+          kubeconform_archive="$RUNNER_TEMP/kubeconform-linux-amd64.tar.gz"
+          curl -fsSL "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            -o "$kubeconform_archive"
+          echo '95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73  '"$kubeconform_archive" | sha256sum -c -
+          tar -xz -C "$RUNNER_TEMP" -f "$kubeconform_archive" kubeconform
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Final tag consistency check before provenance publication
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git ls-remote --exit-code --refs origin "refs/tags/${GITHUB_REF_NAME}" >/dev/null
+          git fetch --force --no-tags origin \
+            "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          tag_sha="$(git rev-parse --verify "refs/tags/${GITHUB_REF_NAME}^{commit}")"
+          if [[ "$tag_sha" != "$EXPECTED_SHA" ]]; then
+            echo "Refusing to publish provenance for stale tag ${GITHUB_REF_NAME}: ${tag_sha} != ${EXPECTED_SHA}" >&2
+            exit 1
+          fi
+
       - name: Attest container provenance
         uses: actions/attest-build-provenance@v2
         with:
@@ -365,7 +400,6 @@ jobs:
             --bundle-from-oci
 
       - name: Prepare digest-pinned installer
-        if: startsWith(github.ref, 'refs/tags/')
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
           VERSION: ${{ steps.version.outputs.version }}
@@ -384,10 +418,26 @@ jobs:
             echo "Digest-pinned installer does not contain the release image" >&2
             exit 1
           fi
+          kubeconform -strict -ignore-missing-schemas -summary "$installer_path"
           echo "Created digest-pinned installer: ${installer_path}"
 
+      # Repository tag protection/immutability is required for race-free
+      # publication; this check is immediately before artifact handoff.
+      - name: Final tag consistency check before installer publication
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git ls-remote --exit-code --refs origin "refs/tags/${GITHUB_REF_NAME}" >/dev/null
+          git fetch --force --no-tags origin \
+            "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          tag_sha="$(git rev-parse --verify "refs/tags/${GITHUB_REF_NAME}^{commit}")"
+          if [[ "$tag_sha" != "$EXPECTED_SHA" ]]; then
+            echo "Refusing to publish installer for stale tag ${GITHUB_REF_NAME}: ${tag_sha} != ${EXPECTED_SHA}" >&2
+            exit 1
+          fi
+
       - name: Upload version-specific installer
-        if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v4
         with:
           name: installer-${{ github.ref_name }}
@@ -397,6 +447,20 @@ jobs:
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3.9.2
+
+      - name: Final tag consistency check before signature publication
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git ls-remote --exit-code --refs origin "refs/tags/${GITHUB_REF_NAME}" >/dev/null
+          git fetch --force --no-tags origin \
+            "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          tag_sha="$(git rev-parse --verify "refs/tags/${GITHUB_REF_NAME}^{commit}")"
+          if [[ "$tag_sha" != "$EXPECTED_SHA" ]]; then
+            echo "Refusing to publish signatures for stale tag ${GITHUB_REF_NAME}: ${tag_sha} != ${EXPECTED_SHA}" >&2
+            exit 1
+          fi
 
       - name: Sign container image
         env:
@@ -417,7 +481,7 @@ jobs:
           TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           set -euo pipefail
-          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@.*"
+          identity="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$"
           while IFS= read -r tag; do
             if [[ -n "$tag" ]]; then
               echo "Verifying: $tag@${DIGEST}"
@@ -434,6 +498,39 @@ jobs:
           image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
           format: spdx-json
           output-file: sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Validate SBOM
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          test -s sbom.spdx.json
+          jq -e --arg digest "$DIGEST" '
+            (.spdxVersion | type == "string" and startswith("SPDX-")) and
+            (.SPDXID == "SPDXRef-DOCUMENT") and
+            (.packages | type == "array") and
+            (((.name // "") | contains($digest)) or
+             ((.documentNamespace // "") | contains($digest)))
+          ' sbom.spdx.json >/dev/null
+          echo "Validated SPDX JSON SBOM for image digest ${DIGEST}"
+
+      # Repository tag protection/immutability is required for race-free
+      # publication; this check is immediately before artifact handoff.
+      - name: Final tag consistency check before SBOM publication
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git ls-remote --exit-code --refs origin "refs/tags/${GITHUB_REF_NAME}" >/dev/null
+          git fetch --force --no-tags origin \
+            "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          tag_sha="$(git rev-parse --verify "refs/tags/${GITHUB_REF_NAME}^{commit}")"
+          if [[ "$tag_sha" != "$EXPECTED_SHA" ]]; then
+            echo "Refusing to publish SBOM for stale tag ${GITHUB_REF_NAME}: ${tag_sha} != ${EXPECTED_SHA}" >&2
+            exit 1
+          fi
 
       - name: Upload SBOM
         uses: actions/upload-artifact@v4
@@ -447,10 +544,12 @@ jobs:
     needs: [build-image, verify-release]
     # Development chart publication is handled by helm-release.yml. This job
     # must only publish the chart that belongs to a versioned release tag.
-    if: ${{ startsWith(github.ref, 'refs/tags/') && needs.verify-release.result == 'success' }}
+    if: ${{ needs.build-image.result == 'success' && needs.verify-release.result == 'success' }}
     permissions:
       contents: read
       packages: write
+    outputs:
+      chart_digest: ${{ steps.publish-chart.outputs.chart_digest }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -520,33 +619,61 @@ jobs:
           grep -F "image: $EXPECTED_IMAGE" rendered-chart.yaml
           echo "✅ Updated chart validation passed"
 
-      - name: Package and Push Helm Chart
+      - name: Package Helm Chart
+        id: package-chart
         run: |
           VERSION="${{ needs.build-image.outputs.version }}"
-          REPO_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-
-          # Package the chart
           helm package charts/homer-operator --destination ./packaged-charts
+          test -s "./packaged-charts/homer-operator-${VERSION}.tgz"
 
-          # Push to GHCR
-          helm push "./packaged-charts/homer-operator-${VERSION}.tgz" "oci://${{ env.REGISTRY }}/${REPO_NAME}/charts"
+      - name: Final tag consistency check before chart publication
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Repository tag protection/immutability is still required for a
+          # race-free release; this is the last observable check before push.
+          git ls-remote --exit-code --refs origin "refs/tags/${GITHUB_REF_NAME}" >/dev/null
+          git fetch --force --no-tags origin \
+            "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          tag_sha="$(git rev-parse --verify "refs/tags/${GITHUB_REF_NAME}^{commit}")"
+          if [[ "$tag_sha" != "$EXPECTED_SHA" ]]; then
+            echo "Refusing to publish chart for stale tag ${GITHUB_REF_NAME}: ${tag_sha} != ${EXPECTED_SHA}" >&2
+            exit 1
+          fi
 
-          # Read the pushed chart back from GHCR so a successful push also
-          # proves that the published OCI artifact is available and matches
-          # the version used by the release.
+      - name: Push and verify Helm Chart
+        id: publish-chart
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.build-image.outputs.version }}"
+          REPO_NAME="$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
+          local_chart="./packaged-charts/homer-operator-${VERSION}.tgz"
+
+          push_output="$(helm push "$local_chart" "oci://${{ env.REGISTRY }}/${REPO_NAME}/charts" 2>&1)"
+          printf '%s\n' "$push_output"
+          chart_digest="$(awk '$1 == "Digest:" { print $2; exit }' <<< "$push_output")"
+          if [[ ! "$chart_digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            echo "Helm push did not return a valid OCI digest: ${chart_digest}" >&2
+            exit 1
+          fi
+
           mkdir -p "$RUNNER_TEMP/chart-verification"
           helm pull "oci://${{ env.REGISTRY }}/${REPO_NAME}/charts/homer-operator" \
             --version "$VERSION" \
             --destination "$RUNNER_TEMP/chart-verification"
-          test -f "$RUNNER_TEMP/chart-verification/homer-operator-${VERSION}.tgz"
+          pulled_chart="$RUNNER_TEMP/chart-verification/homer-operator-${VERSION}.tgz"
+          test -s "$pulled_chart"
+          cmp --silent "$local_chart" "$pulled_chart"
+          echo "chart_digest=${chart_digest}" >> "$GITHUB_OUTPUT"
 
-          echo "✅ Chart pushed to: oci://${{ env.REGISTRY }}/${REPO_NAME}/charts/homer-operator:${VERSION}"
+          echo "✅ Chart pushed and byte-verified: oci://${{ env.REGISTRY }}/${REPO_NAME}/charts/homer-operator:${VERSION} (${chart_digest})"
 
   create-github-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
     needs: [build-image, release-helm]
-    if: startsWith(github.ref, 'refs/tags/')
+    if: ${{ needs.build-image.result == 'success' && needs.release-helm.result == 'success' }}
     permissions:
       contents: write
     steps:
@@ -579,6 +706,23 @@ jobs:
         with:
           name: installer-${{ github.ref_name }}
 
+      - name: Final tag consistency check before GitHub publication
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Repository tag protection/immutability is still required for a
+          # race-free release; this is the last observable check before the
+          # GitHub Release is created or updated.
+          git ls-remote --exit-code --refs origin "refs/tags/${GITHUB_REF_NAME}" >/dev/null
+          git fetch --force --no-tags origin \
+            "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          tag_sha="$(git rev-parse --verify "refs/tags/${GITHUB_REF_NAME}^{commit}")"
+          if [[ "$tag_sha" != "$EXPECTED_SHA" ]]; then
+            echo "Refusing to create a release for stale tag ${GITHUB_REF_NAME}: ${tag_sha} != ${EXPECTED_SHA}" >&2
+            exit 1
+          fi
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -598,6 +742,8 @@ jobs:
 
             **Digest:** `${{ needs.build-image.outputs.digest }}`
 
+            **OCI chart digest:** `${{ needs.release-helm.outputs.chart_digest }}`
+
             ### Helm Chart
             ```bash
             helm install homer-operator oci://${{ env.REGISTRY }}/${{ github.repository }}/charts/homer-operator \
@@ -608,6 +754,9 @@ jobs:
 
             ### Kubernetes Installer
             The release asset `homer-operator-${{ needs.build-image.outputs.version }}-install.yaml` is pinned to this release's operator image. The tracked `dist/install.yaml` and `deploy/operator.yaml` manifests remain development manifests that use `:main`.
+
+            ### Supply-chain artifacts
+            The attached `sbom.spdx.json` is validated SPDX JSON tied to the published image digest. The image also has keyless cosign signatures and a verified SLSA provenance attestation.
 
             ### Highlights
 
