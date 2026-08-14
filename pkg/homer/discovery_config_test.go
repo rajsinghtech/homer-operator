@@ -14,6 +14,8 @@ import (
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
+const testSecretHeaderValue = "secret-value"
+
 const probeHeaderValue = "yes"
 
 func TestCreateConfigMapWithDiscoveryConfigAppliesDashboardFeatures(t *testing.T) {
@@ -78,7 +80,7 @@ func TestSecretHeadersPropagateToDiscoveredItems(t *testing.T) {
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(&corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "credentials", Namespace: "default"},
-		Data:       map[string][]byte{"header": []byte("secret-value")},
+		Data:       map[string][]byte{"header": []byte(testSecretHeaderValue)},
 	}).Build()
 
 	config := &HomerConfig{Services: []Service{{
@@ -124,8 +126,8 @@ func TestSecretHeadersPropagateToDiscoveredItems(t *testing.T) {
 				continue
 			}
 			wantSources[item.Source] = true
-			if got := item.Headers["X-Secret"]; got != "secret-value" {
-				t.Errorf("%s header = %#v, want secret-value", item.Source, got)
+			if got := item.Headers["X-Secret"]; got != testSecretHeaderValue {
+				t.Errorf("%s header = %#v, want %s", item.Source, got, testSecretHeaderValue)
 			}
 		}
 	}
@@ -133,6 +135,68 @@ func TestSecretHeadersPropagateToDiscoveredItems(t *testing.T) {
 		if !found {
 			t.Errorf("discovered source %q was not found in %#v", source, config.Services)
 		}
+	}
+}
+
+func TestSecretHeadersApplyWithoutConfiguredFoundation(t *testing.T) {
+	config := &HomerConfig{}
+	ingress := networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "web", Namespace: "apps",
+			Annotations: map[string]string{
+				"item.homer.rajsingh.info/headers.X-Secret": "discovered",
+			},
+		},
+		Spec: networkingv1.IngressSpec{Rules: []networkingv1.IngressRule{{Host: "web.example.com"}}},
+	}
+
+	if _, err := CreateConfigMapWithDiscoveryConfig(
+		config, "dashboard", "default", networkingv1.IngressList{Items: []networkingv1.Ingress{ingress}},
+		nil, nil, &DiscoveryConfig{SecretHeaders: map[string]string{"X-Secret": testSecretHeaderValue}},
+	); err != nil {
+		t.Fatalf("create discovered config: %v", err)
+	}
+
+	if len(config.Services) != 1 || len(config.Services[0].Items) != 1 {
+		t.Fatalf("discovered config = %#v, want one service and item", config.Services)
+	}
+	if got := config.Services[0].Items[0].Headers["X-Secret"]; got != testSecretHeaderValue {
+		t.Fatalf("secret header = %#v, want %s", got, testSecretHeaderValue)
+	}
+}
+
+func TestConfiguredSecretHeadersOverrideDirectAndDiscoveredHeadersCaseInsensitively(t *testing.T) {
+	config := &HomerConfig{Services: []Service{{Items: []Item{{
+		Name:                  "configured",
+		Headers:               map[string]any{"AuThOrIzAtIoN": testSecretHeaderValue},
+		resolvedSecretHeaders: "Authorization",
+	}}}}}
+	discovered := []Item{{
+		Source:  "ingress/web",
+		Name:    "web",
+		Headers: map[string]any{"authorization": "discovered"},
+	}}
+
+	applyConfiguredSecretHeaders(config, discovered)
+	if got, ok := getHeaderValue(discovered[0].Headers, "AUTHORIZATION"); !ok || got != testSecretHeaderValue {
+		t.Fatalf("configured Secret header = %#v, want %s", got, testSecretHeaderValue)
+	}
+	if len(discovered[0].Headers) != 1 {
+		t.Fatalf("configured Secret header casing produced duplicates: %#v", discovered[0].Headers)
+	}
+
+	existing := &Item{
+		Source:  CRDSource,
+		Name:    "web",
+		Headers: map[string]any{"AUTHORIZATION": "direct"},
+	}
+	smartMergeItems(existing, &discovered[0])
+
+	if got, ok := getHeaderValue(existing.Headers, "authorization"); !ok || got != testSecretHeaderValue {
+		t.Fatalf("merged Secret header = %#v, want %s", got, testSecretHeaderValue)
+	}
+	if len(existing.Headers) != 1 {
+		t.Fatalf("merged Secret header casing produced duplicates: %#v", existing.Headers)
 	}
 }
 

@@ -70,7 +70,15 @@ func resolveHTTPRouteProtocol(ctx context.Context, reader client.Reader, route *
 			return "", err
 		}
 
-		candidate, ok, err := protocolFromGatewayListeners(ctx, reader, gateway, route, parentRef)
+		controllerName, eligible, err := gatewayEligibility(ctx, reader, gateway)
+		if err != nil {
+			return "", err
+		}
+		if !eligible {
+			continue
+		}
+
+		candidate, ok, err := protocolFromGatewayListeners(ctx, reader, gateway, route, parentRef, controllerName)
 		if err != nil {
 			return "", err
 		}
@@ -82,8 +90,8 @@ func resolveHTTPRouteProtocol(ctx context.Context, reader client.Reader, route *
 	return protocol, nil
 }
 
-func protocolFromGatewayListeners(ctx context.Context, reader client.Reader, gateway *gatewayv1.Gateway, route *gatewayv1.HTTPRoute, parentRef gatewayv1.ParentReference) (string, bool, error) {
-	accepted, statusKnown := httpRouteParentAccepted(route, parentRef)
+func protocolFromGatewayListeners(ctx context.Context, reader client.Reader, gateway *gatewayv1.Gateway, route *gatewayv1.HTTPRoute, parentRef gatewayv1.ParentReference, controllerName gatewayv1.GatewayController) (string, bool, error) {
+	accepted, statusKnown := httpRouteParentAccepted(route, parentRef, controllerName)
 	if statusKnown && !accepted {
 		return "", false, nil
 	}
@@ -105,7 +113,7 @@ func protocolFromGatewayListeners(ctx context.Context, reader client.Reader, gat
 		}
 		protocol = preferredHTTPRouteProtocol(protocol, candidate)
 	}
-	return protocol, protocol != ""
+	return protocol, protocol != "", nil
 }
 
 func preferredHTTPRouteProtocol(current, candidate string) string {
@@ -122,6 +130,12 @@ func gatewayListenerMatchesParent(ctx context.Context, reader client.Reader, gat
 	if parentRef.Port != nil && listener.Port != *parentRef.Port {
 		return false, nil
 	}
+	if len(gateway.Status.Listeners) > 0 {
+		status, ok := gatewayListenerStatus(gateway, listener.Name)
+		if !ok || !gatewayListenerStatusAllowsHTTPRoute(status) {
+			return false, nil
+		}
+	}
 	if !gatewayListenerMatchesRoute(listener, route) {
 		return false, nil
 	}
@@ -132,7 +146,92 @@ func gatewayListenerMatchesParent(ctx context.Context, reader client.Reader, gat
 	return true, nil
 }
 
+func gatewayEligibility(ctx context.Context, reader client.Reader, gateway *gatewayv1.Gateway) (gatewayv1.GatewayController, bool, error) {
+	if !conditionsAllowGateway(gateway.Status.Conditions) {
+		return "", false, nil
+	}
+
+	gatewayClass := &gatewayv1.GatewayClass{}
+	if err := reader.Get(ctx, client.ObjectKey{Name: string(gateway.Spec.GatewayClassName)}, gatewayClass); err != nil {
+		if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
+			// Unit callers, older clusters, and remote readers without
+			// GatewayClass permission may not expose the object. The Gateway's
+			// own status remains useful in those cases; resolve listeners without
+			// controller-name filtering rather than silently degrading HTTPS to
+			// HTTP.
+			return "", true, nil
+		}
+		return "", false, err
+	}
+	acceptedConditionFound := false
+	for _, condition := range gatewayClass.Status.Conditions {
+		if condition.Type != string(gatewayv1.GatewayClassConditionStatusAccepted) {
+			continue
+		}
+		acceptedConditionFound = true
+		if condition.Status != metav1.ConditionTrue {
+			return "", false, nil
+		}
+	}
+	if acceptedConditionFound && gatewayClass.Spec.ControllerName == "" {
+		return "", false, nil
+	}
+	return gatewayClass.Spec.ControllerName, true, nil
+}
+
+func conditionsAllowGateway(conditions []metav1.Condition) bool {
+	for _, condition := range conditions {
+		switch condition.Type {
+		case string(gatewayv1.GatewayConditionAccepted), string(gatewayv1.GatewayConditionProgrammed), "Ready":
+			if condition.Status != metav1.ConditionTrue {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func gatewayListenerStatus(gateway *gatewayv1.Gateway, name gatewayv1.SectionName) (gatewayv1.ListenerStatus, bool) {
+	for _, status := range gateway.Status.Listeners {
+		if status.Name == name {
+			return status, true
+		}
+	}
+	return gatewayv1.ListenerStatus{}, false
+}
+
+func gatewayListenerStatusAllowsHTTPRoute(status gatewayv1.ListenerStatus) bool {
+	for _, condition := range status.Conditions {
+		switch condition.Type {
+		case string(gatewayv1.ListenerConditionAccepted), string(gatewayv1.ListenerConditionResolvedRefs), string(gatewayv1.ListenerConditionProgrammed):
+			if condition.Status != metav1.ConditionTrue {
+				return false
+			}
+		case string(gatewayv1.ListenerConditionConflicted):
+			if condition.Status != metav1.ConditionFalse {
+				return false
+			}
+		}
+	}
+	if len(status.SupportedKinds) == 0 {
+		return true
+	}
+	for _, routeKind := range status.SupportedKinds {
+		group := gatewayv1.GroupName
+		if routeKind.Group != nil {
+			group = string(*routeKind.Group)
+		}
+		if group == gatewayv1.GroupName && string(routeKind.Kind) == "HTTPRoute" {
+			return true
+		}
+	}
+	return false
+}
+
 func gatewayListenerAllowsRoute(ctx context.Context, reader client.Reader, gateway *gatewayv1.Gateway, listener gatewayv1.Listener, route *gatewayv1.HTTPRoute) (bool, error) {
+	if listener.AllowedRoutes != nil && len(listener.AllowedRoutes.Kinds) > 0 && !gatewayListenerAllowsHTTPRoute(listener) {
+		return false, nil
+	}
 	if listener.AllowedRoutes == nil || listener.AllowedRoutes.Namespaces == nil {
 		return route.Namespace == gateway.Namespace, nil
 	}
@@ -171,6 +270,23 @@ func gatewayListenerAllowsRoute(ctx context.Context, reader client.Reader, gatew
 	}
 }
 
+func gatewayListenerAllowsHTTPRoute(listener gatewayv1.Listener) bool {
+	if listener.AllowedRoutes == nil || len(listener.AllowedRoutes.Kinds) == 0 {
+		return true
+	}
+
+	for _, routeKind := range listener.AllowedRoutes.Kinds {
+		group := gatewayv1.GroupName
+		if routeKind.Group != nil {
+			group = string(*routeKind.Group)
+		}
+		if group == gatewayv1.GroupName && string(routeKind.Kind) == "HTTPRoute" {
+			return true
+		}
+	}
+	return false
+}
+
 func httpRouteProtocolAnnotation(route *gatewayv1.HTTPRoute) (string, bool) {
 	if route.Annotations == nil {
 		return "", false
@@ -180,14 +296,6 @@ func httpRouteProtocolAnnotation(route *gatewayv1.HTTPRoute) (string, bool) {
 	return protocol, protocol == homer.ProtocolHTTP || protocol == homer.ProtocolHTTPS
 }
 
-func shouldResolveHTTPRouteProtocolLocally(route *gatewayv1.HTTPRoute) bool {
-	if route == nil || route.Annotations == nil {
-		return true
-	}
-	cluster := strings.TrimSpace(route.Annotations[httpRouteClusterAnnotation])
-	return cluster == "" || cluster == localClusterName
-}
-
 func isGatewayParentReference(parentRef gatewayv1.ParentReference) bool {
 	if parentRef.Group != nil && string(*parentRef.Group) != gatewayv1.GroupName {
 		return false
@@ -195,18 +303,31 @@ func isGatewayParentReference(parentRef gatewayv1.ParentReference) bool {
 	return parentRef.Kind == nil || string(*parentRef.Kind) == gatewayKind
 }
 
-func httpRouteParentAccepted(route *gatewayv1.HTTPRoute, parentRef gatewayv1.ParentReference) (bool, bool) {
+func httpRouteParentAccepted(route *gatewayv1.HTTPRoute, parentRef gatewayv1.ParentReference, controllerName gatewayv1.GatewayController) (bool, bool) {
+	matched := false
+	accepted := false
 	for _, parentStatus := range route.Status.Parents {
 		if !parentReferencesEqual(parentStatus.ParentRef, parentRef, route.Namespace) {
 			continue
 		}
+		if controllerName != "" && parentStatus.ControllerName != controllerName {
+			continue
+		}
+		matched = true
 
 		for _, condition := range parentStatus.Conditions {
 			if condition.Type == string(gatewayv1.RouteConditionAccepted) {
-				return condition.Status == metav1.ConditionTrue, true
+				if condition.Status == metav1.ConditionFalse {
+					return false, true
+				}
+				if condition.Status == metav1.ConditionTrue {
+					accepted = true
+				}
 			}
 		}
-		return false, true
+	}
+	if matched {
+		return accepted, true
 	}
 	return true, false
 }
@@ -216,7 +337,7 @@ func httpRouteHasRejectedParent(route *gatewayv1.HTTPRoute) bool {
 		if !isGatewayParentReference(parentRef) {
 			continue
 		}
-		accepted, statusKnown := httpRouteParentAccepted(route, parentRef)
+		accepted, statusKnown := httpRouteParentAccepted(route, parentRef, "")
 		if statusKnown && !accepted {
 			return true
 		}
@@ -299,16 +420,24 @@ func hostnamesOverlap(left, right string) bool {
 	if left == right {
 		return true
 	}
-	if strings.HasPrefix(left, "*.") {
+	leftWildcard := strings.HasPrefix(left, "*.")
+	rightWildcard := strings.HasPrefix(right, "*.")
+	if leftWildcard && rightWildcard {
+		// Gateway API wildcards match exactly one DNS label. Two wildcard
+		// patterns therefore overlap only when they describe the same suffix.
+		return left == right
+	}
+	if leftWildcard {
 		return wildcardMatchesHost(left, right)
 	}
-	if strings.HasPrefix(right, "*.") {
+	if rightWildcard {
 		return wildcardMatchesHost(right, left)
 	}
 	return false
 }
 
 func wildcardMatchesHost(pattern, host string) bool {
-	suffix := strings.TrimPrefix(pattern, "*")
-	return strings.HasSuffix(host, suffix) && host != strings.TrimPrefix(pattern, "*.")
+	suffix := strings.TrimPrefix(pattern, "*.")
+	prefix, matches := strings.CutSuffix(host, "."+suffix)
+	return matches && prefix != "" && !strings.Contains(prefix, ".")
 }

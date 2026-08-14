@@ -110,11 +110,13 @@ kubectl apply -f dashboard.yaml
 upstream Homer. The older `parameters`/annotation-oriented form remains
 supported for existing dashboards and discovery workflows.
 
-For legacy parameter data, use `headers` or `headers.<Header-Name>`; these are
-normalized to Homer's `item.headers` object. Legacy
-`item.homer.rajsingh.info/customHeaders.<Header-Name>` annotations are also
-normalized to `headers`. A bare `customHeaders` value inside an item
-`parameters` map is not interpreted as a header map.
+For legacy parameter data, prefer `headers` or `headers.<Header-Name>`; these
+are normalized to Homer's `item.headers` object. The legacy `customHeaders`
+alias remains supported: a bare `parameters.customHeaders` string such as
+`Authorization: Bearer token` is parsed as a header map, as are
+`customHeaders.<Header-Name>` annotations and object/dot/slash forms. For the
+same key spelling, direct `item.headers` values take precedence over
+`parameters.headers`, which takes precedence over `parameters.customHeaders`.
 
 ---
 
@@ -181,14 +183,19 @@ spec:
               libraryType: "series" # music, series, or movies
 ```
 
-Smart-card Secrets must be in the Dashboard's namespace. Secret references are
-resolved for configured smart-card service items (items with a `type`) in
-`homerConfig.services`; they are not applied to items discovered from Ingress,
-HTTPRoute, or Service resources. For custom headers, use
-`spec.secrets.headers`; resolved values are emitted in the item's upstream
-`headers` object. Cross-namespace references are rejected; remote-cluster
-kubeconfig references under `spec.remoteClusters[].secretRef` are separate and
-may still use an explicit namespace.
+Smart-card Secrets must be in the Dashboard's namespace. API key, token,
+username, and password references are resolved for smart-card service items
+(items with a `type`) in `homerConfig.services`. Header references under
+`spec.secrets.headers` are resolved for configured items and applied after
+discovery to Ingress, HTTPRoute, and Service items, including generic items
+without a `type`. A Secret-backed header is explicit Dashboard configuration:
+for the same configured key, it overrides a direct item header and a
+discovery header. Header-name matching is case-insensitive and duplicate
+casing variants are normalized to one upstream header. Resolved values are
+emitted in the item's upstream `headers` object. Cross-namespace references
+are rejected;
+remote-cluster kubeconfig references under `spec.remoteClusters[].secretRef`
+are separate and may still use an explicit namespace.
 
 ### Custom Assets & Styling
 
@@ -281,12 +288,35 @@ helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/hom
 ```
 
 HTTPRoute `parentRefs` without a `namespace` refer to a Gateway in the
-HTTPRoute's namespace. Gateway listeners default to accepting routes from
+HTTPRoute's namespace. Gateway listeners default to accepting HTTPRoutes from
 their own namespace (`allowedRoutes.namespaces.from: Same`). For a
 cross-namespace attachment, set `parentRefs.namespace` and configure the
 Gateway listener's `allowedRoutes.namespaces` with `All` or an appropriate
-`Selector`. The checked-in example at `homer/httpRouteExample.yaml` keeps the
-HTTPRoute and Gateway in `default` and relies on the same-namespace default.
+`Selector`; `None` disallows attachment. If `allowedRoutes.kinds` is present,
+it must allow `HTTPRoute` from the Gateway API group (an omitted group uses
+the Gateway API default). Only Gateway API `Gateway` parent references are
+considered; omitted parent-reference group and kind use those same defaults.
+`sectionName` and `port` restrict the matching listener. Listener hostnames
+must overlap the route hostname, and a wildcard such as `*.example.com`
+matches exactly one DNS label, not the apex or a deeper subdomain. The
+checked-in example at
+`homer/httpRouteExample.yaml` keeps the HTTPRoute and Gateway in `default` and
+relies on the same-namespace default.
+
+When resolving an HTTPRoute URL scheme, an explicitly rejected GatewayClass
+(`Accepted=False`), Gateway (`Accepted=False`, `Programmed=False`, or
+`Ready=False`), or listener (`Accepted=False`, `ResolvedRefs=False`,
+`Programmed=False`, or `Conflicted=True`) is not used. A listener status that
+does not support HTTPRoute is also ignored. If a matching HTTPRoute parent
+status is reported for the GatewayClass controller, `Accepted=True` is
+required; statuses from other controllers are ignored. If a resource reports
+no status at all, the resolver keeps the compatibility fallback; when a
+Gateway reports listener statuses, the selected listener must have an eligible
+status. Missing matching-parent status does not by itself exclude the route.
+These checks affect protocol resolution rather than selector-based discovery.
+Among multiple eligible HTTP/HTTPS listeners,
+HTTPS is preferred; if no protocol can be resolved, the generated URL uses
+HTTP.
 
 #### Advanced Filtering Options
 
@@ -558,9 +588,10 @@ The system automatically detects parameter types using intelligent patterns:
 
 - **Booleans**: Parameters ending in `_enabled`, `_flag` or named `usecredentials`, `legacyapi`, `hide`
 - **Integers**: Parameters ending in `Interval`, `_value`, `Value` or named `timeout`, `limit`
-- **Objects**: `headers` and `mapping` use object notation; legacy
-  `customHeaders.<Header-Name>` annotations are normalized to `headers`, while
-  parameter maps should use `headers` or `headers.<Header-Name>`
+- **Objects**: `headers` and `mapping` use object notation; the legacy
+  `customHeaders` alias is normalized to `headers`, including
+  `customHeaders.<Header-Name>` annotations and bare `parameters.customHeaders`
+  values. New parameter data should use `headers` or `headers.<Header-Name>`
 - **Arrays**: Comma-separated values (automatically cleaned and trimmed)
 - **Validation**: Built-in validation for `url`, `target`, numeric values
 
@@ -1086,7 +1117,9 @@ This project is licensed under the [Apache License 2.0](LICENSE).
 
 [![Star History Chart](https://api.star-history.com/svg?repos=rajsinghtech/homer-operator&type=Date)](https://star-history.com/#rajsinghtech/homer-operator&Date)
 
-Release notes are published in [GitHub Releases](https://github.com/rajsinghtech/homer-operator/releases).
+Release notes are the project's changelog and are published in [GitHub
+Releases](https://github.com/rajsinghtech/homer-operator/releases). This
+repository intentionally does not maintain a `CHANGELOG.md`.
 
 ---
 

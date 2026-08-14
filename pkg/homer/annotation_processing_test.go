@@ -251,6 +251,42 @@ func TestHeadersRenderAsUpstreamObject(t *testing.T) {
 	}
 }
 
+func TestHeaderAnnotationFormsHaveDeterministicPrecedence(t *testing.T) {
+	annotations := map[string]string{
+		"item.homer.rajsingh.info/customHeaders.Authorization": "legacy-dot",
+		"item.homer.rajsingh.info/customHeaders/authorization": "legacy-slash",
+		"item.homer.rajsingh.info/headers":                     "Authorization: canonical-object",
+		"item.homer.rajsingh.info/headers.authorization":       "canonical-dot",
+		"item.homer.rajsingh.info/headers/Authorization":       "canonical-slash",
+	}
+
+	for iteration := 0; iteration < 100; iteration++ {
+		item := Item{}
+		processItemAnnotations(&item, annotations)
+
+		got, ok := getHeaderValue(item.Headers, "AUTHORIZATION")
+		if !ok || got != "canonical-slash" {
+			t.Fatalf("iteration %d authorization = %#v, want canonical-slash", iteration, got)
+		}
+		if len(item.Headers) != 1 {
+			t.Fatalf("iteration %d produced case-variant header duplicates: %#v", iteration, item.Headers)
+		}
+	}
+}
+
+func TestLegacyParameterHeaderFormsUseCanonicalPhasePrecedence(t *testing.T) {
+	item := Item{Parameters: map[string]string{
+		"customHeaders":               "Authorization: legacy-object",
+		"customHeaders.Authorization": "legacy-dotted",
+		"headers.authorization":       "canonical-dotted",
+	}}
+
+	got, ok := getHeaderValue(flattenItemHeaders(item), "AUTHORIZATION")
+	if !ok || got != "canonical-dotted" {
+		t.Fatalf("flattened authorization = %#v, want canonical-dotted", got)
+	}
+}
+
 func TestSecretHeaderResolutionAllowsGenericItems(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := corev1.AddToScheme(scheme); err != nil {

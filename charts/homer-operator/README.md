@@ -28,6 +28,11 @@ Source and tracked Kustomize installs follow the development `main` image.
 Use the OCI chart above, or the version-specific installer asset attached to a
 GitHub Release, when you need a pinned operator image.
 
+Versioned chart and operator artifacts are documented in [GitHub
+Releases](https://github.com/rajsinghtech/homer-operator/releases). Release
+notes are the project's changelog; this repository intentionally does not
+maintain a `CHANGELOG.md`.
+
 ## Configuration
 
 The following table lists the configurable parameters of the Homer Operator chart and their default values.
@@ -173,17 +178,24 @@ spec:
 
 The `services` and `pages` blocks follow upstream Homer's direct configuration
 format. Legacy `parameters` blocks remain supported for existing dashboards and
-annotation/discovery compatibility. In legacy parameter data, use `headers` or
-`headers.<Header-Name>`; legacy `customHeaders.<Header-Name>` annotation/object
-notation is also normalized to Homer's `item.headers` object. A bare
-`customHeaders` value in an item `parameters` map is not interpreted as a
-header map.
+annotation/discovery compatibility. In legacy parameter data, prefer `headers`
+or `headers.<Header-Name>`; the legacy `customHeaders` alias remains supported,
+including a bare `parameters.customHeaders` string such as
+`Authorization: Bearer token`, `customHeaders.<Header-Name>` annotations, and
+object/dot/slash forms. For the same key spelling, direct `item.headers` values
+take precedence over `parameters.headers`, which takes precedence over
+`parameters.customHeaders`. All forms are normalized to Homer's `item.headers`
+object.
 
-Secret-backed headers configured under `spec.secrets.headers` are resolved for
-configured smart-card service items (items with a `type`) in the Dashboard's
-Homer configuration. They are not automatically applied to items discovered
-from Ingress, HTTPRoute, or Service resources. Smart-card Secret references
-must resolve in the Dashboard's namespace.
+Secret-backed API key, token, username, and password references are resolved
+for configured smart-card service items (items with a `type`). Header Secrets
+configured under `spec.secrets.headers` are resolved for configured items and
+applied after discovery to items from Ingress, HTTPRoute, or Service resources,
+including generic items without a `type`. For the same configured key, a
+Secret-backed header overrides a direct item header and a discovery header.
+Header-name matching is case-insensitive and duplicate casing variants are
+normalized to one upstream header. Smart-card Secret references must resolve
+in the Dashboard's namespace.
 
 The checked-in sample at `config/samples/homer_v1alpha1_dashboard.yaml` is
 used by the Helm kind smoke test. It exercises direct Homer fields, a second
@@ -229,11 +241,31 @@ helm upgrade --install homer-operator charts/homer-operator -n homer-operator --
 To enable Gateway API support, set `operator.enableGatewayAPI=true`. This requires Gateway API CRDs to be installed in your cluster.
 
 HTTPRoute `parentRefs` without a `namespace` refer to a Gateway in the
-HTTPRoute's namespace. Gateway listeners default to accepting routes from
+HTTPRoute's namespace. Gateway listeners default to accepting HTTPRoutes from
 their own namespace (`allowedRoutes.namespaces.from: Same`). For a
 cross-namespace attachment, set `parentRefs.namespace` and configure the
 Gateway listener's `allowedRoutes.namespaces` with `All` or an appropriate
-`Selector`.
+`Selector`; `None` disallows attachment. If `allowedRoutes.kinds` is present,
+it must allow `HTTPRoute` from the Gateway API group (an omitted group uses
+the Gateway API default). Only Gateway API `Gateway` parent references are
+considered; omitted parent-reference group and kind use those same defaults.
+`sectionName` and `port` restrict the matching listener. Listener hostnames
+must overlap the route hostname, and a wildcard such as `*.example.com`
+matches exactly one DNS label, not the apex or a deeper subdomain.
+
+For URL scheme resolution, an explicitly rejected GatewayClass
+(`Accepted=False`), Gateway (`Accepted=False`, `Programmed=False`, or
+`Ready=False`), or listener (`Accepted=False`, `ResolvedRefs=False`,
+`Programmed=False`, or `Conflicted=True`) is not used. A listener status that
+does not support HTTPRoute is also ignored. When a matching HTTPRoute parent
+status is reported for the GatewayClass controller, `Accepted=True` is
+required; statuses from other controllers are ignored. If a resource reports
+no status at all, the resolver keeps the compatibility fallback; when a
+Gateway reports listener statuses, the selected listener must have an eligible
+status. Missing matching-parent status does not by itself exclude the route.
+These checks affect protocol resolution, not selector-based discovery. HTTPS is
+preferred when multiple eligible listeners match, and the generated URL falls
+back to HTTP when no protocol is resolved.
 
 ## Monitoring
 

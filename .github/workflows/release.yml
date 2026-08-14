@@ -611,11 +611,20 @@ jobs:
 
             ### Highlights
 
-            - Align the Dashboard API and generated CRD with upstream Homer ([#104](https://github.com/rajsinghtech/homer-operator/pull/104)): direct service and item fields; pages; links and quick links; themes, colors, defaults, headers, footer, refresh values, message mappings, smart-card fields, and open-ended Homer configuration values.
-            - Preserve unknown fields and explicit empty, null, false, and zero values across CRD and YAML/JSON round trips, including handwritten deep-copy support for open-ended configuration and nil array entries.
-            - Add external and binary asset support, nested asset staging, icon aliases, PWA icon paths and `manifest.json`, cross-namespace asset references and mirrors, replacement/stale-mirror cleanup, and referenced ConfigMap watches ([#104](https://github.com/rajsinghtech/homer-operator/pull/104), [#105](https://github.com/rajsinghtech/homer-operator/pull/105)).
-            - Add configurable config-sync image settings and deployment handling, improve deployment diff detection, and preserve dashboard-owned configuration during updates.
-            - Add living sample documentation and a black-box Kubernetes E2E suite covering operator health, Dashboard creation, updates, ConfigMap watches, cleanup, pages/assets, and Ingress discovery ([#105](https://github.com/rajsinghtech/homer-operator/pull/105)).
+            #### Upstream Homer configuration parity ([#104](https://github.com/rajsinghtech/homer-operator/pull/104))
+
+            - Align the Dashboard API and generated CRD with upstream Homer: root title, subtitle, document title, logo, icon, header, footer, columns, connectivity checks, hotkeys, themes, stylesheets, colors, defaults, proxy, messages, external config, refresh interval, links, services, and pages.
+            - Model direct service and item fields, including logos/icons, subtitles, tags, keywords, URLs, targets, tag styles, types, backgrounds, classes, endpoints, update intervals, success codes, credentials, headers, quick links, and smart-card parameters.
+            - Preserve unknown and future Homer fields, explicit empty arrays/objects, nulls, false values, zero refresh values, footer boolean forms, open-ended nested objects, and nil array entries across CRD and YAML/JSON round trips; include handwritten deep-copy support for those open-ended values.
+            - Retain legacy `parameters`, annotation, `headers`, and `customHeaders` inputs while emitting upstream `item.headers` objects with deterministic precedence and case-insensitive header-name handling.
+            - Resolve API-key, token, username, password, and custom-header Secrets safely; propagate configured header Secrets to discovered Ingress, HTTPRoute, Service, and generic items with Secret values authoritative over direct and discovery headers.
+
+            #### Pages, assets, and deployment behavior ([#104](https://github.com/rajsinghtech/homer-operator/pull/104), [#105](https://github.com/rajsinghtech/homer-operator/pull/105))
+
+            - Add named Homer page configuration with generated `<page>.yml` ConfigMap data and page-aware deployment asset mounts.
+            - Add external Homer configuration and text/binary asset support, nested asset staging, icon aliases, PWA icon paths, generated `manifest.json`, cross-namespace asset references and mirrors, replacement/stale-mirror cleanup, and referenced ConfigMap watches.
+            - Add configurable config-sync image settings, DNS/resource/deployment handling, stronger deployment diff detection, server-assigned Service-field preservation, and dashboard-owned configuration preservation during updates.
+            - Add living sample documentation and a black-box Kubernetes E2E suite covering operator health, Dashboard creation and updates, ConfigMap watches, cleanup, pages/assets, and Ingress discovery.
 
             ### Fixes and hardening
 
@@ -624,8 +633,9 @@ jobs:
             - Apply per-cluster selectors and domain filters correctly, keep local and remote filtering distinct, enrich discovered resources with cluster metadata, and make multi-cluster aggregation deterministic.
             - Keep same-named resources from different clusters, namespaces, or resource kinds independent; qualify Ingress and HTTPRoute source keys, clean up the correct source, and allow a CRD item to enhance only its intended discovered resource.
             - Watch configuration and asset references, deduplicate reconciliation requests, and keep generated assets and PWA paths synchronized after updates or removals.
-            - Resolve HTTPRoute protocols from matching Gateway listeners, honor parent-reference ports, and preserve resolved remote HTTPS protocols during local dashboard rebuilds.
-            - Emit Homer-compatible `item.headers` objects for direct configuration, annotations, health checks, and Secret-backed authentication, with valid dot-notation examples and legacy compatibility.
+            - Resolve HTTPRoute protocols only from eligible Gateway listeners, honor parent-reference ports, explicit Gateway/Listener/GatewayClass status, `allowedRoutes` namespace/kind policy, one-label wildcard host matching, and controller-specific parent status; watch GatewayClass transitions and preserve resolved remote HTTPS protocols during local dashboard rebuilds.
+            - Emit Homer-compatible `item.headers` objects for direct configuration, annotations, health checks, and Secret-backed authentication; normalize legacy `headers`/`customHeaders` forms with deterministic, case-insensitive precedence and propagate configured header Secrets to discovered generic items.
+            - Keep local and remote resource provenance authoritative in memory, prevent spoofed remote annotations from changing local HTTPRoute resolution, preserve source-cluster namespace defaults, and prevent local namespace defaults from leaking onto remote Ingress, HTTPRoute, or Service resources.
             - Remove obsolete kube-rbac-proxy resources, secure metrics with the required RBAC, gate metrics resources consistently, and publish release charts with immutable image digests.
             - Generate a status-enabled CRD, prevent duplicate CRDs in installer manifests, and verify Kustomize, Helm, generated manifests, metrics, CRD synchronization, image signatures, and the published chart in CI.
             - Publish and verify a signed SLSA container provenance attestation alongside the image.

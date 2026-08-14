@@ -786,7 +786,11 @@ func (r *DashboardReconciler) buildHomerConfig(ctx context.Context, dashboard *h
 
 		// Handle custom Headers secrets
 		if dashboard.Spec.Secrets.Headers != nil {
-			for headerName, secretRef := range dashboard.Spec.Secrets.Headers {
+			for _, headerName := range slices.Sorted(maps.Keys(dashboard.Spec.Secrets.Headers)) {
+				secretRef := dashboard.Spec.Secrets.Headers[headerName]
+				if secretRef == nil {
+					return nil, fmt.Errorf("header Secret reference %q is nil", headerName)
+				}
 				ref := &homer.SecretKeyRef{
 					Name:      secretRef.Name,
 					Key:       secretRef.Key,
@@ -857,7 +861,9 @@ func (r *DashboardReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		builder = builder.Watches(&gatewayv1.HTTPRoute{},
 			handler.EnqueueRequestsFromMapFunc(r.findDashboardsForHTTPRoute)).
 			Watches(&gatewayv1.Gateway{},
-				handler.EnqueueRequestsFromMapFunc(r.findDashboardsForGateway))
+				handler.EnqueueRequestsFromMapFunc(r.findDashboardsForGateway)).
+			Watches(&gatewayv1.GatewayClass{},
+				handler.EnqueueRequestsFromMapFunc(r.findDashboardsForGatewayClass))
 	}
 
 	// Watch secrets for multi-cluster kubeconfig changes
@@ -908,6 +914,17 @@ func (r *DashboardReconciler) findDashboardsForHTTPRoute(ctx context.Context, ob
 // findDashboardsForGateway finds all dashboards that should be reconciled when a Gateway changes
 func (r *DashboardReconciler) findDashboardsForGateway(ctx context.Context, obj client.Object) []ctrl.Request {
 	if _, ok := obj.(*gatewayv1.Gateway); !ok {
+		return nil
+	}
+	return r.allDashboardRequests(ctx)
+}
+
+// findDashboardsForGatewayClass requeues dashboards when a GatewayClass
+// becomes accepted or changes controller ownership. HTTPRoute protocol
+// resolution uses GatewayClass status, so a class status transition must
+// trigger a fresh dashboard rebuild just like a Gateway status transition.
+func (r *DashboardReconciler) findDashboardsForGatewayClass(ctx context.Context, obj client.Object) []ctrl.Request {
+	if _, ok := obj.(*gatewayv1.GatewayClass); !ok {
 		return nil
 	}
 	return r.allDashboardRequests(ctx)
@@ -1136,7 +1153,7 @@ func (r *DashboardReconciler) shouldIncludeHTTPRoute(ctx context.Context, httpro
 		}
 
 		for _, parentRef := range httproute.Spec.ParentRefs {
-			if parentRef.Kind != nil && string(*parentRef.Kind) != gatewayKind {
+			if !isGatewayParentReference(parentRef) {
 				continue
 			}
 
@@ -1262,7 +1279,9 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 	for i, ingress := range filteredIngressList.Items {
 		// Create a copy to avoid mutating the original
 		ingressCopy := ingress.DeepCopy()
-		ingressCopy.Annotations = r.mergeNamespaceAnnotations(ctx, ingress.Namespace, ingress.Annotations)
+		if shouldMergeLocalNamespaceAnnotations(ingress.Annotations) {
+			ingressCopy.Annotations = r.mergeNamespaceAnnotations(ctx, ingress.Namespace, ingress.Annotations)
+		}
 		mergedIngressList.Items[i] = *ingressCopy
 	}
 
@@ -1270,12 +1289,15 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 	mergedServices := make([]corev1.Service, len(filteredServices))
 	for i, svc := range filteredServices {
 		svcCopy := svc.DeepCopy()
-		svcCopy.Annotations = r.mergeNamespaceAnnotations(ctx, svc.Namespace, svc.Annotations)
+		if shouldMergeLocalNamespaceAnnotations(svc.Annotations) {
+			svcCopy.Annotations = r.mergeNamespaceAnnotations(ctx, svc.Namespace, svc.Annotations)
+		}
 		mergedServices[i] = *svcCopy
 	}
 
 	if r.EnableGatewayAPI {
 		filteredHTTPRoutes := []gatewayv1.HTTPRoute{}
+		remoteHTTPRoutes := []bool{}
 		var discoveredHTTPRoutes map[string][]gatewayv1.HTTPRoute
 
 		// Use the Dashboard-scoped ClusterManager for multi-cluster discovery.
@@ -1296,6 +1318,7 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 
 				// HTTPRoutes are already filtered by ClusterManager with per-cluster domain filters
 				filteredHTTPRoutes = append(filteredHTTPRoutes, httproutes...)
+				remoteHTTPRoutes = append(remoteHTTPRoutes, slices.Repeat([]bool{clusterName != localClusterName}, len(httproutes))...)
 			}
 		} else {
 			// Fall back to single-cluster discovery
@@ -1311,6 +1334,7 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 				}
 				if shouldInclude {
 					filteredHTTPRoutes = append(filteredHTTPRoutes, clusterHTTPRoutes.Items[i])
+					remoteHTTPRoutes = append(remoteHTTPRoutes, false)
 				}
 			}
 		}
@@ -1320,12 +1344,14 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 		for i, httproute := range filteredHTTPRoutes {
 			// Create a copy to avoid mutating the original
 			httprouteCopy := httproute.DeepCopy()
-			httprouteCopy.Annotations = r.mergeNamespaceAnnotations(ctx, httproute.Namespace, httproute.Annotations)
+			if !remoteHTTPRoutes[i] {
+				httprouteCopy.Annotations = r.mergeNamespaceAnnotations(ctx, httproute.Namespace, httproute.Annotations)
+			}
 			// Remote discovery already resolved this route against its source
 			// cluster's Gateway objects. Re-resolving it with the local reader can
 			// select an unrelated same-name local Gateway and overwrite the source
 			// protocol.
-			if shouldResolveHTTPRouteProtocolLocally(httprouteCopy) {
+			if !remoteHTTPRoutes[i] {
 				setHTTPRouteProtocol(ctx, r.Client, httprouteCopy)
 			}
 			mergedHTTPRoutes[i] = *httprouteCopy
@@ -1341,6 +1367,9 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 		if len(dashboard.Spec.RemoteClusters) > 0 {
 			domainFilters = nil
 			discoveryConfig.HTTPRouteDomainFilters = authorizedHTTPRouteDomainFilters(dashboard, discoveredHTTPRoutes)
+		}
+		if err := r.prepareDiscoverySecretHeaders(ctx, homerConfig, dashboard, discoveryConfig); err != nil {
+			return corev1.ConfigMap{}, nil, err
 		}
 		configMap, err := homer.CreateConfigMapWithHTTPRoutesAndDiscoveryConfig(
 			homerConfig, dashboard.Name, dashboard.Namespace, mergedIngressList,
@@ -1358,6 +1387,9 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 
 	discoveryConfig := discoveryConfigForDashboard(dashboard)
 	discoveryConfig.IngressDomainFilters = authorizedIngressDomainFilters(dashboard, mergedIngressList.Items)
+	if err := r.prepareDiscoverySecretHeaders(ctx, homerConfig, dashboard, discoveryConfig); err != nil {
+		return corev1.ConfigMap{}, nil, err
+	}
 	configMap, err := homer.CreateConfigMapWithDiscoveryConfig(
 		homerConfig, dashboard.Name, dashboard.Namespace, mergedIngressList,
 		mergedServices, dashboard, discoveryConfig,
@@ -1369,6 +1401,11 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 		return corev1.ConfigMap{}, nil, err
 	}
 	return configMap, nil, nil
+}
+
+func shouldMergeLocalNamespaceAnnotations(annotations map[string]string) bool {
+	clusterName := strings.TrimSpace(annotations["homer.rajsingh.info/cluster"])
+	return clusterName == "" || clusterName == homer.LocalCluster
 }
 
 func discoveryConfigForDashboard(dashboard *homerv1alpha1.Dashboard) *homer.DiscoveryConfig {
@@ -1393,6 +1430,85 @@ func discoveryConfigForDashboard(dashboard *homerv1alpha1.Dashboard) *homer.Disc
 		}
 	}
 	return config
+}
+
+// prepareDiscoverySecretHeaders resolves Dashboard-level header Secrets after
+// resource discovery has completed and makes the values available to both
+// configured and newly discovered Homer items. Resolving once here also covers
+// Dashboards whose HomerConfig has no configured items to act as a foundation.
+func (r *DashboardReconciler) prepareDiscoverySecretHeaders(
+	ctx context.Context,
+	homerConfig *homer.HomerConfig,
+	dashboard *homerv1alpha1.Dashboard,
+	discoveryConfig *homer.DiscoveryConfig,
+) error {
+	if dashboard == nil || dashboard.Spec.Secrets == nil || len(dashboard.Spec.Secrets.Headers) == 0 {
+		return nil
+	}
+	if err := validateSmartCardSecretReferences(dashboard); err != nil {
+		return err
+	}
+
+	resolved := make(map[string]string, len(dashboard.Spec.Secrets.Headers))
+	for _, headerName := range slices.Sorted(maps.Keys(dashboard.Spec.Secrets.Headers)) {
+		secretRef := dashboard.Spec.Secrets.Headers[headerName]
+		if secretRef == nil {
+			return fmt.Errorf("header Secret reference %q is nil", headerName)
+		}
+
+		item := &homer.Item{}
+		ref := &homer.SecretKeyRef{
+			Name:      secretRef.Name,
+			Key:       secretRef.Key,
+			Namespace: secretRef.Namespace,
+		}
+		if err := homer.ResolveHeaderFromSecret(ctx, r.Client, item, headerName, ref, dashboard.Namespace); err != nil {
+			return fmt.Errorf("resolve header Secret %q: %w", headerName, err)
+		}
+		for resolvedName, rawValue := range item.Headers {
+			if strings.EqualFold(resolvedName, headerName) {
+				if value, ok := rawValue.(string); ok {
+					resolved[headerName] = value
+				}
+				break
+			}
+		}
+	}
+
+	// buildHomerConfig normally performs this injection before discovery. Keep
+	// the operation here as well so direct callers of createConfigMap and
+	// external configurations use the same effective values.
+	if homerConfig != nil {
+		for serviceIndex := range homerConfig.Services {
+			for itemIndex := range homerConfig.Services[serviceIndex].Items {
+				item := &homerConfig.Services[serviceIndex].Items[itemIndex]
+				if item.Headers == nil {
+					item.Headers = make(map[string]any, len(resolved))
+				}
+				for _, headerName := range slices.Sorted(maps.Keys(resolved)) {
+					value := resolved[headerName]
+					setHeaderCaseInsensitive(item.Headers, headerName, value)
+				}
+			}
+		}
+	}
+
+	if discoveryConfig != nil {
+		discoveryConfig.SecretHeaders = resolved
+	}
+	return nil
+}
+
+func setHeaderCaseInsensitive(headers map[string]any, name string, value any) {
+	if headers == nil || strings.TrimSpace(name) == "" {
+		return
+	}
+	for existingName := range headers {
+		if strings.EqualFold(existingName, name) && existingName != name {
+			delete(headers, existingName)
+		}
+	}
+	headers[name] = value
 }
 
 func authorizedHTTPRouteDomainFilters(

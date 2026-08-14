@@ -193,8 +193,8 @@ spec:
   #   username:
   #     name: "dashboard-secrets"
   #     key: "username"
-  #   headers:  # Resolved into item.headers for configured smart-card service items
-  #             # (discovered Ingress/HTTPRoute/Service items are not modified)
+  #   headers:  # Resolved into item.headers for configured and discovered items
+  #             # (including generic Ingress/HTTPRoute/Service items)
   #     Authorization:
   #       name: "dashboard-secrets"
   #       key: "bearer-token"

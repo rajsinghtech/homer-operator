@@ -172,6 +172,13 @@ func (in *DiscoveryConfig) DeepCopyInto(out *DiscoveryConfig) {
 		*out = new(ServiceHealthConfig)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.SecretHeaders != nil {
+		in, out := &in.SecretHeaders, &out.SecretHeaders
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
 	if in.IngressDomainFilters != nil {
 		in, out := &in.IngressDomainFilters, &out.IngressDomainFilters
 		*out = make(map[string][]string, len(*in))

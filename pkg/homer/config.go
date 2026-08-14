@@ -1534,6 +1534,11 @@ type DiscoveryConfig struct {
 	ServiceGrouping *ServiceGroupingConfig
 	HealthCheck     *ServiceHealthConfig
 	ValidationLevel ValidationLevel
+	// SecretHeaders contains Dashboard-level header values resolved by the
+	// controller after discovery. They are applied to discovered items before
+	// they are merged with CRD foundations, so a Dashboard with no configured
+	// Homer items still gets its configured headers.
+	SecretHeaders map[string]string
 	// IngressDomainFilters contains filters authorized for each discovered
 	// Ingress. A single Ingress may contain both matching and non-matching
 	// hosts, so filtering the resource before generation is not sufficient.
@@ -2235,8 +2240,10 @@ func markResolvedSecretHeader(item *Item, headerName string) {
 	}
 
 	names := resolvedSecretHeaderNames(item)
-	if slices.Contains(names, headerName) {
-		return
+	for _, name := range names {
+		if strings.EqualFold(name, headerName) {
+			return
+		}
 	}
 	names = append(names, headerName)
 	slices.Sort(names)
@@ -2516,6 +2523,7 @@ func updateHomerConfigIngress(
 
 	// Create items from ingress rules
 	items := createIngressItems(ingress, effectiveDomainFilters, discoveryValidationLevel(discoveryConfig))
+	applyDiscoverySecretHeaders(items, discoveryConfig)
 
 	// Update service if we have matching items
 	if len(items) > 0 {
@@ -2557,6 +2565,7 @@ func updateHomerConfigService(
 
 	item := createK8sServiceItem(svc)
 	processItemAnnotationsWithValidation(&item, svc.Annotations, discoveryValidationLevel(discoveryConfig))
+	applyDiscoverySecretHeader(&item, discoveryConfig)
 
 	if clusterName := svc.Annotations["homer.rajsingh.info/cluster"]; clusterName != "" && clusterName != LocalCluster && !hasExplicitServiceURL(svc.Annotations) {
 		// A cluster-internal DNS name for a remote Service resolves in the
@@ -2875,6 +2884,7 @@ func updateHomerConfigWithHTTPRoutes(
 			item.LastUpdate = httproute.ObjectMeta.CreationTimestamp.Time.Format("2006-01-02T15:04:05Z")
 
 			processItemAnnotationsWithValidation(&item, httproute.ObjectMeta.Annotations, discoveryValidationLevel(discoveryConfig))
+			applyDiscoverySecretHeader(&item, discoveryConfig)
 
 			// Append cluster name suffix from label AFTER processing annotations
 			// so that it takes precedence over any name annotations
@@ -2984,6 +2994,38 @@ func updateOrAddServiceItems(homerConfig *HomerConfig, service Service, items []
 	homerConfig.Services = append(homerConfig.Services, service)
 }
 
+func applyDiscoverySecretHeaders(items []Item, discoveryConfig *DiscoveryConfig) {
+	if discoveryConfig == nil || len(discoveryConfig.SecretHeaders) == 0 {
+		return
+	}
+
+	for index := range items {
+		applyDiscoverySecretHeader(&items[index], discoveryConfig)
+	}
+}
+
+func applyDiscoverySecretHeader(item *Item, discoveryConfig *DiscoveryConfig) {
+	if item == nil || discoveryConfig == nil || len(discoveryConfig.SecretHeaders) == 0 {
+		return
+	}
+	if item.Headers == nil {
+		item.Headers = make(map[string]any, len(discoveryConfig.SecretHeaders))
+	}
+	secretHeaderNames := make([]string, 0, len(discoveryConfig.SecretHeaders))
+	for name := range discoveryConfig.SecretHeaders {
+		secretHeaderNames = append(secretHeaderNames, name)
+	}
+	slices.Sort(secretHeaderNames)
+	for _, name := range secretHeaderNames {
+		value := discoveryConfig.SecretHeaders[name]
+		// Dashboard Secret references are explicit configuration. They
+		// override same-name discovery annotations, including when the
+		// annotation uses different header-name casing.
+		setHeaderValue(item.Headers, name, deepCopyValue(value))
+		markResolvedSecretHeader(item, name)
+	}
+}
+
 func configuredSecretHeaders(config *HomerConfig) map[string]any {
 	if config == nil {
 		return nil
@@ -2994,14 +3036,14 @@ func configuredSecretHeaders(config *HomerConfig) map[string]any {
 		for itemIndex := range config.Services[serviceIndex].Items {
 			item := &config.Services[serviceIndex].Items[itemIndex]
 			for _, name := range resolvedSecretHeaderNames(item) {
-				value, exists := item.Headers[name]
+				value, exists := getHeaderValue(item.Headers, name)
 				if !exists {
 					continue
 				}
 				// Dashboard Secret references are global configuration. If a
 				// malformed config resolves the same header name more than once,
 				// declaration order provides a stable first-value winner.
-				if _, exists := headers[name]; !exists {
+				if _, exists := findHeaderKey(headers, name); !exists {
 					headers[name] = deepCopyValue(value)
 				}
 			}
@@ -3029,8 +3071,10 @@ func applyConfiguredSecretHeaders(config *HomerConfig, items []Item) {
 		}
 		for _, name := range names {
 			// A Secret-backed header is explicit Dashboard configuration, so
-			// it takes precedence over a same-name discovery annotation.
-			items[index].Headers[name] = deepCopyValue(headers[name])
+			// it takes precedence over a same-name direct or discovery value,
+			// regardless of header-name casing.
+			setHeaderValue(items[index].Headers, name, deepCopyValue(headers[name]))
+			markResolvedSecretHeader(&items[index], name)
 		}
 	}
 }
@@ -3159,14 +3203,41 @@ func mergeNestedItemObjects(existingItem, newItem *Item, isCRDExisting bool) {
 }
 
 func mergeItemHeaders(existingItem, newItem *Item, isCRDExisting bool) {
-	if newItem.Headers != nil {
-		if existingItem.Headers == nil {
-			existingItem.Headers = make(map[string]any)
-		}
-		for key, value := range newItem.Headers {
-			if _, exists := existingItem.Headers[key]; !exists || !isCRDExisting {
-				existingItem.Headers[key] = deepCopyValue(value)
+	if newItem == nil || len(newItem.Headers) == 0 {
+		return
+	}
+	if existingItem.Headers == nil {
+		existingItem.Headers = make(map[string]any)
+	}
+
+	// Normalize both sides before merging so casing variants cannot survive as
+	// separate Homer headers. Header maps can originate from direct CRD data,
+	// annotations, discovery, or Secret resolution.
+	normalizeHeaderMap(existingItem.Headers)
+	normalizeHeaderMap(newItem.Headers)
+
+	for _, key := range headerMapKeys(newItem.Headers) {
+		value := newItem.Headers[key]
+		existingKey, exists := findHeaderKey(existingItem.Headers, key)
+		existingSecret := exists && hasResolvedSecretHeader(existingItem, existingKey)
+		incomingSecret := hasResolvedSecretHeader(newItem, key)
+
+		// Explicit Secret-backed configuration is authoritative over both
+		// direct CRD and discovered values, including case variants. Preserve
+		// an already-resolved Secret value if two Secret sources collide.
+		if incomingSecret {
+			if !existingSecret {
+				setHeaderValue(existingItem.Headers, key, deepCopyValue(value))
 			}
+			markResolvedSecretHeader(existingItem, key)
+			continue
+		}
+		if existingSecret {
+			continue
+		}
+
+		if !exists || !isCRDExisting {
+			setHeaderValue(existingItem.Headers, key, deepCopyValue(value))
 		}
 	}
 }
@@ -3305,11 +3376,62 @@ func discoveryValidationLevel(config *DiscoveryConfig) ValidationLevel {
 // processItemAnnotationsWithValidation processes item annotations with validation
 func processItemAnnotationsWithValidation(item *Item, annotations map[string]string, validationLevel ValidationLevel) {
 	item.legacyParameters = true
+	var canonicalHeaders, legacyHeaders []itemAnnotationField
 	for key, value := range annotations {
-		if fieldName, ok := strings.CutPrefix(key, "item.homer.rajsingh.info/"); ok {
+		fieldName, ok := strings.CutPrefix(key, "item.homer.rajsingh.info/")
+		if !ok {
+			continue
+		}
+		switch {
+		case isCanonicalHeaderAnnotationField(fieldName):
+			canonicalHeaders = append(canonicalHeaders, itemAnnotationField{fieldName: fieldName, value: value})
+		case isLegacyHeaderAnnotationField(fieldName):
+			legacyHeaders = append(legacyHeaders, itemAnnotationField{fieldName: fieldName, value: value})
+		default:
+			// Preserve the existing processing path for non-header annotations.
 			processItemField(item, fieldName, value, validationLevel)
 		}
 	}
+
+	// Legacy aliases are processed first so the canonical headers forms are
+	// authoritative when both forms define the same header. Sorting each phase
+	// makes conflicts within a phase deterministic instead of depending on Go's
+	// randomized map iteration order.
+	sortItemAnnotationFields(legacyHeaders)
+	for _, field := range legacyHeaders {
+		processItemField(item, field.fieldName, field.value, validationLevel)
+	}
+	sortItemAnnotationFields(canonicalHeaders)
+	for _, field := range canonicalHeaders {
+		processItemField(item, field.fieldName, field.value, validationLevel)
+	}
+}
+
+type itemAnnotationField struct {
+	fieldName string
+	value     string
+}
+
+func sortItemAnnotationFields(fields []itemAnnotationField) {
+	sort.Slice(fields, func(i, j int) bool {
+		if fields[i].fieldName == fields[j].fieldName {
+			return fields[i].value < fields[j].value
+		}
+		return fields[i].fieldName < fields[j].fieldName
+	})
+}
+
+func isCanonicalHeaderAnnotationField(fieldName string) bool {
+	lowerFieldName := strings.ToLower(fieldName)
+	return lowerFieldName == headersObjectName ||
+		strings.HasPrefix(lowerFieldName, headersObjectName+".") ||
+		strings.HasPrefix(lowerFieldName, headersObjectName+"/")
+}
+
+func isLegacyHeaderAnnotationField(fieldName string) bool {
+	lowerFieldName := strings.ToLower(fieldName)
+	return strings.HasPrefix(lowerFieldName, strings.ToLower(legacyHeadersObjectName)+".") ||
+		strings.HasPrefix(lowerFieldName, strings.ToLower(legacyHeadersObjectName)+"/")
 }
 
 // processItemField processes a single item field using smart convention-based detection
@@ -3410,8 +3532,9 @@ func processNestedObjectField(item *Item, fieldName, value string) {
 }
 
 func processHeaderAnnotation(item *Item, value string) {
-	for headerName, headerValue := range parseHeaderAnnotation(value) {
-		setItemHeader(item, headerName, headerValue)
+	parsed := parseHeaderAnnotation(value)
+	for _, headerName := range sortedHeaderValueNames(parsed) {
+		setItemHeader(item, headerName, parsed[headerName])
 	}
 }
 
@@ -3450,7 +3573,99 @@ func setItemHeader(item *Item, name, value string) {
 	if item.Headers == nil {
 		item.Headers = make(map[string]any)
 	}
-	item.Headers[name] = value
+	setHeaderValue(item.Headers, name, value)
+}
+
+func sortedHeaderValueNames(headers map[string]string) []string {
+	names := make([]string, 0, len(headers))
+	for name := range headers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func headerMapKeys(headers map[string]any) []string {
+	names := make([]string, 0, len(headers))
+	for name := range headers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func findHeaderKey(headers map[string]any, name string) (string, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" || headers == nil {
+		return "", false
+	}
+	if _, exists := headers[name]; exists {
+		return name, true
+	}
+
+	var match string
+	for key := range headers {
+		if strings.EqualFold(key, name) && (match == "" || key < match) {
+			match = key
+		}
+	}
+	return match, match != ""
+}
+
+func getHeaderValue(headers map[string]any, name string) (any, bool) {
+	key, exists := findHeaderKey(headers, name)
+	if !exists {
+		return nil, false
+	}
+	return headers[key], true
+}
+
+func setHeaderValue(headers map[string]any, name string, value any) {
+	name = strings.TrimSpace(name)
+	if name == "" || headers == nil {
+		return
+	}
+
+	key, exists := findHeaderKey(headers, name)
+	if !exists {
+		key = name
+	}
+	headers[key] = value
+	for existingKey := range headers {
+		if existingKey != key && strings.EqualFold(existingKey, key) {
+			delete(headers, existingKey)
+		}
+	}
+}
+
+func normalizeHeaderMap(headers map[string]any) {
+	if len(headers) < 2 {
+		return
+	}
+
+	normalized := make(map[string]any, len(headers))
+	for _, name := range headerMapKeys(headers) {
+		if _, exists := findHeaderKey(normalized, name); exists {
+			continue
+		}
+		normalized[name] = headers[name]
+	}
+
+	for name := range headers {
+		delete(headers, name)
+	}
+	for name, value := range normalized {
+		headers[name] = value
+	}
+}
+
+func hasResolvedSecretHeader(item *Item, name string) bool {
+	for _, resolvedName := range resolvedSecretHeaderNames(item) {
+		if strings.EqualFold(resolvedName, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // processDynamicParameter handles all parameters dynamically
@@ -4724,8 +4939,11 @@ func flattenItemHeaders(item Item) map[string]any {
 	}
 
 	headers := make(map[string]any, len(item.Headers))
-	for name, value := range item.Headers {
-		headers[name] = deepCopyValue(value)
+	for _, name := range headerMapKeys(item.Headers) {
+		if _, exists := findHeaderKey(headers, name); exists {
+			continue
+		}
+		headers[name] = deepCopyValue(item.Headers[name])
 	}
 
 	// Keep older parameter-based objects compatible, but let direct Item.Headers
@@ -4734,13 +4952,27 @@ func flattenItemHeaders(item Item) map[string]any {
 	// keys in sorted order so conflicting legacy forms are deterministic.
 	mergeLegacyHeaderParameters(headers, item.Parameters)
 
-	for objectName, objectMap := range item.NestedObjects {
-		if !strings.EqualFold(objectName, headersObjectName) && !strings.EqualFold(objectName, legacyHeadersObjectName) {
-			continue
+	// Process the canonical nested object before its legacy alias and sort
+	// keys within each object so map iteration cannot change precedence.
+	for _, objectName := range []string{headersObjectName, legacyHeadersObjectName} {
+		actualNames := make([]string, 0, len(item.NestedObjects))
+		for actualName := range item.NestedObjects {
+			if strings.EqualFold(actualName, objectName) {
+				actualNames = append(actualNames, actualName)
+			}
 		}
-		for name, value := range objectMap {
-			if _, exists := headers[name]; !exists {
-				headers[name] = value
+		sort.Strings(actualNames)
+		for _, actualName := range actualNames {
+			objectMap := item.NestedObjects[actualName]
+			names := make([]string, 0, len(objectMap))
+			for name := range objectMap {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			for _, name := range names {
+				if _, exists := findHeaderKey(headers, name); !exists {
+					headers[name] = objectMap[name]
+				}
 			}
 		}
 	}
@@ -4767,36 +4999,33 @@ func mergeLegacyHeaderParameters(headers map[string]any, parameters map[string]s
 	}
 	slices.Sort(keys)
 
-	// Object-valued legacy parameters have lower precedence than direct
-	// Item.Headers but higher precedence than the more deeply nested legacy
-	// representation. The canonical object wins over its customHeaders alias.
+	// Process each parameter representation as a complete precedence phase:
+	// direct Item.Headers > all canonical `headers` forms > all legacy
+	// `customHeaders` forms. Keeping the object and per-header forms in the
+	// same phase prevents a legacy object from winning merely because it was
+	// visited before a canonical dotted/slashed parameter.
 	for _, objectName := range []string{headersObjectName, legacyHeadersObjectName} {
+		objectPrefix := strings.ToLower(objectName)
+
+		// Object-valued forms retain precedence over per-header forms within the
+		// same phase, matching the historical behavior.
 		for _, key := range keys {
 			if !strings.EqualFold(key, objectName) {
 				continue
 			}
-			for name, value := range parseHeaderAnnotation(parameters[key]) {
-				if _, exists := headers[name]; !exists {
-					headers[name] = value
-				}
-			}
+			mergeParsedHeaderValues(headers, parseHeaderAnnotation(parameters[key]))
 		}
-	}
 
-	// Per-header parameter forms are also supported for both the canonical
-	// object and its legacy alias. They fill only missing keys, retaining the
-	// same direct > headers > customHeaders precedence.
-	for _, objectName := range []string{headersObjectName, legacyHeadersObjectName} {
 		for _, key := range keys {
 			lowerKey := strings.ToLower(key)
-			prefixes := []string{objectName + ".", objectName + "/"}
+			prefixes := []string{objectPrefix + ".", objectPrefix + "/"}
 			for _, prefix := range prefixes {
 				if !strings.HasPrefix(lowerKey, prefix) {
 					continue
 				}
 				name := key[len(prefix):]
 				if name != "" {
-					if _, exists := headers[name]; !exists {
+					if _, exists := findHeaderKey(headers, name); !exists {
 						headers[name] = parameters[key]
 					}
 				}
@@ -4806,13 +5035,31 @@ func mergeLegacyHeaderParameters(headers map[string]any, parameters map[string]s
 	}
 }
 
+func mergeParsedHeaderValues(headers map[string]any, parsed map[string]string) {
+	if len(parsed) == 0 {
+		return
+	}
+	names := make([]string, 0, len(parsed))
+	for name := range parsed {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if _, exists := findHeaderKey(headers, name); !exists {
+			headers[name] = parsed[name]
+		}
+	}
+}
+
 func isLegacyHeaderParameter(key string) bool {
 	lowerKey := strings.ToLower(key)
-	return lowerKey == headersObjectName || lowerKey == legacyHeadersObjectName ||
-		strings.HasPrefix(lowerKey, headersObjectName+".") ||
-		strings.HasPrefix(lowerKey, headersObjectName+"/") ||
-		strings.HasPrefix(lowerKey, legacyHeadersObjectName+".") ||
-		strings.HasPrefix(lowerKey, legacyHeadersObjectName+"/")
+	headersName := strings.ToLower(headersObjectName)
+	legacyHeadersName := strings.ToLower(legacyHeadersObjectName)
+	return lowerKey == headersName || lowerKey == legacyHeadersName ||
+		strings.HasPrefix(lowerKey, headersName+".") ||
+		strings.HasPrefix(lowerKey, headersName+"/") ||
+		strings.HasPrefix(lowerKey, legacyHeadersName+".") ||
+		strings.HasPrefix(lowerKey, legacyHeadersName+"/")
 }
 
 func addDirectItemFields(itemMap map[string]any, item Item) {
@@ -4999,8 +5246,8 @@ func enhanceItemWithHealthCheck(item *Item, healthConfig *ServiceHealthConfig) {
 			item.Headers = make(map[string]any)
 		}
 		for key, value := range healthConfig.Headers {
-			if _, exists := item.Headers[key]; !exists {
-				item.Headers[key] = value
+			if _, exists := getHeaderValue(item.Headers, key); !exists {
+				setHeaderValue(item.Headers, key, value)
 			}
 		}
 	}

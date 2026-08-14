@@ -70,6 +70,7 @@ rules:
 - apiGroups:
   - gateway.networking.k8s.io
   resources:
+  - gatewayclasses
   - gateways
   - httproutes
   verbs:

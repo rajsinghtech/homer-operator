@@ -138,6 +138,29 @@ func TestSetHTTPRouteProtocolDoesNotGuessFromHostname(t *testing.T) {
 	}
 }
 
+func TestHostnamesOverlapHonorsGatewayWildcardDepth(t *testing.T) {
+	tests := []struct {
+		name        string
+		left, right string
+		want        bool
+	}{
+		{name: "exact", left: "app.example.com", right: "app.example.com", want: true},
+		{name: "wildcard one label", left: "*.example.com", right: "app.example.com", want: true},
+		{name: "wildcard rejects deep host", left: "*.example.com", right: "api.app.example.com", want: false},
+		{name: "wildcard rejects apex", left: "*.example.com", right: "example.com", want: false},
+		{name: "different wildcard suffixes do not overlap", left: "*.example.com", right: "*.app.example.com", want: false},
+		{name: "wildcard comparison is normalized", left: "*.EXAMPLE.COM.", right: "app.example.com", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hostnamesOverlap(tt.left, tt.right); got != tt.want {
+				t.Fatalf("hostnamesOverlap(%q, %q) = %t, want %t", tt.left, tt.right, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSetHTTPRouteProtocolHonorsAllowedRouteNamespaces(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -233,6 +256,262 @@ func TestSetHTTPRouteProtocolHonorsAllowedRouteNamespaces(t *testing.T) {
 				t.Fatalf("resolved protocol = %q, want %q", got, tt.wantProtocol)
 			}
 		})
+	}
+}
+
+func TestSetHTTPRouteProtocolHonorsAllowedRouteKinds(t *testing.T) {
+	tests := []struct {
+		name         string
+		kinds        []gatewayv1.RouteGroupKind
+		wantProtocol string
+	}{
+		{
+			name:  "grpc only rejects HTTPRoute",
+			kinds: []gatewayv1.RouteGroupKind{{Kind: gatewayv1.Kind("GRPCRoute")}},
+		},
+		{
+			name: "explicit HTTPRoute permits HTTPRoute",
+			kinds: []gatewayv1.RouteGroupKind{{
+				Group: ptrToGatewayGroup(gatewayv1.Group(gatewayv1.GroupName)),
+				Kind:  gatewayv1.Kind("HTTPRoute"),
+			}},
+			wantProtocol: homer.ProtocolHTTPS,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme := runtime.NewScheme()
+			if err := gatewayv1.Install(scheme); err != nil {
+				t.Fatalf("add Gateway API to scheme: %v", err)
+			}
+			parentRef := gatewayv1.ParentReference{Name: "public"}
+			route := &gatewayv1.HTTPRoute{
+				ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+				Spec: gatewayv1.HTTPRouteSpec{
+					CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{parentRef}},
+				},
+			}
+			gateway := &gatewayv1.Gateway{
+				ObjectMeta: metav1.ObjectMeta{Name: "public", Namespace: "default"},
+				Spec: gatewayv1.GatewaySpec{Listeners: []gatewayv1.Listener{{
+					Name: "tls", Protocol: gatewayv1.HTTPSProtocolType, Port: 443,
+					AllowedRoutes: &gatewayv1.AllowedRoutes{Kinds: tt.kinds},
+				}}},
+			}
+			reader := fake.NewClientBuilder().WithScheme(scheme).WithObjects(gateway).Build()
+
+			setHTTPRouteProtocol(context.Background(), reader, route)
+
+			got := ""
+			if route.Annotations != nil {
+				got = route.Annotations[homer.HTTPRouteProtocolAnnotation]
+			}
+			if got != tt.wantProtocol {
+				t.Fatalf("resolved protocol = %q, want %q", got, tt.wantProtocol)
+			}
+		})
+	}
+}
+
+func ptrToGatewayGroup(group gatewayv1.Group) *gatewayv1.Group {
+	return &group
+}
+
+func TestSetHTTPRouteProtocolIgnoresGatewayAcceptedFalse(t *testing.T) {
+	scheme, route, gateway := newHTTPRouteProtocolStatusFixture(t)
+	gateway.Status.Conditions = []metav1.Condition{{
+		Type:   string(gatewayv1.GatewayConditionAccepted),
+		Status: metav1.ConditionFalse,
+	}}
+	reader := fake.NewClientBuilder().WithScheme(scheme).WithObjects(gateway).Build()
+
+	setHTTPRouteProtocol(context.Background(), reader, route)
+
+	assertNoHTTPRouteProtocol(t, route)
+}
+
+func TestSetHTTPRouteProtocolIgnoresUnknownGatewayStatus(t *testing.T) {
+	scheme, route, gateway := newHTTPRouteProtocolStatusFixture(t)
+	gateway.Status.Conditions = []metav1.Condition{{
+		Type:   string(gatewayv1.GatewayConditionAccepted),
+		Status: metav1.ConditionUnknown,
+	}}
+	reader := fake.NewClientBuilder().WithScheme(scheme).WithObjects(gateway).Build()
+
+	setHTTPRouteProtocol(context.Background(), reader, route)
+
+	assertNoHTTPRouteProtocol(t, route)
+}
+
+func TestSetHTTPRouteProtocolIgnoresListenerAcceptedFalse(t *testing.T) {
+	scheme, route, gateway := newHTTPRouteProtocolStatusFixture(t)
+	gateway.Status.Listeners = []gatewayv1.ListenerStatus{{
+		Name: gatewayv1.SectionName("tls"),
+		Conditions: []metav1.Condition{{
+			Type:   string(gatewayv1.ListenerConditionAccepted),
+			Status: metav1.ConditionFalse,
+		}},
+	}}
+	reader := fake.NewClientBuilder().WithScheme(scheme).WithObjects(gateway).Build()
+
+	setHTTPRouteProtocol(context.Background(), reader, route)
+
+	assertNoHTTPRouteProtocol(t, route)
+}
+
+func TestSetHTTPRouteProtocolIgnoresListenerResolvedRefsFalse(t *testing.T) {
+	scheme, route, gateway := newHTTPRouteProtocolStatusFixture(t)
+	gateway.Status.Listeners = []gatewayv1.ListenerStatus{{
+		Name: gatewayv1.SectionName("tls"),
+		Conditions: []metav1.Condition{{
+			Type:   string(gatewayv1.ListenerConditionResolvedRefs),
+			Status: metav1.ConditionFalse,
+		}},
+	}}
+	reader := fake.NewClientBuilder().WithScheme(scheme).WithObjects(gateway).Build()
+
+	setHTTPRouteProtocol(context.Background(), reader, route)
+
+	assertNoHTTPRouteProtocol(t, route)
+}
+
+func TestSetHTTPRouteProtocolIgnoresConflictedListener(t *testing.T) {
+	scheme, route, gateway := newHTTPRouteProtocolStatusFixture(t)
+	gateway.Status.Listeners = []gatewayv1.ListenerStatus{{
+		Name: gatewayv1.SectionName("tls"),
+		Conditions: []metav1.Condition{{
+			Type:   string(gatewayv1.ListenerConditionConflicted),
+			Status: metav1.ConditionTrue,
+		}},
+	}}
+	reader := fake.NewClientBuilder().WithScheme(scheme).WithObjects(gateway).Build()
+
+	setHTTPRouteProtocol(context.Background(), reader, route)
+
+	assertNoHTTPRouteProtocol(t, route)
+}
+
+func TestSetHTTPRouteProtocolRejectsExplicitCoreGroupRouteKind(t *testing.T) {
+	scheme, route, gateway := newHTTPRouteProtocolStatusFixture(t)
+	coreGroup := gatewayv1.Group("")
+	gateway.Spec.Listeners[0].AllowedRoutes = &gatewayv1.AllowedRoutes{Kinds: []gatewayv1.RouteGroupKind{{
+		Group: &coreGroup,
+		Kind:  gatewayv1.Kind("HTTPRoute"),
+	}}}
+	reader := fake.NewClientBuilder().WithScheme(scheme).WithObjects(gateway).Build()
+
+	setHTTPRouteProtocol(context.Background(), reader, route)
+
+	assertNoHTTPRouteProtocol(t, route)
+}
+
+func TestSetHTTPRouteProtocolIgnoresGatewayClassControllerMismatch(t *testing.T) {
+	scheme, route, gateway := newHTTPRouteProtocolStatusFixture(t)
+	gateway.Spec.GatewayClassName = "unmanaged"
+	gatewayClass := &gatewayv1.GatewayClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "unmanaged"},
+		Spec: gatewayv1.GatewayClassSpec{
+			ControllerName: gatewayv1.GatewayController("other.example/controller"),
+		},
+		Status: gatewayv1.GatewayClassStatus{Conditions: []metav1.Condition{{
+			Type:   string(gatewayv1.GatewayClassConditionStatusAccepted),
+			Status: metav1.ConditionFalse,
+			Reason: string(gatewayv1.GatewayClassReasonUnsupported),
+		}}},
+	}
+	reader := fake.NewClientBuilder().WithScheme(scheme).WithObjects(gateway, gatewayClass).Build()
+
+	setHTTPRouteProtocol(context.Background(), reader, route)
+
+	assertNoHTTPRouteProtocol(t, route)
+}
+
+func TestSetHTTPRouteProtocolIgnoresUnknownGatewayClassStatus(t *testing.T) {
+	scheme, route, gateway := newHTTPRouteProtocolStatusFixture(t)
+	gateway.Spec.GatewayClassName = "managed"
+	gatewayClass := &gatewayv1.GatewayClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "managed"},
+		Spec: gatewayv1.GatewayClassSpec{
+			ControllerName: testGatewayController,
+		},
+		Status: gatewayv1.GatewayClassStatus{Conditions: []metav1.Condition{{
+			Type:   string(gatewayv1.GatewayClassConditionStatusAccepted),
+			Status: metav1.ConditionUnknown,
+		}}},
+	}
+	reader := fake.NewClientBuilder().WithScheme(scheme).WithObjects(gateway, gatewayClass).Build()
+
+	setHTTPRouteProtocol(context.Background(), reader, route)
+
+	assertNoHTTPRouteProtocol(t, route)
+}
+
+func TestSetHTTPRouteProtocolIgnoresHTTPRouteParentStatusFromAnotherController(t *testing.T) {
+	scheme, route, gateway := newHTTPRouteProtocolStatusFixture(t)
+	gateway.Spec.GatewayClassName = "managed"
+	gatewayClass := &gatewayv1.GatewayClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "managed"},
+		Spec: gatewayv1.GatewayClassSpec{
+			ControllerName: testGatewayController,
+		},
+		Status: gatewayv1.GatewayClassStatus{Conditions: []metav1.Condition{{
+			Type:   string(gatewayv1.GatewayClassConditionStatusAccepted),
+			Status: metav1.ConditionTrue,
+		}}},
+	}
+	parentRef := route.Spec.ParentRefs[0]
+	route.Status.Parents = []gatewayv1.RouteParentStatus{{
+		ParentRef:      parentRef,
+		ControllerName: gatewayv1.GatewayController("other.example/controller"),
+		Conditions: []metav1.Condition{{
+			Type:   string(gatewayv1.RouteConditionAccepted),
+			Status: metav1.ConditionFalse,
+		}},
+	}}
+	reader := fake.NewClientBuilder().WithScheme(scheme).WithObjects(gateway, gatewayClass).Build()
+
+	setHTTPRouteProtocol(context.Background(), reader, route)
+
+	if got := route.Annotations[homer.HTTPRouteProtocolAnnotation]; got != homer.ProtocolHTTPS {
+		t.Fatalf("resolved protocol = %q, want %q despite another controller's rejected status", got, homer.ProtocolHTTPS)
+	}
+}
+
+const testGatewayController = gatewayv1.GatewayController("example.com/controller")
+
+func newHTTPRouteProtocolStatusFixture(t *testing.T) (*runtime.Scheme, *gatewayv1.HTTPRoute, *gatewayv1.Gateway) {
+	t.Helper()
+
+	scheme := runtime.NewScheme()
+	if err := gatewayv1.Install(scheme); err != nil {
+		t.Fatalf("add Gateway API to scheme: %v", err)
+	}
+
+	sectionName := gatewayv1.SectionName("tls")
+	parentRef := gatewayv1.ParentReference{Name: "public", SectionName: &sectionName}
+	route := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+		Spec: gatewayv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{parentRef}},
+		},
+	}
+	gateway := &gatewayv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "public", Namespace: "default"},
+		Spec: gatewayv1.GatewaySpec{Listeners: []gatewayv1.Listener{{
+			Name: sectionName, Protocol: gatewayv1.HTTPSProtocolType, Port: 443,
+		}}},
+	}
+
+	return scheme, route, gateway
+}
+
+func assertNoHTTPRouteProtocol(t *testing.T, route *gatewayv1.HTTPRoute) {
+	t.Helper()
+	if route.Annotations != nil {
+		if got, exists := route.Annotations[homer.HTTPRouteProtocolAnnotation]; exists {
+			t.Fatalf("unexpected resolved protocol %q", got)
+		}
 	}
 }
 

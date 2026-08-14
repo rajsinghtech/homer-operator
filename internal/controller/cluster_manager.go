@@ -658,7 +658,7 @@ func (m *ClusterManager) shouldIncludeHTTPRoute(ctx context.Context, cluster *Cl
 		}
 
 		for _, parentRef := range httproute.Spec.ParentRefs {
-			if parentRef.Kind != nil && string(*parentRef.Kind) != gatewayKind {
+			if !isGatewayParentReference(parentRef) {
 				continue
 			}
 
