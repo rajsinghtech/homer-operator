@@ -71,12 +71,16 @@ The following table lists the configurable parameters of the Homer Operator char
 | `crd.annotations` | CRD annotations | `{}` |
 | `podAnnotations` | Operator Pod annotations | `{}` |
 | `podLabels` | Operator Pod labels | `{}` |
-| `podSecurityContext` | Operator Pod security context | `runAsNonRoot: true` |
-| `securityContext` | Operator container security context | `allowPrivilegeEscalation: false` |
+| `podSecurityContext.runAsNonRoot` | Require the operator Pod to run as non-root | `true` |
+| `podSecurityContext.runAsUser` / `runAsGroup` / `fsGroup` | Operator Pod user, group, and filesystem group IDs | `1000` / `1000` / `1000` |
+| `securityContext.allowPrivilegeEscalation` | Allow privilege escalation in the operator container | `false` |
+| `securityContext.readOnlyRootFilesystem` | Mount the operator container root filesystem read-only | `true` |
+| `securityContext.seccompProfile.type` | Operator container seccomp profile type | `RuntimeDefault` |
+| `securityContext.capabilities.drop` | Linux capabilities dropped from the operator container | `[ALL]` |
 | `serviceMonitor.enabled` | Create a Prometheus ServiceMonitor | `false` |
 | `serviceMonitor.interval` | ServiceMonitor scrape interval | `30s` |
 | `serviceMonitor.scrapeTimeout` | ServiceMonitor scrape timeout | `10s` |
-| `serviceMonitor.labels` / `annotations` | ServiceMonitor metadata | `{}` |
+| `serviceMonitor.labels` / `serviceMonitor.annotations` | ServiceMonitor metadata | `{}` / `{}` |
 | `serviceMonitor.auth.serviceAccountName` | Override the generated secure-metrics scraper ServiceAccount name | `""` |
 | `serviceMonitor.auth.tokenSecretName` | Override the generated secure-metrics token Secret name | `""` |
 | `services.metrics.annotations` | Metrics Service annotations | `{}` |
@@ -84,24 +88,39 @@ The following table lists the configurable parameters of the Homer Operator char
 | `resources.limits.cpu` | CPU limit | `200m` |
 | `resources.requests.memory` | Memory request | `64Mi` |
 | `resources.requests.cpu` | CPU request | `50m` |
-| `livenessProbe` / `readinessProbe` | Health probe configuration | chart defaults |
+| `livenessProbe.httpGet.path` / `readinessProbe.httpGet.path` | Liveness/readiness probe endpoint paths | `/healthz` / `/readyz` |
+| `livenessProbe.httpGet.port` / `readinessProbe.httpGet.port` | Liveness/readiness probe ports | `8081` / `8081` |
+| `livenessProbe.initialDelaySeconds` / `readinessProbe.initialDelaySeconds` | Delay before the first liveness/readiness probe | `15` / `5` |
+| `livenessProbe.periodSeconds` / `readinessProbe.periodSeconds` | Seconds between liveness/readiness probes | `20` / `10` |
 | `startupProbe.enabled` | Enable the startup probe | `false` |
-| `scheduling.nodeSelector` / `tolerations` / `affinity` | Pod scheduling constraints | `{}` / `[]` / `{}` |
+| `startupProbe.httpGet.path` | Startup probe endpoint path | `/readyz` |
+| `startupProbe.httpGet.port` | Startup probe port | `8081` |
+| `startupProbe.initialDelaySeconds` | Delay before the first startup probe | `10` |
+| `startupProbe.periodSeconds` | Seconds between startup probes | `10` |
+| `startupProbe.failureThreshold` | Consecutive startup probe failures before restart | `30` |
+| `scheduling.nodeSelector` / `scheduling.tolerations` / `scheduling.affinity` | Pod scheduling constraints | `{}` / `[]` / `{}` |
 | `scheduling.priorityClassName` | Pod priority class | `""` |
 | `volumes` / `volumeMounts` | Additional operator volumes | `[]` |
 | `highAvailability.podDisruptionBudget.enabled` | Create a PodDisruptionBudget | `true` |
 | `highAvailability.podDisruptionBudget.minAvailable` | Minimum available Pods; rendered when `maxUnavailable` is null | `1` |
 | `highAvailability.podDisruptionBudget.maxUnavailable` | Maximum unavailable Pods or percentage; takes precedence when set | `null` |
 | `highAvailability.autoscaling.enabled` | Create an HPA | `false` |
-| `highAvailability.autoscaling.minReplicas` / `maxReplicas` | HPA replica bounds | `1` / `3` |
+| `highAvailability.autoscaling.minReplicas` / `highAvailability.autoscaling.maxReplicas` | HPA replica bounds | `1` / `3` |
 | `highAvailability.autoscaling.targetCPUUtilizationPercentage` | HPA CPU target | `80` |
 | `highAvailability.autoscaling.targetMemoryUtilizationPercentage` | HPA memory target | `80` |
 | `vpa.enabled` | Create a VerticalPodAutoscaler | `false` |
-| `vpa.updateMode` / `controlledResources` | VPA update and resource policy | `Auto` / `[cpu, memory]` |
+| `vpa.updateMode` / `vpa.controlledResources` | VPA update and resource policy | `Auto` / `[cpu, memory]` |
+| `vpa.maxAllowed.cpu` / `vpa.maxAllowed.memory` | Maximum VPA CPU/memory recommendations | `1` / `512Mi` |
+| `vpa.minAllowed.cpu` / `vpa.minAllowed.memory` | Minimum VPA CPU/memory recommendations | `10m` / `32Mi` |
+| `vpa.labels` / `vpa.annotations` | VPA metadata | `{}` / `{}` |
 | `topologySpreadConstraints` | Pod topology spread constraints | `[]` |
-| `prometheusRule.enabled` / `additionalRules` | Create Prometheus alerting rules | `false` / `[]` |
+| `prometheusRule.enabled` / `prometheusRule.additionalRules` | Create Prometheus alerting rules | `false` / `[]` |
+| `prometheusRule.labels` / `prometheusRule.annotations` | PrometheusRule metadata | `{}` / `{}` |
 | `grafanaDashboard.enabled` | Create a Grafana dashboard ConfigMap | `false` |
-| `deploymentStrategy` | Operator Deployment strategy | `RollingUpdate` |
+| `grafanaDashboard.labels` / `grafanaDashboard.annotations` | Grafana dashboard metadata | `{}` / `{}` |
+| `deploymentStrategy.type` | Operator Deployment strategy | `RollingUpdate` |
+| `deploymentStrategy.rollingUpdate.maxUnavailable` | Maximum unavailable Pods during rolling updates | `1` |
+| `deploymentStrategy.rollingUpdate.maxSurge` | Maximum additional Pods during rolling updates | `1` |
 | `terminationGracePeriodSeconds` | Pod termination grace period | `10` |
 | `env` / `envFrom` | Additional operator environment sources | `[]` / `[]` |
 

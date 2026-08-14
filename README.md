@@ -1153,10 +1153,6 @@ This project is licensed under the [Apache License 2.0](LICENSE).
 
 [![Star History Chart](https://api.star-history.com/svg?repos=rajsinghtech/homer-operator&type=Date)](https://star-history.com/#rajsinghtech/homer-operator&Date)
 
-Release notes are the project's changelog and are published in [GitHub
-Releases](https://github.com/rajsinghtech/homer-operator/releases). This
-repository intentionally does not maintain a `CHANGELOG.md`.
-
 ---
 
 <div align="center">
