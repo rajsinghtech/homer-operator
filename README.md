@@ -67,6 +67,12 @@ spec:
     header: true
     footer: '<p>Powered by Homer Operator</p>'
     logo: "https://raw.githubusercontent.com/rajsinghtech/homer-operator/main/homer/Homer-Operator.png"
+    message:
+      url: "https://api.chucknorris.io/jokes/random"
+      mapping:
+        title: "id"
+        content: "value"
+      refreshInterval: 10000
     services:
       - name: "Applications"
         icon: "fas fa-cloud"
@@ -75,6 +81,12 @@ spec:
             url: "https://github.com/bastienwirtz/homer"
             target: "_blank"
             subtitle: "Upstream Homer"
+            updateIntervalMs: 30000
+            quick:
+              - name: "Homer docs"
+                icon: "fas fa-book"
+                url: "https://github.com/bastienwirtz/homer"
+                target: "_blank"
   pages:
     status:
       subtitle: "A second Homer page"

@@ -135,6 +135,12 @@ spec:
     title: "My Services"
     subtitle: "Application Dashboard"
     logo: "https://example.com/logo.png"
+    message:
+      url: "https://api.chucknorris.io/jokes/random"
+      mapping:
+        title: "id"
+        content: "value"
+      refreshInterval: 10000
     services:
       - name: "Web Services"
         icon: "fas fa-globe"
@@ -143,6 +149,12 @@ spec:
             logo: "https://example.com/app-logo.png"
             url: "https://myapp.example.com"
             subtitle: "Main Application"
+            updateIntervalMs: 30000
+            quick:
+              - name: "App docs"
+                icon: "fas fa-book"
+                url: "https://example.com/docs"
+                target: "_blank"
   pages:
     status:
       subtitle: "Status page"
