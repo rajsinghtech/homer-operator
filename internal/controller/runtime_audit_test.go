@@ -42,6 +42,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
@@ -147,6 +148,29 @@ func TestNamespaceWatcherEnqueuesAfterAnnotationsRemoved(t *testing.T) {
 	requests := reconciler.findDashboardsForNamespace(context.Background(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "apps"}})
 	if len(requests) != 1 || requests[0].Name != "dashboard" {
 		t.Fatalf("Namespace watcher requests = %#v, want dashboard", requests)
+	}
+}
+
+func TestDashboardUpdatePredicateAllowsFinalizerChangesWithoutStatusLoop(t *testing.T) {
+	predicate := dashboardUpdatePredicate()
+	oldDashboard := &homerv1alpha1.Dashboard{ObjectMeta: metav1.ObjectMeta{Generation: 1}}
+
+	finalizerDashboard := oldDashboard.DeepCopy()
+	finalizerDashboard.Finalizers = []string{dashboardFinalizer}
+	if !predicate.Update(event.UpdateEvent{ObjectOld: oldDashboard, ObjectNew: finalizerDashboard}) {
+		t.Fatal("finalizer-only Dashboard update was filtered")
+	}
+
+	statusDashboard := oldDashboard.DeepCopy()
+	statusDashboard.Status.Ready = true
+	if predicate.Update(event.UpdateEvent{ObjectOld: oldDashboard, ObjectNew: statusDashboard}) {
+		t.Fatal("status-only Dashboard update was not filtered")
+	}
+
+	specDashboard := oldDashboard.DeepCopy()
+	specDashboard.Generation = 2
+	if !predicate.Update(event.UpdateEvent{ObjectOld: oldDashboard, ObjectNew: specDashboard}) {
+		t.Fatal("generation-changing Dashboard update was filtered")
 	}
 }
 

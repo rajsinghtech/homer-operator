@@ -780,6 +780,7 @@ jobs:
             ### Fixes and hardening
 
             - Persist Dashboard status through the CRD status subresource, propagate update errors, and retry transient remote-cluster failures and kubeconfig Secret rotation.
+            - Reconcile newly created Dashboards reliably after adding their finalizer while continuing to suppress status-only reconcile loops.
             - Preserve Kubernetes resource versions and server-assigned Service fields, including ClusterIP/IP families, NodePorts, and existing Service fields during reconciliation.
             - Apply per-cluster selectors and domain filters correctly, keep local and remote filtering distinct, enrich discovered resources with cluster metadata, and make multi-cluster aggregation deterministic.
             - Keep same-named resources from different clusters, namespaces, or resource kinds independent; qualify Ingress and HTTPRoute source keys, clean up the correct source, and allow a CRD item to enhance only its intended discovered resource.

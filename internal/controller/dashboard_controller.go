@@ -50,6 +50,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -879,7 +880,7 @@ func validateSmartCardSecretReferences(dashboard *homerv1alpha1.Dashboard) error
 // SetupWithManager sets up the controller with the Manager.
 func (r *DashboardReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	builder := ctrl.NewControllerManagedBy(mgr).
-		For(&homerv1alpha1.Dashboard{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		For(&homerv1alpha1.Dashboard{}, builder.WithPredicates(dashboardUpdatePredicate())).
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.Service{}).
@@ -920,6 +921,24 @@ func (r *DashboardReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		handler.EnqueueRequestsFromMapFunc(r.findDashboardsForAssetConfigMap))
 
 	return builder.Complete(r)
+}
+
+// dashboardUpdatePredicate keeps status-only updates from causing a reconcile
+// loop while still allowing the finalizer update made by the first reconcile
+// to enqueue the Dashboard again. A finalizer is metadata, so
+// GenerationChangedPredicate alone filters the update and leaves a newly
+// created Dashboard without its owned resources until some unrelated event
+// happens.
+func dashboardUpdatePredicate() predicate.Predicate {
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			if e.ObjectOld == nil || e.ObjectNew == nil {
+				return false
+			}
+			return e.ObjectNew.GetGeneration() != e.ObjectOld.GetGeneration() ||
+				!slices.Equal(e.ObjectNew.GetFinalizers(), e.ObjectOld.GetFinalizers())
+		},
+	}
 }
 
 // findDashboardsForIngress finds all dashboards that should be reconciled when an ingress changes
