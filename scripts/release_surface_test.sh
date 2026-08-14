@@ -205,6 +205,11 @@ for release_safety_marker in \
     "release_image=\"\${REGISTRY}/\${IMAGE_NAME}@\${DIGEST}\"" \
     'provenance: mode=max' \
     'sbom: true' \
+    'attestations: write' \
+    'actions/attest-build-provenance@v2' \
+    'Verify container provenance' \
+    'gh attestation verify' \
+    '--bundle-from-oci' \
     'Verify container signatures' \
     'helm pull'; do
     if ! grep -Fq -- "$release_safety_marker" "$RELEASE_WORKFLOW"; then

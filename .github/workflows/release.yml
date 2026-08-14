@@ -253,6 +253,7 @@ jobs:
       contents: write
       packages: write
       id-token: write
+      attestations: write
     outputs:
       digest: ${{ steps.build.outputs.digest }}
       tags: ${{ steps.meta.outputs.tags }}
@@ -343,6 +344,25 @@ jobs:
           fi
           echo "✅ Docker build successful"
           echo "Digest: ${{ steps.build.outputs.digest }}"
+
+      - name: Attest container provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Verify container provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          gh attestation verify \
+            "oci://${REGISTRY}/${IMAGE_NAME}@${DIGEST}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/release.yml" \
+            --bundle-from-oci
 
       - name: Prepare digest-pinned installer
         if: startsWith(github.ref, 'refs/tags/')
@@ -608,6 +628,7 @@ jobs:
             - Emit Homer-compatible `item.headers` objects for direct configuration, annotations, health checks, and Secret-backed authentication, with valid dot-notation examples and legacy compatibility.
             - Remove obsolete kube-rbac-proxy resources, secure metrics with the required RBAC, gate metrics resources consistently, and publish release charts with immutable image digests.
             - Generate a status-enabled CRD, prevent duplicate CRDs in installer manifests, and verify Kustomize, Helm, generated manifests, metrics, CRD synchronization, image signatures, and the published chart in CI.
+            - Publish and verify a signed SLSA container provenance attestation alongside the image.
             - Correct Helm uninstall and installation documentation, validate release tags as `vMAJOR.MINOR.PATCH`, and remove obsolete tag-handling paths from the development chart workflow.
 
             ### Resolved issues and project status
