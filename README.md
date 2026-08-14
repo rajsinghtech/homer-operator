@@ -1101,6 +1101,22 @@ make docker-build IMG=your-registry/homer-operator:dev
 make deploy IMG=your-registry/homer-operator:dev
 ```
 
+### Releases and Development Images
+
+Pushes to `main` publish the development `:main`, `:latest`, and commit-SHA
+images through the dedicated development-image workflow. Versioned releases
+are published only from `vMAJOR.MINOR.PATCH` tags after the release workflow
+passes code generation, tests, Helm validation, isolated Kind E2E, and
+publication checks. Release images, the Helm chart, and the installer are
+published with digest and signature/provenance verification; the release
+notes include the complete change summary and the published SBOM.
+
+Version tags matching `v*` are protected against deletion and non-fast-forward
+updates. Keep the tag target fixed after a release workflow starts. Release
+notes are the project's changelog and are published in [GitHub
+Releases](https://github.com/rajsinghtech/homer-operator/releases); this
+repository intentionally does not maintain a `CHANGELOG.md`.
+
 ### Testing
 
 ```bash

@@ -306,6 +306,7 @@ for publication_marker in \
     "cmp --silent \"\$local_chart\" \"\$pulled_chart\"" \
     'chart_digest=' \
     'OCI chart digest' \
+    "charts/homer-operator@\${{ needs.release-helm.outputs.chart_digest }}" \
     'jq -e --arg digest' \
     'upload-artifact: false' \
     'documentNamespace' \

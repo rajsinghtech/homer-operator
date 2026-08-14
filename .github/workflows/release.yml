@@ -128,6 +128,7 @@ jobs:
             echo "Version-specific installer does not contain the release image" >&2
             exit 1
           fi
+          kubeconform -strict -ignore-missing-schemas -summary "$installer_path"
           echo "Created version-specific installer: ${installer_path}"
 
       - name: Verify Helm, workflows, and packaging surfaces
@@ -746,11 +747,12 @@ jobs:
 
             ### Helm Chart
             ```bash
-            helm install homer-operator oci://${{ env.REGISTRY }}/${{ github.repository }}/charts/homer-operator \
-              --version ${{ needs.build-image.outputs.version }} \
+            helm install homer-operator oci://${{ env.REGISTRY }}/${{ github.repository }}/charts/homer-operator@${{ needs.release-helm.outputs.chart_digest }} \
               --namespace homer-operator-system \
               --create-namespace
             ```
+
+            The chart digest above is for version `${{ needs.build-image.outputs.version }}`; use the digest-pinned reference for reproducible installs.
 
             ### Kubernetes Installer
             The release asset `homer-operator-${{ needs.build-image.outputs.version }}-install.yaml` is pinned to this release's operator image. The tracked `dist/install.yaml` and `deploy/operator.yaml` manifests remain development manifests that use `:main`.
