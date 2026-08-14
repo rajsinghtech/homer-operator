@@ -45,6 +45,11 @@ The default Kustomize installation does not include a Prometheus Operator
 kubectl apply -k config/default
 ```
 
+The tracked Kustomize overlay follows the development `main` image. For a
+version-pinned installation, use the Helm chart or the version-specific
+`homer-operator-<version>-install.yaml` asset attached to the corresponding
+GitHub Release.
+
 The operator metrics `Service` is included in this installation. To add the
 optional Prometheus integration, first install the Prometheus Operator and
 then apply the optional operator-plus-monitor overlay documented in
@@ -146,7 +151,7 @@ metadata:
   name: api-keys
 type: Opaque
 data:
-  plex-token: <base64-encoded-token>
+  emby-api-key: <base64-encoded-api-key>
 ---
 apiVersion: homer.rajsingh.info/v1alpha1
 kind: Dashboard
@@ -156,7 +161,7 @@ spec:
   secrets:
     apiKey:
       name: api-keys
-      key: plex-token
+      key: emby-api-key
   homerConfig:
     title: "Media Center"
     services:
@@ -164,10 +169,10 @@ spec:
           name: "Media Services"
         items:
           - parameters:
-              name: "Plex Server"
+              name: "Emby Server"
               type: "Emby"  # Smart card type
-              url: "https://plex.example.com"
-              # Note: Configure API key reference in smart card configuration
+              url: "https://emby.example.com"
+              libraryType: "series" # music, series, or movies
 ```
 
 Smart-card Secrets must be in the Dashboard's namespace. Cross-namespace
@@ -453,13 +458,17 @@ metadata:
     # Array parameters (comma-separated, auto-cleaned)
     item.homer.rajsingh.info/keywords: " api , service , smart "  # Spaces trimmed
     
-    # Object parameters (key:value pairs)
+    # Headers are emitted as Homer's item.headers object.
     item.homer.rajsingh.info/headers: "Authorization: Bearer token, Content-Type: application/json"
+
+    # A single header can also use dot notation.
+    item.homer.rajsingh.info/headers.Authorization: "Bearer token"
 ```
 
 #### Nested Object Support
 
-Supports complex nested configurations using slash notation:
+Supports complex nested configurations using dot notation, which is valid in
+Kubernetes annotation keys:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -467,14 +476,14 @@ kind: Ingress
 metadata:
   name: advanced-app
   annotations:
-    # Nested object: customHeaders
-    item.homer.rajsingh.info/customHeaders/Authorization: "Bearer secret-token"
-    item.homer.rajsingh.info/customHeaders/X-API-Key: "api-key-123"
-    item.homer.rajsingh.info/customHeaders/Content-Type: "application/json"
+    # Legacy customHeaders dot notation is also converted to item.headers.
+    item.homer.rajsingh.info/customHeaders.Authorization: "Bearer secret-token"
+    item.homer.rajsingh.info/customHeaders.X-API-Key: "api-key-123"
+    item.homer.rajsingh.info/customHeaders.Content-Type: "application/json"
     
     # Nested object: mapping (for smart cards)
-    item.homer.rajsingh.info/mapping/status: "health.status"
-    item.homer.rajsingh.info/mapping/version: "info.version"
+    item.homer.rajsingh.info/mapping.status: "health.status"
+    item.homer.rajsingh.info/mapping.version: "info.version"
     
     # Any Homer parameter works automatically!
     item.homer.rajsingh.info/checkInterval: "30000"      # Smart card refresh
@@ -531,7 +540,7 @@ The system automatically detects parameter types using intelligent patterns:
 
 - **Booleans**: Parameters ending in `_enabled`, `_flag` or named `usecredentials`, `legacyapi`, `hide`
 - **Integers**: Parameters ending in `Interval`, `_value`, `Value` or named `timeout`, `limit`
-- **Objects**: Parameters named `headers`, `mapping`, `customHeaders`
+- **Objects**: Parameters named `headers` and `mapping`; `customHeaders` is a legacy alias for `headers`
 - **Arrays**: Comma-separated values (automatically cleaned and trimmed)
 - **Validation**: Built-in validation for `url`, `target`, numeric values
 
@@ -544,10 +553,10 @@ The system automatically detects parameter types using intelligent patterns:
 | `item.homer.rajsingh.info/logo` | String | URL to logo/icon | `"https://example.com/logo.png"` |
 | `item.homer.rajsingh.info/tag` | String | Tag label | `"production"`, `"api"` |
 | `item.homer.rajsingh.info/tagstyle` | String | Tag color style | `"is-primary"`, `"is-info"` |
-| `item.homer.rajsingh.info/keywords` | Array | Search keywords | `"api, service, web"` |
+| `item.homer.rajsingh.info/keywords` | String | Comma-separated search keywords | `"api, service, web"` |
 | `item.homer.rajsingh.info/hide` | Boolean | Hide item from dashboard | `"true"`, `"false"`, `"yes"`, `"no"` |
 | `item.homer.rajsingh.info/target` | String | Link target | `"_blank"`, `"_self"` |
-| `item.homer.rajsingh.info/type` | String | Smart card type | `"Ping"`, `"Emby"`, `"AdGuard"` |
+| `item.homer.rajsingh.info/type` | String | Smart card type | `"Ping"`, `"Emby"`, `"AdGuardHome"` |
 | `service.homer.rajsingh.info/name` | String | Service group name | `"Production Services"` |
 | `service.homer.rajsingh.info/icon` | String | Service group icon | `"fas fa-server"` |
 
@@ -621,6 +630,10 @@ service account, so see its README for the intentional manual binding to
 - `controller_runtime_reconcile_total` - Reconciliation counter
 - `controller_runtime_reconcile_time_seconds` - Reconciliation duration
 - Standard controller-runtime metrics for monitoring operator health
+
+The metrics Service is created only when both `operator.metrics.enabled` and
+`services.metrics.enabled` are true. The ServiceMonitor additionally requires
+`serviceMonitor.enabled=true`.
 
 Secure metrics use controller-runtime TokenReview/SubjectAccessReview
 authorization. When `serviceMonitor.enabled=true` and secure metrics remain

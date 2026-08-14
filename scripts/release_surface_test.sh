@@ -193,6 +193,26 @@ for verification_marker in \
     fi
 done
 
+for release_safety_marker in \
+    'concurrency:' \
+    'cancel-in-progress: true' \
+    'Verify release tag target and semantic version' \
+    'git ls-remote --exit-code --refs origin' \
+    'Upload version-specific installer' \
+    "installer-\${{ github.ref_name }}" \
+    'Prepare digest-pinned installer' \
+    "homer-operator-\${VERSION}-install.yaml" \
+    "release_image=\"\${REGISTRY}/\${IMAGE_NAME}@\${DIGEST}\"" \
+    'provenance: mode=max' \
+    'sbom: true' \
+    'Verify container signatures' \
+    'helm pull'; do
+    if ! grep -Fq -- "$release_safety_marker" "$RELEASE_WORKFLOW"; then
+        echo "release workflow is missing safety or installer marker: $release_safety_marker" >&2
+        exit 1
+    fi
+done
+
 for workflow in "$RELEASE_WORKFLOW" "$HELM_RELEASE"; do
     if ! grep -Fq "actionlint_\${ACTIONLINT_VERSION}_linux_amd64.tar.gz" "$workflow"; then
         echo "$workflow downloads the wrong actionlint Linux asset" >&2

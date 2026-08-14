@@ -98,6 +98,8 @@ spec:
         subtitle: "Upstream-style service entry"
         url: "https://github.com/bastienwirtz/homer"
         target: "_blank"
+        headers:
+          X-Example-Header: "example-value"
 
     # Comprehensive service catalog (legacy parameters form)
     - parameters:
@@ -191,7 +193,7 @@ spec:
   #   username:
   #     name: "dashboard-secrets"
   #     key: "username"
-  #   headers:  # Custom authentication headers from secrets
+  #   headers:  # Injected into Homer items as item.headers objects
   #     Authorization:
   #       name: "dashboard-secrets"
   #       key: "bearer-token"

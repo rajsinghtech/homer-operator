@@ -17,7 +17,13 @@ limitations under the License.
 package homer
 
 import (
+	"context"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 // TestBooleanValueParsing tests comprehensive boolean value parsing
@@ -133,7 +139,7 @@ func TestHeadersAnnotationProcessing(t *testing.T) {
 	headerTests := []struct {
 		name        string
 		annotations map[string]string
-		expected    map[string]string
+		expected    map[string]any
 	}{
 		{
 			name: "dot notation headers",
@@ -142,10 +148,9 @@ func TestHeadersAnnotationProcessing(t *testing.T) {
 				"item.homer.rajsingh.info/headers.authorization": "Bearer token123",
 				"item.homer.rajsingh.info/headers.x-api-key":     "key456",
 			},
-			expected: map[string]string{
-				"name":                  "Test Service",
-				"headers.authorization": "Bearer token123",
-				"headers.x-api-key":     "key456",
+			expected: map[string]any{
+				"authorization": "Bearer token123",
+				"x-api-key":     "key456",
 			},
 		},
 		{
@@ -153,8 +158,8 @@ func TestHeadersAnnotationProcessing(t *testing.T) {
 			annotations: map[string]string{
 				"item.homer.rajsingh.info/headers": "Authorization: Bearer token123",
 			},
-			expected: map[string]string{
-				"headers": "Authorization: Bearer token123",
+			expected: map[string]any{
+				"Authorization": "Bearer token123",
 			},
 		},
 		{
@@ -162,8 +167,27 @@ func TestHeadersAnnotationProcessing(t *testing.T) {
 			annotations: map[string]string{
 				"item.homer.rajsingh.info/headers": "Authorization: Bearer token123, X-API-Key: key456",
 			},
-			expected: map[string]string{
-				"headers": "Authorization: Bearer token123, X-API-Key: key456",
+			expected: map[string]any{
+				"Authorization": "Bearer token123",
+				"X-API-Key":     "key456",
+			},
+		},
+		{
+			name: "legacy customHeaders slash notation",
+			annotations: map[string]string{
+				"item.homer.rajsingh.info/customHeaders/Authorization": "Bearer legacy",
+			},
+			expected: map[string]any{
+				"Authorization": "Bearer legacy",
+			},
+		},
+		{
+			name: "legacy customHeaders dot notation",
+			annotations: map[string]string{
+				"item.homer.rajsingh.info/customHeaders.Authorization": "Bearer legacy",
+			},
+			expected: map[string]any{
+				"Authorization": "Bearer legacy",
 			},
 		},
 	}
@@ -174,11 +198,100 @@ func TestHeadersAnnotationProcessing(t *testing.T) {
 			processItemAnnotations(&item, tc.annotations)
 
 			for key, expected := range tc.expected {
-				if item.Parameters[key] != expected {
-					t.Errorf("Expected %s '%s', got '%s'", key, expected, item.Parameters[key])
+				if item.Headers[key] != expected {
+					t.Errorf("Expected header %s %q, got %q", key, expected, item.Headers[key])
 				}
 			}
+			if len(item.Parameters) != 0 {
+				t.Fatalf("headers should not be stored as legacy parameters: %#v", item.Parameters)
+			}
 		})
+	}
+}
+
+func TestHeadersRenderAsUpstreamObject(t *testing.T) {
+	item := Item{
+		Headers: map[string]any{"X-Direct": "direct"},
+		Parameters: map[string]string{
+			"headers":             "X-Legacy: legacy",
+			"headers.X-Parameter": "parameter",
+			"name":                "Service",
+		},
+		NestedObjects: map[string]map[string]string{
+			"customHeaders": {"X-Custom": "custom"},
+		},
+	}
+
+	got := flattenItemsForYAML([]Item{item})[0]
+	headers, ok := got["headers"].(map[string]any)
+	if !ok {
+		t.Fatalf("headers output = %#v, want object", got["headers"])
+	}
+	for name, want := range map[string]string{
+		"X-Direct":    "direct",
+		"X-Legacy":    "legacy",
+		"X-Parameter": "parameter",
+		"X-Custom":    "custom",
+	} {
+		if headers[name] != want {
+			t.Errorf("headers[%q] = %#v, want %q", name, headers[name], want)
+		}
+	}
+	if _, exists := got["customHeaders"]; exists {
+		t.Error("legacy customHeaders must not be emitted")
+	}
+}
+
+func TestNestedObjectDotNotation(t *testing.T) {
+	item := Item{}
+	processItemAnnotations(&item, map[string]string{
+		"item.homer.rajsingh.info/mapping.status":  "health.status",
+		"item.homer.rajsingh.info/mapping.version": "info.version",
+	})
+
+	want := map[string]string{"status": "health.status", "version": "info.version"}
+	if got := item.NestedObjects["mapping"]; len(got) != len(want) {
+		t.Fatalf("mapping = %#v, want %#v", got, want)
+	}
+	for key, value := range want {
+		if got := item.NestedObjects["mapping"][key]; got != value {
+			t.Errorf("mapping[%q] = %q, want %q", key, got, value)
+		}
+	}
+}
+
+func TestSecretHeadersRenderAsUpstreamObject(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add core scheme: %v", err)
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "credentials", Namespace: "default"},
+		Data: map[string][]byte{
+			"header": []byte("secret-value"),
+			"token":  []byte("secret-token"),
+		},
+	}).Build()
+	item := &Item{Type: "Grafana"}
+
+	if err := ResolveHeaderFromSecret(context.Background(), k8sClient, item, "X-Secret", &SecretKeyRef{Name: "credentials", Key: "header"}, "default"); err != nil {
+		t.Fatalf("resolve header secret: %v", err)
+	}
+	if err := ResolveTokenFromSecret(context.Background(), k8sClient, item, &SecretKeyRef{Name: "credentials", Key: "token"}, "default"); err != nil {
+		t.Fatalf("resolve token secret: %v", err)
+	}
+
+	want := map[string]any{"X-Secret": "secret-value", "Authorization": "Bearer secret-token"}
+	if len(item.Headers) != len(want) {
+		t.Fatalf("resolved headers = %#v, want %#v", item.Headers, want)
+	}
+	for name, value := range want {
+		if item.Headers[name] != value {
+			t.Errorf("resolved header %q = %#v, want %#v", name, item.Headers[name], value)
+		}
+	}
+	if len(item.NestedObjects) != 0 {
+		t.Fatalf("secret headers unexpectedly used nested objects: %#v", item.NestedObjects)
 	}
 }
 
@@ -237,11 +350,11 @@ func TestComprehensiveAnnotationProcessing(t *testing.T) {
 			}
 
 			if tc.shouldHaveHeaders {
-				if item.Parameters["headers.authorization"] != "Bearer token123" {
-					t.Errorf("Expected authorization header 'Bearer token123', got '%s'", item.Parameters["headers.authorization"])
+				if item.Headers["authorization"] != "Bearer token123" {
+					t.Errorf("Expected authorization header 'Bearer token123', got '%s'", item.Headers["authorization"])
 				}
-				if item.Parameters["headers.x-api-key"] != "key456" {
-					t.Errorf("Expected x-api-key header 'key456', got '%s'", item.Parameters["headers.x-api-key"])
+				if item.Headers["x-api-key"] != "key456" {
+					t.Errorf("Expected x-api-key header 'key456', got '%s'", item.Headers["x-api-key"])
 				}
 			}
 
@@ -276,20 +389,17 @@ func TestComprehensiveAnnotationProcessing(t *testing.T) {
 		processItemAnnotationsWithValidation(&item, annotations, ValidationLevelWarn)
 
 		expectedParams := map[string]string{
-			"name":                  "Complete Test Service",
-			"subtitle":              "A comprehensive test",
-			"url":                   "https://example.com/api",
-			"target":                "_blank",
-			"tag":                   "test",
-			"tagstyle":              "is-primary",
-			"keywords":              "api,test,service",
-			"type":                  "Generic",
-			"warning_value":         "80",
-			"danger_value":          "90",
-			"usecredentials":        "true",
-			"headers.authorization": "Bearer test-token",
-			"headers.content-type":  "application/json",
-			"headers":               "X-Custom: custom-value, X-Test: test-value",
+			"name":           "Complete Test Service",
+			"subtitle":       "A comprehensive test",
+			"url":            "https://example.com/api",
+			"target":         "_blank",
+			"tag":            "test",
+			"tagstyle":       "is-primary",
+			"keywords":       "api,test,service",
+			"type":           "Generic",
+			"warning_value":  "80",
+			"danger_value":   "90",
+			"usecredentials": "true",
 		}
 
 		for key, expectedValue := range expectedParams {
@@ -300,6 +410,16 @@ func TestComprehensiveAnnotationProcessing(t *testing.T) {
 
 		if _, exists := item.Parameters["unrelated.annotation"]; exists {
 			t.Error("Unrelated annotation should not be processed")
+		}
+		for key, expected := range map[string]string{
+			"authorization": "Bearer test-token",
+			"content-type":  "application/json",
+			"X-Custom":      "custom-value",
+			"X-Test":        "test-value",
+		} {
+			if actual := item.Headers[key]; actual != expected {
+				t.Errorf("Expected header %s=%q, got %q", key, expected, actual)
+			}
 		}
 	})
 }

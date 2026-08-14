@@ -52,7 +52,7 @@ func TestCreateConfigMapWithDiscoveryConfigAppliesDashboardFeatures(t *testing.T
 		if getItemType(item) != GenericType || !strings.HasSuffix(getItemEndpoint(item), "/healthz") {
 			t.Fatalf("health check was not applied to item %#v", item)
 		}
-		if item.NestedObjects["headers"]["X-Probe"] != probeHeaderValue {
+		if item.Headers["X-Probe"] != probeHeaderValue {
 			t.Fatalf("health header was not applied to item %#v", item)
 		}
 	}

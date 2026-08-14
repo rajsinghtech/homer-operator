@@ -2234,14 +2234,7 @@ func ResolveTokenFromSecret(
 		return err
 	}
 
-	// Set the token in NestedObjects under customHeaders/Authorization
-	if item.NestedObjects == nil {
-		item.NestedObjects = make(map[string]map[string]string)
-	}
-	if item.NestedObjects["customHeaders"] == nil {
-		item.NestedObjects["customHeaders"] = make(map[string]string)
-	}
-	item.NestedObjects["customHeaders"]["Authorization"] = fmt.Sprintf("Bearer %s", value)
+	setItemHeader(item, "Authorization", fmt.Sprintf("Bearer %s", value))
 	return nil
 }
 
@@ -2303,14 +2296,7 @@ func ResolveHeaderFromSecret(
 		return err
 	}
 
-	// Set the custom header in NestedObjects under customHeaders
-	if item.NestedObjects == nil {
-		item.NestedObjects = make(map[string]map[string]string)
-	}
-	if item.NestedObjects["customHeaders"] == nil {
-		item.NestedObjects["customHeaders"] = make(map[string]string)
-	}
-	item.NestedObjects["customHeaders"][headerName] = value
+	setItemHeader(item, headerName, value)
 	return nil
 }
 
@@ -3205,29 +3191,58 @@ func processItemAnnotationsWithValidation(item *Item, annotations map[string]str
 	item.legacyParameters = true
 	for key, value := range annotations {
 		if fieldName, ok := strings.CutPrefix(key, "item.homer.rajsingh.info/"); ok {
-			processItemField(item, strings.ToLower(fieldName), value, validationLevel)
+			processItemField(item, fieldName, value, validationLevel)
 		}
 	}
 }
 
 // processItemField processes a single item field using smart convention-based detection
 func processItemField(item *Item, fieldName, value string, validationLevel ValidationLevel) {
+	lowerFieldName := strings.ToLower(fieldName)
+
+	// Homer expects item.headers to be an object. Support the documented
+	// comma-separated form, per-header dot notation, and the historical
+	// customHeaders slash form while storing all of them in that object.
+	if lowerFieldName == "headers" {
+		processHeaderAnnotation(item, value)
+		return
+	}
+	if headerName, ok := strings.CutPrefix(lowerFieldName, "headers."); ok {
+		originalHeaderName := fieldName[len(fieldName)-len(headerName):]
+		setItemHeader(item, originalHeaderName, value)
+		return
+	}
+	if strings.HasPrefix(lowerFieldName, "customheaders/") {
+		setItemHeader(item, fieldName[len("customHeaders/"):], value)
+		return
+	}
+	if headerName, ok := strings.CutPrefix(lowerFieldName, "customheaders."); ok {
+		originalHeaderName := fieldName[len(fieldName)-len(headerName):]
+		setItemHeader(item, originalHeaderName, value)
+		return
+	}
 	// Handle array-of-objects annotations (e.g., quick.0.name, quick.1.url)
-	if parts := strings.SplitN(fieldName, ".", 3); len(parts) == 3 {
+	if parts := strings.SplitN(lowerFieldName, ".", 3); len(parts) == 3 {
 		if idx, err := strconv.Atoi(parts[1]); err == nil {
 			processArrayObjectField(item, parts[0], idx, parts[2], value)
 			return
 		}
 	}
+	// Kubernetes annotation keys can contain only one slash, so support dot
+	// notation for ordinary nested objects such as mapping.status.
+	if parts := strings.SplitN(fieldName, ".", 2); len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+		processNestedObjectField(item, parts[0]+"/"+parts[1], value)
+		return
+	}
 
 	// Handle nested object annotations (e.g., customHeaders/Authorization)
-	if strings.Contains(fieldName, "/") {
+	if strings.Contains(lowerFieldName, "/") {
 		processNestedObjectField(item, fieldName, value)
 		return
 	}
 
 	// Handle all parameters dynamically using smart type inference
-	processDynamicParameter(item, fieldName, value, validationLevel)
+	processDynamicParameter(item, lowerFieldName, value, validationLevel)
 }
 
 // processArrayObjectField handles array-of-objects annotations like quick.0.name
@@ -3259,6 +3274,10 @@ func processNestedObjectField(item *Item, fieldName, value string) {
 
 	objectName := parts[0]
 	propertyName := parts[1]
+	if strings.EqualFold(objectName, "headers") || strings.EqualFold(objectName, "customHeaders") {
+		setItemHeader(item, propertyName, value)
+		return
+	}
 
 	// Initialize NestedObjects map if not exists
 	if item.NestedObjects == nil {
@@ -3272,6 +3291,50 @@ func processNestedObjectField(item *Item, fieldName, value string) {
 
 	// Store the property
 	item.NestedObjects[objectName][propertyName] = value
+}
+
+func processHeaderAnnotation(item *Item, value string) {
+	for headerName, headerValue := range parseHeaderAnnotation(value) {
+		setItemHeader(item, headerName, headerValue)
+	}
+}
+
+func parseHeaderAnnotation(value string) map[string]string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+
+	// Accept an object value as a convenience for callers that already have
+	// JSON-formatted annotation data.
+	if strings.HasPrefix(value, "{") {
+		var headers map[string]string
+		if json.Unmarshal([]byte(value), &headers) == nil {
+			return headers
+		}
+	}
+
+	headers := make(map[string]string)
+	for _, pair := range strings.Split(value, ",") {
+		name, headerValue, ok := strings.Cut(pair, ":")
+		name = strings.TrimSpace(name)
+		if !ok || name == "" {
+			continue
+		}
+		headers[name] = strings.TrimSpace(headerValue)
+	}
+	return headers
+}
+
+func setItemHeader(item *Item, name, value string) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return
+	}
+	if item.Headers == nil {
+		item.Headers = make(map[string]any)
+	}
+	item.Headers[name] = value
 }
 
 // processDynamicParameter handles all parameters dynamically
@@ -4484,6 +4547,7 @@ func flattenItemsForYAML(items []Item) []map[string]any {
 
 	for _, item := range items {
 		itemMap := make(map[string]any)
+		headers := flattenItemHeaders(item)
 		addDirectItemFields(itemMap, item)
 		for key, value := range item.RawFields {
 			if _, exists := itemMap[key]; !exists {
@@ -4494,6 +4558,9 @@ func flattenItemsForYAML(items []Item) []map[string]any {
 		// Add parameters with smart type inference (key-aware for array detection)
 		if item.Parameters != nil {
 			for key, value := range item.Parameters {
+				if isLegacyHeaderParameter(key) {
+					continue
+				}
 				yamlKey := getYAMLKey(key)
 				itemMap[yamlKey] = smartInferTypeForParam(yamlKey, value)
 			}
@@ -4502,8 +4569,14 @@ func flattenItemsForYAML(items []Item) []map[string]any {
 		// Add nested objects
 		if item.NestedObjects != nil {
 			for objectName, objectMap := range item.NestedObjects {
+				if strings.EqualFold(objectName, "headers") || strings.EqualFold(objectName, "customHeaders") {
+					continue
+				}
 				itemMap[objectName] = objectMap
 			}
+		}
+		if len(headers) > 0 {
+			itemMap["headers"] = headers
 		}
 
 		// Add array objects (e.g., quick links)
@@ -4527,6 +4600,53 @@ func flattenItemsForYAML(items []Item) []map[string]any {
 	}
 
 	return result
+}
+
+func flattenItemHeaders(item Item) map[string]any {
+	if len(item.Headers) == 0 && len(item.Parameters) == 0 && len(item.NestedObjects) == 0 {
+		return nil
+	}
+
+	headers := make(map[string]any, len(item.Headers))
+	for name, value := range item.Headers {
+		headers[name] = deepCopyValue(value)
+	}
+
+	// Keep older parameter-based objects compatible, but let direct Item.Headers
+	// values win when both representations contain the same header.
+	for key, value := range item.Parameters {
+		lowerKey := strings.ToLower(key)
+		switch {
+		case lowerKey == "headers":
+			for name, headerValue := range parseHeaderAnnotation(value) {
+				if _, exists := headers[name]; !exists {
+					headers[name] = headerValue
+				}
+			}
+		case strings.HasPrefix(lowerKey, "headers."):
+			name := key[len("headers."):]
+			if _, exists := headers[name]; !exists {
+				headers[name] = value
+			}
+		}
+	}
+
+	for objectName, objectMap := range item.NestedObjects {
+		if !strings.EqualFold(objectName, "headers") && !strings.EqualFold(objectName, "customHeaders") {
+			continue
+		}
+		for name, value := range objectMap {
+			if _, exists := headers[name]; !exists {
+				headers[name] = value
+			}
+		}
+	}
+	return headers
+}
+
+func isLegacyHeaderParameter(key string) bool {
+	lowerKey := strings.ToLower(key)
+	return lowerKey == "headers" || strings.HasPrefix(lowerKey, "headers.")
 }
 
 func addDirectItemFields(itemMap map[string]any, item Item) {
@@ -4707,29 +4827,14 @@ func enhanceItemWithHealthCheck(item *Item, healthConfig *ServiceHealthConfig) {
 		}
 	}
 
-	// Merge health check headers. Homer accepts direct item headers; the
-	// nested representation remains available for annotation-generated items.
+	// Merge health check headers into Homer's direct item.headers object.
 	if healthConfig.Headers != nil {
-		if usesLegacyParameters {
-			if item.NestedObjects == nil {
-				item.NestedObjects = make(map[string]map[string]string)
-			}
-			if item.NestedObjects["headers"] == nil {
-				item.NestedObjects["headers"] = make(map[string]string)
-			}
-			for key, value := range healthConfig.Headers {
-				if _, exists := item.NestedObjects["headers"][key]; !exists {
-					item.NestedObjects["headers"][key] = value
-				}
-			}
-		} else {
-			if item.Headers == nil {
-				item.Headers = make(map[string]any)
-			}
-			for key, value := range healthConfig.Headers {
-				if _, exists := item.Headers[key]; !exists {
-					item.Headers[key] = value
-				}
+		if item.Headers == nil {
+			item.Headers = make(map[string]any)
+		}
+		for key, value := range healthConfig.Headers {
+			if _, exists := item.Headers[key]; !exists {
+				item.Headers[key] = value
 			}
 		}
 	}

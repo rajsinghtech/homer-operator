@@ -45,6 +45,65 @@ func TestSetHTTPRouteProtocolUsesSelectedGatewayListener(t *testing.T) {
 	}
 }
 
+func TestSetHTTPRouteProtocolPreservesResolvedProtocolWhenGatewayIsUnavailable(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := gatewayv1.Install(scheme); err != nil {
+		t.Fatalf("add Gateway API to scheme: %v", err)
+	}
+
+	route := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "app",
+			Namespace: "default",
+			Annotations: map[string]string{
+				homer.HTTPRouteProtocolAnnotation: homer.ProtocolHTTPS,
+			},
+		},
+		Spec: gatewayv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{{Name: "remote-only"}}},
+		},
+	}
+	reader := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	setHTTPRouteProtocol(context.Background(), reader, route)
+
+	if got := route.Annotations[homer.HTTPRouteProtocolAnnotation]; got != homer.ProtocolHTTPS {
+		t.Fatalf("resolved protocol = %q, want existing protocol %q", got, homer.ProtocolHTTPS)
+	}
+}
+
+func TestSetHTTPRouteProtocolHonorsParentRefPort(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := gatewayv1.Install(scheme); err != nil {
+		t.Fatalf("add Gateway API to scheme: %v", err)
+	}
+
+	port := gatewayv1.PortNumber(80)
+	route := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+		Spec: gatewayv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{{
+				Name: "public",
+				Port: &port,
+			}}},
+		},
+	}
+	gateway := &gatewayv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "public", Namespace: "default"},
+		Spec: gatewayv1.GatewaySpec{Listeners: []gatewayv1.Listener{
+			{Name: "web", Protocol: gatewayv1.HTTPProtocolType, Port: 80},
+			{Name: "tls", Protocol: gatewayv1.HTTPSProtocolType, Port: 443},
+		}},
+	}
+	reader := fake.NewClientBuilder().WithScheme(scheme).WithObjects(gateway).Build()
+
+	setHTTPRouteProtocol(context.Background(), reader, route)
+
+	if got := route.Annotations[homer.HTTPRouteProtocolAnnotation]; got != homer.ProtocolHTTP {
+		t.Fatalf("resolved protocol = %q, want %q for parentRef port 80", got, homer.ProtocolHTTP)
+	}
+}
+
 func TestSetHTTPRouteProtocolDoesNotGuessFromHostname(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := gatewayv1.Install(scheme); err != nil {

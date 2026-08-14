@@ -24,6 +24,10 @@ cd homer-operator
 helm install homer-operator charts/homer-operator -n homer-operator --create-namespace
 ```
 
+Source and tracked Kustomize installs follow the development `main` image.
+Use the OCI chart above, or the version-specific installer asset attached to a
+GitHub Release, when you need a pinned operator image.
+
 ## Configuration
 
 The following table lists the configurable parameters of the Homer Operator chart and their default values.
@@ -42,7 +46,7 @@ The following table lists the configurable parameters of the Homer Operator char
 | `operator.metrics.enabled` | Enable metrics collection | `true` |
 | `operator.metrics.secureMetrics` | Use secure metrics serving | `true` |
 | `operator.metrics.bindAddress` | Metrics bind address | `:8443` |
-| `services.metrics.enabled` | Create the metrics Service when operator metrics are enabled | `true` |
+| `services.metrics.enabled` | Create the metrics Service; both this and `operator.metrics.enabled` must be true | `true` |
 | `services.metrics.type` | Metrics Service type | `ClusterIP` |
 | `services.metrics.port` | Metrics Service port | `8443` |
 | `operator.healthProbe.bindAddress` | Health probe bind address | `:8081` |
@@ -148,6 +152,8 @@ spec:
           - name: "My App"
             logo: "https://example.com/app-logo.png"
             url: "https://myapp.example.com"
+            headers:
+              X-Example-Header: "example-value"
             subtitle: "Main Application"
             updateIntervalMs: 30000
             quick:
@@ -167,6 +173,9 @@ spec:
 
 The `services` and `pages` blocks follow upstream Homer's direct configuration
 format. Legacy `parameters` blocks remain supported for existing dashboards.
+Item request headers use the upstream `headers` object form. Secret-backed
+headers configured under `spec.secrets.headers` are injected into each item as
+that same `headers` object.
 
 The checked-in sample at `config/samples/homer_v1alpha1_dashboard.yaml` is
 used by the Helm kind smoke test. It exercises direct Homer fields, a second
@@ -216,7 +225,7 @@ To enable Gateway API support, set `operator.enableGatewayAPI=true`. This requir
 The operator exposes authenticated HTTPS Prometheus metrics on port 8443. Its
 health and readiness probes listen on port 8081. The metrics Service is created
 only when both `operator.metrics.enabled` and `services.metrics.enabled` are
-true; disabling operator metrics also removes the Service and ServiceMonitor.
+true; disabling either gate also removes the Service and ServiceMonitor.
 Secure metrics use controller-runtime's TokenReview/SubjectAccessReview filter,
 so the operator ServiceAccount needs `create` access to
 `authentication.k8s.io/tokenreviews` and

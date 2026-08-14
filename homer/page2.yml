@@ -1,0 +1,24 @@
+# Additional page for the sample Homer configuration.
+# Homer loads this file when the URL hash is #page2 and keeps config.yml as
+# the base configuration.
+
+subtitle: "A second Homer page"
+
+links:
+  - name: "Home"
+    icon: "fas fa-home"
+    url: "#"
+  - name: "Homer"
+    icon: "fas fa-book"
+    url: "https://github.com/bastienwirtz/homer"
+    target: "_blank"
+
+services:
+  - name: "More apps on another page"
+    icon: "fas fa-cloud"
+    items:
+      - name: "Example"
+        icon: "fas fa-globe"
+        subtitle: "A service on the second page"
+        url: "https://example.com"
+        target: "_blank"

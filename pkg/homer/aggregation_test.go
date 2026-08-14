@@ -46,12 +46,12 @@ func TestServiceHealthEnhancement(t *testing.T) {
 		t.Errorf("Expected endpoint to be '%s', got '%s'", expectedEndpoint, actualEndpoint)
 	}
 
-	// Check NestedObjects for headers
-	if item.NestedObjects == nil || item.NestedObjects["headers"] == nil {
+	// Check direct Homer headers
+	if item.Headers == nil {
 		t.Fatal("Expected headers to be set")
 	}
 
-	if item.NestedObjects["headers"]["User-Agent"] != "Homer-Operator-Health-Check" {
+	if item.Headers["User-Agent"] != "Homer-Operator-Health-Check" {
 		t.Errorf("Expected User-Agent header to be set")
 	}
 }
@@ -392,8 +392,10 @@ func TestEnhanceHomerConfigWithAggregation(t *testing.T) {
 			}
 
 			userAgent := ""
-			if item.NestedObjects != nil && item.NestedObjects["headers"] != nil {
-				userAgent = item.NestedObjects["headers"]["User-Agent"]
+			if item.Headers != nil {
+				if value, ok := item.Headers["User-Agent"].(string); ok {
+					userAgent = value
+				}
 			}
 			if userAgent != "Homer-Health-Check" {
 				t.Error("Expected health check headers to be set")

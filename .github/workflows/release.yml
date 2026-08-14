@@ -8,10 +8,19 @@ on:
       - 'v*.*.*'
   workflow_dispatch:
 
+concurrency:
+  # A tag can be moved while a workflow is running.  Cancel the older run
+  # for that ref, and let the explicit tag check below reject any run that
+  # still survives cancellation with a stale commit.
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
   GO_VERSION: '1.26.5'
+  ENVTEST_TOOL_VERSION: 'v0.21.0'
+  ENVTEST_K8S_VERSION: '1.29.0'
 
 jobs:
   verify-release:
@@ -23,6 +32,40 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify release tag target and semantic version
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$GITHUB_REF" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tags must match vMAJOR.MINOR.PATCH; got $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+
+          if ! git ls-remote --exit-code --refs origin "refs/tags/${GITHUB_REF_NAME}" >/dev/null; then
+            echo "Release tag ${GITHUB_REF_NAME} no longer exists on origin" >&2
+            exit 1
+          fi
+          git fetch --force --no-tags origin \
+            "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          tag_sha="$(git rev-parse --verify "refs/tags/${GITHUB_REF_NAME}^{commit}")"
+          if [[ "$tag_sha" != "$EXPECTED_SHA" ]]; then
+            echo "Release tag ${GITHUB_REF_NAME} points to ${tag_sha}, expected ${EXPECTED_SHA}" >&2
+            exit 1
+          fi
+
+          expected_version="${GITHUB_REF_NAME#v}"
+          chart_version="$(awk '$1 == "version:" { print $2; exit }' charts/homer-operator/Chart.yaml)"
+          chart_app_version="$(awk '$1 == "appVersion:" { gsub(/^"|"$/, "", $2); print $2; exit }' charts/homer-operator/Chart.yaml)"
+          if [[ "$chart_version" != "$expected_version" || "$chart_app_version" != "$expected_version" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match Chart.yaml version (${chart_version}) and appVersion (${chart_app_version})" >&2
+            exit 1
+          fi
+          echo "Verified ${GITHUB_REF_NAME} at ${EXPECTED_SHA} with chart version ${expected_version}"
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -39,10 +82,16 @@ jobs:
           set -euo pipefail
           KUBECONFORM_VERSION=0.6.7
           ACTIONLINT_VERSION=1.7.7
+          kubeconform_archive="$RUNNER_TEMP/kubeconform-linux-amd64.tar.gz"
+          actionlint_archive="$RUNNER_TEMP/actionlint-linux-amd64.tar.gz"
           curl -fsSL "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
-            | tar -xz -C "$RUNNER_TEMP" kubeconform
+            -o "$kubeconform_archive"
+          echo '95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73  '"$kubeconform_archive" | sha256sum -c -
+          tar -xz -C "$RUNNER_TEMP" -f "$kubeconform_archive" kubeconform
           curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
-            | tar -xz -C "$RUNNER_TEMP" actionlint
+            -o "$actionlint_archive"
+          echo '023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757  '"$actionlint_archive" | sha256sum -c -
+          tar -xz -C "$RUNNER_TEMP" -f "$actionlint_archive" actionlint
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
       - name: Verify generation, code, and installers
@@ -54,8 +103,8 @@ jobs:
           git diff --exit-code
           make lint
           go vet ./...
-          make envtest
-          envtest_assets="$(./bin/setup-envtest use 1.29.0 --bin-dir "$PWD/bin" -p path)"
+          make envtest ENVTEST_VERSION="$ENVTEST_TOOL_VERSION"
+          envtest_assets="$(./bin/setup-envtest use "$ENVTEST_K8S_VERSION" --bin-dir "$PWD/bin" -p path)"
           mapfile -t go_packages < <(go list ./... | grep -v '/e2e$')
           KUBEBUILDER_ASSETS="$envtest_assets" go test "${go_packages[@]}"
           go build ./...
@@ -63,6 +112,22 @@ jobs:
           git diff --exit-code
           ./scripts/check-manifest-generation.sh ./bin/kustomize
           ./scripts/check-installer-sync.sh ./bin/kustomize
+
+          release_version="${GITHUB_REF_NAME#v}"
+          installer_path="$RUNNER_TEMP/homer-operator-${release_version}-install.yaml"
+          main_image="${REGISTRY}/${IMAGE_NAME}:main"
+          release_image="${REGISTRY}/${IMAGE_NAME}:${release_version}"
+          main_image_count="$(grep -Fc "image: ${main_image}" dist/install.yaml)"
+          if [[ "$main_image_count" -ne 1 ]]; then
+            echo "Expected exactly one tracked main image in dist/install.yaml; found ${main_image_count}" >&2
+            exit 1
+          fi
+          sed "s|image: ${main_image}|image: ${release_image}|g" dist/install.yaml > "$installer_path"
+          if ! grep -Fq "image: ${release_image}" "$installer_path" || grep -Fq "image: ${main_image}" "$installer_path"; then
+            echo "Version-specific installer does not contain the release image" >&2
+            exit 1
+          fi
+          echo "Created version-specific installer: ${installer_path}"
 
       - name: Verify Helm, workflows, and packaging surfaces
         run: |
@@ -91,6 +156,23 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reject stale release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git ls-remote --exit-code --refs origin "refs/tags/${GITHUB_REF_NAME}" >/dev/null
+          git fetch --force --no-tags origin \
+            "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          tag_sha="$(git rev-parse --verify "refs/tags/${GITHUB_REF_NAME}^{commit}")"
+          if [[ "$tag_sha" != "$EXPECTED_SHA" ]]; then
+            echo "Refusing to publish stale tag ${GITHUB_REF_NAME}: ${tag_sha} != ${EXPECTED_SHA}" >&2
+            exit 1
+          fi
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -176,6 +258,23 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reject stale release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git ls-remote --exit-code --refs origin "refs/tags/${GITHUB_REF_NAME}" >/dev/null
+          git fetch --force --no-tags origin \
+            "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          tag_sha="$(git rev-parse --verify "refs/tags/${GITHUB_REF_NAME}^{commit}")"
+          if [[ "$tag_sha" != "$EXPECTED_SHA" ]]; then
+            echo "Refusing to publish a chart for stale tag ${GITHUB_REF_NAME}: ${tag_sha} != ${EXPECTED_SHA}" >&2
+            exit 1
+          fi
 
       - name: Extract version
         id: version
@@ -231,8 +330,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          provenance: false
-          sbom: false
+          provenance: mode=max
+          sbom: true
 
       - name: Verify build success
         run: |
@@ -242,6 +341,37 @@ jobs:
           fi
           echo "✅ Docker build successful"
           echo "Digest: ${{ steps.build.outputs.digest }}"
+
+      - name: Prepare digest-pinned installer
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          main_image="${REGISTRY}/${IMAGE_NAME}:main"
+          release_image="${REGISTRY}/${IMAGE_NAME}@${DIGEST}"
+          installer_path="$RUNNER_TEMP/homer-operator-${VERSION}-install.yaml"
+          main_image_count="$(grep -Fc "image: ${main_image}" dist/install.yaml)"
+          if [[ "$main_image_count" -ne 1 ]]; then
+            echo "Expected exactly one tracked main image in dist/install.yaml; found ${main_image_count}" >&2
+            exit 1
+          fi
+          sed "s|image: ${main_image}|image: ${release_image}|g" dist/install.yaml > "$installer_path"
+          if ! grep -Fq "image: ${release_image}" "$installer_path" || grep -Fq "image: ${main_image}" "$installer_path"; then
+            echo "Digest-pinned installer does not contain the release image" >&2
+            exit 1
+          fi
+          echo "Created digest-pinned installer: ${installer_path}"
+
+      - name: Upload version-specific installer
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ github.ref_name }}
+          path: ${{ runner.temp }}/homer-operator-${{ steps.version.outputs.version }}-install.yaml
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3.9.2
@@ -256,6 +386,23 @@ jobs:
             if [[ -n "$tag" ]]; then
               echo "Signing: $tag@${DIGEST}"
               cosign sign --yes "$tag@${DIGEST}"
+            fi
+          done <<< "$TAGS"
+
+      - name: Verify container signatures
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@.*"
+          while IFS= read -r tag; do
+            if [[ -n "$tag" ]]; then
+              echo "Verifying: $tag@${DIGEST}"
+              cosign verify \
+                --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+                --certificate-identity-regexp "$identity" \
+                "$tag@${DIGEST}" >/dev/null
             fi
           done <<< "$TAGS"
 
@@ -285,6 +432,22 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reject stale release tag
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git ls-remote --exit-code --refs origin "refs/tags/${GITHUB_REF_NAME}" >/dev/null
+          git fetch --force --no-tags origin \
+            "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          tag_sha="$(git rev-parse --verify "refs/tags/${GITHUB_REF_NAME}^{commit}")"
+          if [[ "$tag_sha" != "$EXPECTED_SHA" ]]; then
+            echo "Refusing to create a release for stale tag ${GITHUB_REF_NAME}: ${tag_sha} != ${EXPECTED_SHA}" >&2
+            exit 1
+          fi
 
       - name: Set up Helm
         uses: azure/setup-helm@v4
@@ -346,6 +509,15 @@ jobs:
           # Push to GHCR
           helm push "./packaged-charts/homer-operator-${VERSION}.tgz" "oci://${{ env.REGISTRY }}/${REPO_NAME}/charts"
 
+          # Read the pushed chart back from GHCR so a successful push also
+          # proves that the published OCI artifact is available and matches
+          # the version used by the release.
+          mkdir -p "$RUNNER_TEMP/chart-verification"
+          helm pull "oci://${{ env.REGISTRY }}/${REPO_NAME}/charts/homer-operator" \
+            --version "$VERSION" \
+            --destination "$RUNNER_TEMP/chart-verification"
+          test -f "$RUNNER_TEMP/chart-verification/homer-operator-${VERSION}.tgz"
+
           echo "✅ Chart pushed to: oci://${{ env.REGISTRY }}/${REPO_NAME}/charts/homer-operator:${VERSION}"
 
   create-github-release:
@@ -358,11 +530,32 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reject stale release tag before creating release
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git ls-remote --exit-code --refs origin "refs/tags/${GITHUB_REF_NAME}" >/dev/null
+          git fetch --force --no-tags origin \
+            "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          tag_sha="$(git rev-parse --verify "refs/tags/${GITHUB_REF_NAME}^{commit}")"
+          if [[ "$tag_sha" != "$EXPECTED_SHA" ]]; then
+            echo "Refusing to create a release for stale tag ${GITHUB_REF_NAME}: ${tag_sha} != ${EXPECTED_SHA}" >&2
+            exit 1
+          fi
 
       - name: Download SBOM
         uses: actions/download-artifact@v4
         with:
           name: sbom
+
+      - name: Download version-specific installer
+        uses: actions/download-artifact@v4
+        with:
+          name: installer-${{ github.ref_name }}
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -372,6 +565,7 @@ jobs:
           generate_release_notes: true
           files: |
             sbom.spdx.json
+            homer-operator-${{ needs.build-image.outputs.version }}-install.yaml
           body: |
             ## Release ${{ needs.build-image.outputs.version }}
 
@@ -390,6 +584,9 @@ jobs:
               --create-namespace
             ```
 
+            ### Kubernetes Installer
+            The release asset `homer-operator-${{ needs.build-image.outputs.version }}-install.yaml` is pinned to this release's operator image. The tracked `dist/install.yaml` and `deploy/operator.yaml` manifests remain development manifests that use `:main`.
+
             ### Highlights
 
             - Align the Dashboard API and generated CRD with upstream Homer ([#104](https://github.com/rajsinghtech/homer-operator/pull/104)): direct service and item fields; pages; links and quick links; themes, colors, defaults, headers, footer, refresh values, message mappings, smart-card fields, and open-ended Homer configuration values.
@@ -405,8 +602,10 @@ jobs:
             - Apply per-cluster selectors and domain filters correctly, keep local and remote filtering distinct, enrich discovered resources with cluster metadata, and make multi-cluster aggregation deterministic.
             - Keep same-named resources from different clusters, namespaces, or resource kinds independent; qualify Ingress and HTTPRoute source keys, clean up the correct source, and allow a CRD item to enhance only its intended discovered resource.
             - Watch configuration and asset references, deduplicate reconciliation requests, and keep generated assets and PWA paths synchronized after updates or removals.
+            - Resolve HTTPRoute protocols from matching Gateway listeners, honor parent-reference ports, and preserve resolved remote HTTPS protocols during local dashboard rebuilds.
+            - Emit Homer-compatible `item.headers` objects for direct configuration, annotations, health checks, and Secret-backed authentication, with valid dot-notation examples and legacy compatibility.
             - Remove obsolete kube-rbac-proxy resources, secure metrics with the required RBAC, gate metrics resources consistently, and publish release charts with immutable image digests.
-            - Generate a status-enabled CRD, prevent duplicate CRDs in installer manifests, and verify Kustomize, Helm, generated manifests, metrics, and CRD synchronization in CI.
+            - Generate a status-enabled CRD, prevent duplicate CRDs in installer manifests, and verify Kustomize, Helm, generated manifests, metrics, CRD synchronization, image signatures, and the published chart in CI.
             - Correct Helm uninstall and installation documentation, validate release tags as `vMAJOR.MINOR.PATCH`, and remove obsolete tag-handling paths from the development chart workflow.
 
             ### Resolved issues and project status

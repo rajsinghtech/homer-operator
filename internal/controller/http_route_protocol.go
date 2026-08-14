@@ -19,13 +19,22 @@ func setHTTPRouteProtocol(ctx context.Context, reader client.Reader, route *gate
 		return
 	}
 
+	previousProtocol, hadPreviousProtocol := httpRouteProtocolAnnotation(route)
 	protocol, err := resolveHTTPRouteProtocol(ctx, reader, route)
 	if err != nil {
+		if hadPreviousProtocol {
+			log.FromContext(ctx).V(1).Info("could not resolve HTTPRoute Gateway protocol; retaining existing protocol",
+				"httproute", route.Namespace+"/"+route.Name, "protocol", previousProtocol, "error", err)
+			return
+		}
 		log.FromContext(ctx).V(1).Info("could not resolve HTTPRoute Gateway protocol; defaulting to HTTP",
 			"httproute", route.Namespace+"/"+route.Name, "error", err)
 		protocol = ""
 	}
 	if protocol == "" {
+		if hadPreviousProtocol {
+			return
+		}
 		if route.Annotations != nil {
 			delete(route.Annotations, homer.HTTPRouteProtocolAnnotation)
 		}
@@ -55,7 +64,7 @@ func resolveHTTPRouteProtocol(ctx context.Context, reader client.Reader, route *
 			return "", err
 		}
 
-		if protocol, ok := protocolFromGatewayListeners(gateway, route, parentRef.SectionName); ok {
+		if protocol, ok := protocolFromGatewayListeners(gateway, route, parentRef); ok {
 			return protocol, nil
 		}
 	}
@@ -63,10 +72,10 @@ func resolveHTTPRouteProtocol(ctx context.Context, reader client.Reader, route *
 	return "", nil
 }
 
-func protocolFromGatewayListeners(gateway *gatewayv1.Gateway, route *gatewayv1.HTTPRoute, sectionName *gatewayv1.SectionName) (string, bool) {
-	if sectionName != nil {
+func protocolFromGatewayListeners(gateway *gatewayv1.Gateway, route *gatewayv1.HTTPRoute, parentRef gatewayv1.ParentReference) (string, bool) {
+	if parentRef.SectionName != nil {
 		for _, listener := range gateway.Spec.Listeners {
-			if listener.Name != *sectionName {
+			if !gatewayListenerMatchesParent(listener, route, parentRef) {
 				continue
 			}
 			return protocolFromGatewayListener(listener)
@@ -79,7 +88,7 @@ func protocolFromGatewayListeners(gateway *gatewayv1.Gateway, route *gatewayv1.H
 	// only compatible HTTP(S) listener.
 	protocol := ""
 	for _, listener := range gateway.Spec.Listeners {
-		if !gatewayListenerMatchesRoute(listener, route) {
+		if !gatewayListenerMatchesParent(listener, route, parentRef) {
 			continue
 		}
 		candidate, ok := protocolFromGatewayListener(listener)
@@ -92,6 +101,25 @@ func protocolFromGatewayListeners(gateway *gatewayv1.Gateway, route *gatewayv1.H
 		protocol = candidate
 	}
 	return protocol, protocol != ""
+}
+
+func gatewayListenerMatchesParent(listener gatewayv1.Listener, route *gatewayv1.HTTPRoute, parentRef gatewayv1.ParentReference) bool {
+	if parentRef.SectionName != nil && listener.Name != *parentRef.SectionName {
+		return false
+	}
+	if parentRef.Port != nil && listener.Port != *parentRef.Port {
+		return false
+	}
+	return gatewayListenerMatchesRoute(listener, route)
+}
+
+func httpRouteProtocolAnnotation(route *gatewayv1.HTTPRoute) (string, bool) {
+	if route.Annotations == nil {
+		return "", false
+	}
+
+	protocol := strings.ToLower(strings.TrimSpace(route.Annotations[homer.HTTPRouteProtocolAnnotation]))
+	return protocol, protocol == homer.ProtocolHTTP || protocol == homer.ProtocolHTTPS
 }
 
 func protocolFromGatewayListener(listener gatewayv1.Listener) (string, bool) {
