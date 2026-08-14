@@ -19,36 +19,36 @@ const httpRouteClusterAnnotation = "homer.rajsingh.info/cluster"
 // setHTTPRouteProtocol resolves the protocol from the Gateway listener that
 // accepts the HTTPRoute. The route is a copy during full dashboard rebuilds,
 // and is only annotated in memory; the source HTTPRoute is never persisted.
+// Any existing marker is discarded first because it may have come from an
+// untrusted resource annotation. A protocol is only retained when this call
+// resolves it from the current Gateway state. Callers that need to distinguish
+// a transient read failure should use setHTTPRouteProtocolWithError.
 func setHTTPRouteProtocol(ctx context.Context, reader client.Reader, route *gatewayv1.HTTPRoute) {
+	_ = setHTTPRouteProtocolWithError(ctx, reader, route)
+}
+
+func setHTTPRouteProtocolWithError(ctx context.Context, reader client.Reader, route *gatewayv1.HTTPRoute) error {
 	if route == nil {
-		return
+		return nil
 	}
 
-	previousProtocol, hadPreviousProtocol := httpRouteProtocolAnnotation(route)
+	if route.Annotations != nil {
+		delete(route.Annotations, homer.HTTPRouteProtocolAnnotation)
+	}
 	protocol, err := resolveHTTPRouteProtocol(ctx, reader, route)
 	if err != nil {
-		if hadPreviousProtocol && !httpRouteHasRejectedParent(route) {
-			log.FromContext(ctx).V(1).Info("could not resolve HTTPRoute Gateway protocol; retaining existing protocol",
-				"httproute", route.Namespace+"/"+route.Name, "protocol", previousProtocol, "error", err)
-			return
-		}
 		log.FromContext(ctx).V(1).Info("could not resolve HTTPRoute Gateway protocol; defaulting to HTTP",
 			"httproute", route.Namespace+"/"+route.Name, "error", err)
-		protocol = ""
+		return err
 	}
 	if protocol == "" {
-		if hadPreviousProtocol && !httpRouteHasRejectedParent(route) {
-			return
-		}
-		if route.Annotations != nil {
-			delete(route.Annotations, homer.HTTPRouteProtocolAnnotation)
-		}
-		return
+		return nil
 	}
 	if route.Annotations == nil {
 		route.Annotations = make(map[string]string)
 	}
 	route.Annotations[homer.HTTPRouteProtocolAnnotation] = protocol
+	return nil
 }
 
 func resolveHTTPRouteProtocol(ctx context.Context, reader client.Reader, route *gatewayv1.HTTPRoute) (string, error) {
@@ -132,7 +132,7 @@ func gatewayListenerMatchesParent(ctx context.Context, reader client.Reader, gat
 	}
 	if len(gateway.Status.Listeners) > 0 {
 		status, ok := gatewayListenerStatus(gateway, listener.Name)
-		if !ok || !gatewayListenerStatusAllowsHTTPRoute(status) {
+		if !ok || !gatewayListenerStatusAllowsHTTPRoute(status, gateway.Generation) {
 			return false, nil
 		}
 	}
@@ -147,19 +147,26 @@ func gatewayListenerMatchesParent(ctx context.Context, reader client.Reader, gat
 }
 
 func gatewayEligibility(ctx context.Context, reader client.Reader, gateway *gatewayv1.Gateway) (gatewayv1.GatewayController, bool, error) {
-	if !conditionsAllowGateway(gateway.Status.Conditions) {
+	if !conditionsAllowGateway(gateway.Status.Conditions, gateway.Generation) {
+		return "", false, nil
+	}
+	// GatewayClassName is required by the Gateway API. A malformed object must
+	// not bypass GatewayClass ownership checks and authorize an HTTPS URL.
+	if gateway.Spec.GatewayClassName == "" {
 		return "", false, nil
 	}
 
 	gatewayClass := &gatewayv1.GatewayClass{}
 	if err := reader.Get(ctx, client.ObjectKey{Name: string(gateway.Spec.GatewayClassName)}, gatewayClass); err != nil {
-		if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
-			// Unit callers, older clusters, and remote readers without
-			// GatewayClass permission may not expose the object. The Gateway's
-			// own status remains useful in those cases; resolve listeners without
-			// controller-name filtering rather than silently degrading HTTPS to
-			// HTTP.
-			return "", true, nil
+		if apierrors.IsNotFound(err) {
+			// GatewayClass ownership is required to know which controller's
+			// status is authoritative. A missing class is an authoritative
+			// ineligible Gateway, while an unreadable class must be surfaced to the
+			// caller rather than silently replacing a cached HTTPS route.
+			return "", false, nil
+		}
+		if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
+			return "", false, err
 		}
 		return "", false, err
 	}
@@ -168,21 +175,27 @@ func gatewayEligibility(ctx context.Context, reader client.Reader, gateway *gate
 		if condition.Type != string(gatewayv1.GatewayClassConditionStatusAccepted) {
 			continue
 		}
+		if !conditionObservedGenerationCurrent(condition, gatewayClass.Generation) {
+			return "", false, nil
+		}
 		acceptedConditionFound = true
 		if condition.Status != metav1.ConditionTrue {
 			return "", false, nil
 		}
 	}
-	if acceptedConditionFound && gatewayClass.Spec.ControllerName == "" {
+	if !acceptedConditionFound || gatewayClass.Spec.ControllerName == "" {
 		return "", false, nil
 	}
 	return gatewayClass.Spec.ControllerName, true, nil
 }
 
-func conditionsAllowGateway(conditions []metav1.Condition) bool {
+func conditionsAllowGateway(conditions []metav1.Condition, generation int64) bool {
 	for _, condition := range conditions {
 		switch condition.Type {
 		case string(gatewayv1.GatewayConditionAccepted), string(gatewayv1.GatewayConditionProgrammed), "Ready":
+			if !conditionObservedGenerationCurrent(condition, generation) {
+				return false
+			}
 			if condition.Status != metav1.ConditionTrue {
 				return false
 			}
@@ -200,14 +213,20 @@ func gatewayListenerStatus(gateway *gatewayv1.Gateway, name gatewayv1.SectionNam
 	return gatewayv1.ListenerStatus{}, false
 }
 
-func gatewayListenerStatusAllowsHTTPRoute(status gatewayv1.ListenerStatus) bool {
+func gatewayListenerStatusAllowsHTTPRoute(status gatewayv1.ListenerStatus, generation int64) bool {
 	for _, condition := range status.Conditions {
 		switch condition.Type {
 		case string(gatewayv1.ListenerConditionAccepted), string(gatewayv1.ListenerConditionResolvedRefs), string(gatewayv1.ListenerConditionProgrammed):
+			if !conditionObservedGenerationCurrent(condition, generation) {
+				return false
+			}
 			if condition.Status != metav1.ConditionTrue {
 				return false
 			}
 		case string(gatewayv1.ListenerConditionConflicted):
+			if !conditionObservedGenerationCurrent(condition, generation) {
+				return false
+			}
 			if condition.Status != metav1.ConditionFalse {
 				return false
 			}
@@ -287,15 +306,6 @@ func gatewayListenerAllowsHTTPRoute(listener gatewayv1.Listener) bool {
 	return false
 }
 
-func httpRouteProtocolAnnotation(route *gatewayv1.HTTPRoute) (string, bool) {
-	if route.Annotations == nil {
-		return "", false
-	}
-
-	protocol := strings.ToLower(strings.TrimSpace(route.Annotations[homer.HTTPRouteProtocolAnnotation]))
-	return protocol, protocol == homer.ProtocolHTTP || protocol == homer.ProtocolHTTPS
-}
-
 func isGatewayParentReference(parentRef gatewayv1.ParentReference) bool {
 	if parentRef.Group != nil && string(*parentRef.Group) != gatewayv1.GroupName {
 		return false
@@ -306,6 +316,7 @@ func isGatewayParentReference(parentRef gatewayv1.ParentReference) bool {
 func httpRouteParentAccepted(route *gatewayv1.HTTPRoute, parentRef gatewayv1.ParentReference, controllerName gatewayv1.GatewayController) (bool, bool) {
 	matched := false
 	accepted := false
+	acceptedConditionFound := false
 	for _, parentStatus := range route.Status.Parents {
 		if !parentReferencesEqual(parentStatus.ParentRef, parentRef, route.Namespace) {
 			continue
@@ -317,6 +328,10 @@ func httpRouteParentAccepted(route *gatewayv1.HTTPRoute, parentRef gatewayv1.Par
 
 		for _, condition := range parentStatus.Conditions {
 			if condition.Type == string(gatewayv1.RouteConditionAccepted) {
+				if !conditionObservedGenerationCurrent(condition, route.Generation) {
+					continue
+				}
+				acceptedConditionFound = true
 				if condition.Status == metav1.ConditionFalse {
 					return false, true
 				}
@@ -326,23 +341,17 @@ func httpRouteParentAccepted(route *gatewayv1.HTTPRoute, parentRef gatewayv1.Par
 			}
 		}
 	}
-	if matched {
+	if matched && acceptedConditionFound {
 		return accepted, true
 	}
 	return true, false
 }
 
-func httpRouteHasRejectedParent(route *gatewayv1.HTTPRoute) bool {
-	for _, parentRef := range route.Spec.ParentRefs {
-		if !isGatewayParentReference(parentRef) {
-			continue
-		}
-		accepted, statusKnown := httpRouteParentAccepted(route, parentRef, "")
-		if statusKnown && !accepted {
-			return true
-		}
-	}
-	return false
+func conditionObservedGenerationCurrent(condition metav1.Condition, generation int64) bool {
+	// Older Gateway API implementations did not always populate
+	// ObservedGeneration. A non-zero value is authoritative when present; zero
+	// remains compatible with those implementations.
+	return condition.ObservedGeneration == 0 || (generation > 0 && condition.ObservedGeneration == generation)
 }
 
 func parentReferencesEqual(left, right gatewayv1.ParentReference, defaultNamespace string) bool {
@@ -423,9 +432,11 @@ func hostnamesOverlap(left, right string) bool {
 	leftWildcard := strings.HasPrefix(left, "*.")
 	rightWildcard := strings.HasPrefix(right, "*.")
 	if leftWildcard && rightWildcard {
-		// Gateway API wildcards match exactly one DNS label. Two wildcard
-		// patterns therefore overlap only when they describe the same suffix.
-		return left == right
+		leftSuffix := strings.TrimPrefix(left, "*.")
+		rightSuffix := strings.TrimPrefix(right, "*.")
+		return leftSuffix == rightSuffix ||
+			strings.HasSuffix(leftSuffix, "."+rightSuffix) ||
+			strings.HasSuffix(rightSuffix, "."+leftSuffix)
 	}
 	if leftWildcard {
 		return wildcardMatchesHost(left, right)
@@ -438,6 +449,5 @@ func hostnamesOverlap(left, right string) bool {
 
 func wildcardMatchesHost(pattern, host string) bool {
 	suffix := strings.TrimPrefix(pattern, "*.")
-	prefix, matches := strings.CutSuffix(host, "."+suffix)
-	return matches && prefix != "" && !strings.Contains(prefix, ".")
+	return strings.HasSuffix(host, "."+suffix) && host != suffix
 }

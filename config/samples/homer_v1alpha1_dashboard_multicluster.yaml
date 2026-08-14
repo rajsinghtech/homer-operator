@@ -207,7 +207,7 @@ rules:
   resources: ["ingresses"]
   verbs: ["get", "list", "watch"]
 - apiGroups: ["gateway.networking.k8s.io"]
-  resources: ["httproutes", "gateways"]
+  resources: ["httproutes", "gateways", "gatewayclasses"]
   verbs: ["get", "list", "watch"]
 - apiGroups: [""]
   resources: ["namespaces", "services"]

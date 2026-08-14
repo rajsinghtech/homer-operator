@@ -122,19 +122,27 @@ func (r *DashboardReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return r.reconcileFailure(ctx, &dashboard, err)
 	}
 
-	// Update cluster connections based on dashboard configuration
-	if err := clusterManager.UpdateClusters(ctx, &dashboard); err != nil {
-		return r.reconcileFailure(ctx, &dashboard, err)
-	}
+	var filteredIngressList networkingv1.IngressList
+	var discoveredIngresses map[string][]networkingv1.Ingress
+	var filteredServices []corev1.Service
+	var discoveredServices map[string][]corev1.Service
+	if strings.TrimSpace(effectiveHomerConfig.ExternalConfig) == "" {
+		// Update cluster connections based on dashboard configuration.
+		if err := clusterManager.UpdateClusters(ctx, &dashboard); err != nil {
+			return r.reconcileFailure(ctx, &dashboard, err)
+		}
 
-	// Discover resources from all clusters
-	filteredIngressList, discoveredIngresses, err := r.getMultiClusterFilteredIngresses(ctx, &dashboard)
-	if err != nil {
-		return r.reconcileFailure(ctx, &dashboard, err)
-	}
+		// Discover resources from all clusters.
+		filteredIngressList, discoveredIngresses, err = r.getMultiClusterFilteredIngresses(ctx, &dashboard)
+		if err != nil {
+			return r.reconcileFailure(ctx, &dashboard, err)
+		}
 
-	filteredServices, discoveredServices, err := r.getMultiClusterFilteredServices(ctx, &dashboard)
-	if err != nil {
+		filteredServices, discoveredServices, err = r.getMultiClusterFilteredServices(ctx, &dashboard)
+		if err != nil {
+			return r.reconcileFailure(ctx, &dashboard, err)
+		}
+	} else if err := clusterManager.DisableDiscovery(&dashboard); err != nil {
 		return r.reconcileFailure(ctx, &dashboard, err)
 	}
 
@@ -198,6 +206,12 @@ func (r *DashboardReconciler) markReconcileFailure(ctx context.Context, dashboar
 	previousStatus := dashboard.Status.DeepCopy()
 	dashboard.Status.Ready = false
 	dashboard.Status.ObservedGeneration = dashboard.Generation
+	if manager := r.clusterManagerForDashboard(dashboard); manager != nil {
+		// Discovery failures return before the normal status pass. Persist the
+		// manager's connection/error view as part of the failure update so a
+		// previously connected cluster is not reported as healthy forever.
+		dashboard.Status.ClusterStatuses = manager.GetClusterStatuses()
+	}
 	apiMeta.SetStatusCondition(&dashboard.Status.Conditions, metav1.Condition{
 		Type:               "Ready",
 		Status:             metav1.ConditionFalse,
@@ -539,7 +553,9 @@ func (r *DashboardReconciler) getFilteredIngresses(ctx context.Context, dashboar
 			return networkingv1.IngressList{}, err
 		}
 		if shouldInclude {
-			filteredIngresses = append(filteredIngresses, clusterIngresses.Items[i])
+			ingress := *clusterIngresses.Items[i].DeepCopy()
+			ingress.Annotations = canonicalizeLocalResourceAnnotations(ingress.Annotations)
+			filteredIngresses = append(filteredIngresses, ingress)
 		}
 	}
 
@@ -556,9 +572,7 @@ func (r *DashboardReconciler) getMultiClusterFilteredIngresses(ctx context.Conte
 		var err error
 		discoveredIngresses, err = manager.DiscoverIngresses(ctx, dashboard)
 		if err != nil {
-			log := log.FromContext(ctx)
-			log.Error(err, "Failed to discover ingresses from clusters")
-			// Continue with partial results
+			return networkingv1.IngressList{}, discoveredIngresses, fmt.Errorf("failed to discover ingresses from clusters: %w", err)
 		}
 
 		// ClusterManager has already applied each cluster's own selectors and
@@ -595,15 +609,19 @@ func (r *DashboardReconciler) getFilteredServices(ctx context.Context, dashboard
 		return nil, err
 	}
 
-	return serviceList.Items, nil
+	services := make([]corev1.Service, len(serviceList.Items))
+	for i := range serviceList.Items {
+		services[i] = *serviceList.Items[i].DeepCopy()
+		services[i].Annotations = canonicalizeLocalResourceAnnotations(services[i].Annotations)
+	}
+	return services, nil
 }
 
 func (r *DashboardReconciler) getMultiClusterFilteredServices(ctx context.Context, dashboard *homerv1alpha1.Dashboard) ([]corev1.Service, map[string][]corev1.Service, error) {
 	if manager := r.clusterManagerForDashboard(dashboard); manager != nil && len(dashboard.Spec.RemoteClusters) > 0 {
 		clusterServices, err := manager.DiscoverServices(ctx, dashboard)
 		if err != nil {
-			log := log.FromContext(ctx)
-			log.Error(err, "Failed to discover Services from clusters")
+			return nil, clusterServices, fmt.Errorf("failed to discover Services from clusters: %w", err)
 		}
 
 		var allServices []corev1.Service
@@ -618,6 +636,14 @@ func (r *DashboardReconciler) getMultiClusterFilteredServices(ctx context.Contex
 }
 
 func (r *DashboardReconciler) validateDashboardConfig(config *homer.HomerConfig) error {
+	if config == nil {
+		return homer.ValidateHomerConfig(nil)
+	}
+	if strings.TrimSpace(config.ExternalConfig) != "" {
+		// Homer replaces the inline document with externalConfig before parsing
+		// it, so every other Homer field is outside this controller's authority.
+		return nil
+	}
 	if err := homer.ValidateTheme(config.Theme); err != nil {
 		return err
 	}
@@ -698,10 +724,6 @@ func (r *DashboardReconciler) buildDeploymentConfig(dashboard *homerv1alpha1.Das
 }
 
 func (r *DashboardReconciler) buildHomerConfig(ctx context.Context, dashboard *homerv1alpha1.Dashboard) (*homer.HomerConfig, error) {
-	if err := validateSmartCardSecretReferences(dashboard); err != nil {
-		return nil, err
-	}
-
 	homerConfig := dashboard.Spec.HomerConfig.DeepCopy()
 	if dashboard.Spec.ConfigMap.Name != "" {
 		externalHomerConfig, err := r.getExternalConfig(ctx, dashboard)
@@ -709,6 +731,19 @@ func (r *DashboardReconciler) buildHomerConfig(ctx context.Context, dashboard *h
 			return nil, err
 		}
 		homerConfig = externalHomerConfig
+	}
+
+	if strings.TrimSpace(homerConfig.ExternalConfig) != "" {
+		// Homer fetches and owns the external document. Dashboard Secret
+		// references target the generated inline document, which Homer will
+		// ignore in this mode, so do not resolve them into dead configuration.
+		// Keep the effective object external-only so ignored inline metadata cannot
+		// influence the generated PWA manifest or any other operator-owned output.
+		return &homer.HomerConfig{ExternalConfig: homerConfig.ExternalConfig}, nil
+	}
+
+	if err := validateSmartCardSecretReferences(dashboard); err != nil {
+		return nil, err
 	}
 
 	if dashboard.Spec.Secrets != nil {
@@ -1272,6 +1307,24 @@ func servicePortsMatch(desired, existing corev1.ServicePort) bool {
 }
 
 func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *homer.HomerConfig, dashboard *homerv1alpha1.Dashboard, filteredIngressList networkingv1.IngressList, filteredServices []corev1.Service) (corev1.ConfigMap, map[string][]gatewayv1.HTTPRoute, error) {
+	// Homer treats externalConfig as authoritative and ignores the remaining
+	// fields in the generated file. Do not let local discovery or Secret
+	// injection produce misleading data that Homer will never read.
+	if homerConfig != nil && strings.TrimSpace(homerConfig.ExternalConfig) != "" {
+		externalOnlyConfig := &homer.HomerConfig{ExternalConfig: homerConfig.ExternalConfig}
+		configMap, err := homer.CreateConfigMapWithDiscoveryConfig(
+			externalOnlyConfig, dashboard.Name, dashboard.Namespace,
+			networkingv1.IngressList{}, nil, dashboard, nil,
+		)
+		if err != nil {
+			return corev1.ConfigMap{}, nil, err
+		}
+		if err := homer.AddPageConfigsToConfigMap(&configMap, dashboard.Spec.Pages); err != nil {
+			return corev1.ConfigMap{}, nil, err
+		}
+		return configMap, nil, nil
+	}
+
 	// Merge namespace annotations into Ingress annotations
 	mergedIngressList := networkingv1.IngressList{
 		Items: make([]networkingv1.Ingress, len(filteredIngressList.Items)),
@@ -1279,8 +1332,11 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 	for i, ingress := range filteredIngressList.Items {
 		// Create a copy to avoid mutating the original
 		ingressCopy := ingress.DeepCopy()
-		if shouldMergeLocalNamespaceAnnotations(ingress.Annotations) {
-			ingressCopy.Annotations = r.mergeNamespaceAnnotations(ctx, ingress.Namespace, ingress.Annotations)
+		if len(dashboard.Spec.RemoteClusters) == 0 {
+			ingressCopy.Annotations = canonicalizeLocalResourceAnnotations(ingressCopy.Annotations)
+		}
+		if shouldMergeLocalNamespaceAnnotations(ingressCopy.Annotations) {
+			ingressCopy.Annotations = r.mergeNamespaceAnnotations(ctx, ingress.Namespace, ingressCopy.Annotations)
 		}
 		mergedIngressList.Items[i] = *ingressCopy
 	}
@@ -1289,8 +1345,11 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 	mergedServices := make([]corev1.Service, len(filteredServices))
 	for i, svc := range filteredServices {
 		svcCopy := svc.DeepCopy()
-		if shouldMergeLocalNamespaceAnnotations(svc.Annotations) {
-			svcCopy.Annotations = r.mergeNamespaceAnnotations(ctx, svc.Namespace, svc.Annotations)
+		if len(dashboard.Spec.RemoteClusters) == 0 {
+			svcCopy.Annotations = canonicalizeLocalResourceAnnotations(svcCopy.Annotations)
+		}
+		if shouldMergeLocalNamespaceAnnotations(svcCopy.Annotations) {
+			svcCopy.Annotations = r.mergeNamespaceAnnotations(ctx, svc.Namespace, svcCopy.Annotations)
 		}
 		mergedServices[i] = *svcCopy
 	}
@@ -1305,9 +1364,7 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 			clusterHTTPRoutes, err := manager.DiscoverHTTPRoutes(ctx, dashboard)
 			discoveredHTTPRoutes = clusterHTTPRoutes
 			if err != nil {
-				log := log.FromContext(ctx)
-				log.Error(err, "Failed to discover HTTPRoutes from clusters")
-				// Continue with partial results
+				return corev1.ConfigMap{}, discoveredHTTPRoutes, fmt.Errorf("failed to discover HTTPRoutes from clusters: %w", err)
 			}
 
 			// Aggregate all discovered HTTPRoutes (already filtered by ClusterManager)
@@ -1345,7 +1402,8 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 			// Create a copy to avoid mutating the original
 			httprouteCopy := httproute.DeepCopy()
 			if !remoteHTTPRoutes[i] {
-				httprouteCopy.Annotations = r.mergeNamespaceAnnotations(ctx, httproute.Namespace, httproute.Annotations)
+				httprouteCopy.Annotations = canonicalizeLocalResourceAnnotations(httprouteCopy.Annotations)
+				httprouteCopy.Annotations = r.mergeNamespaceAnnotations(ctx, httproute.Namespace, httprouteCopy.Annotations)
 			}
 			// Remote discovery already resolved this route against its source
 			// cluster's Gateway objects. Re-resolving it with the local reader can
@@ -1406,6 +1464,19 @@ func (r *DashboardReconciler) createConfigMap(ctx context.Context, homerConfig *
 func shouldMergeLocalNamespaceAnnotations(annotations map[string]string) bool {
 	clusterName := strings.TrimSpace(annotations["homer.rajsingh.info/cluster"])
 	return clusterName == "" || clusterName == homer.LocalCluster
+}
+
+// canonicalizeLocalResourceAnnotations prevents a user-authored annotation
+// from making a resource read from the local API look like it came from a
+// remote cluster. Remote discovery overwrites this marker with the trusted
+// source cluster before resources reach the config builder.
+func canonicalizeLocalResourceAnnotations(annotations map[string]string) map[string]string {
+	canonical := maps.Clone(annotations)
+	if canonical == nil {
+		canonical = make(map[string]string)
+	}
+	canonical["homer.rajsingh.info/cluster"] = homer.LocalCluster
+	return canonical
 }
 
 func discoveryConfigForDashboard(dashboard *homerv1alpha1.Dashboard) *homer.DiscoveryConfig {

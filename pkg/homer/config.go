@@ -3213,8 +3213,16 @@ func mergeItemHeaders(existingItem, newItem *Item, isCRDExisting bool) {
 	// Normalize both sides before merging so casing variants cannot survive as
 	// separate Homer headers. Header maps can originate from direct CRD data,
 	// annotations, discovery, or Secret resolution.
+	existingSecretValues := resolvedSecretHeaderValues(existingItem)
+	incomingSecretValues := resolvedSecretHeaderValues(newItem)
 	normalizeHeaderMap(existingItem.Headers)
 	normalizeHeaderMap(newItem.Headers)
+	for name, value := range existingSecretValues {
+		setHeaderValue(existingItem.Headers, name, value)
+	}
+	for name, value := range incomingSecretValues {
+		setHeaderValue(newItem.Headers, name, value)
+	}
 
 	for _, key := range headerMapKeys(newItem.Headers) {
 		value := newItem.Headers[key]
@@ -3666,6 +3674,39 @@ func hasResolvedSecretHeader(item *Item, name string) bool {
 		}
 	}
 	return false
+}
+
+// resolvedSecretHeaderValues snapshots Secret-backed values before header
+// normalization. A raw CRD object can contain two casing variants of one
+// header; normalization alone would keep whichever key sorts first and could
+// discard the value associated with the Secret marker.
+func resolvedSecretHeaderValues(item *Item) map[string]any {
+	if item == nil || len(item.Headers) == 0 {
+		return nil
+	}
+
+	values := make(map[string]any)
+	for _, name := range resolvedSecretHeaderNames(item) {
+		keys := make([]string, 0, len(item.Headers))
+		for key := range item.Headers {
+			if strings.EqualFold(key, name) {
+				keys = append(keys, key)
+			}
+		}
+		if len(keys) == 0 {
+			continue
+		}
+		slices.Sort(keys)
+		selected := keys[0]
+		for _, key := range keys {
+			if key == name {
+				selected = key
+				break
+			}
+		}
+		values[name] = deepCopyValue(item.Headers[selected])
+	}
+	return values
 }
 
 // processDynamicParameter handles all parameters dynamically
@@ -4209,6 +4250,11 @@ func validateHomerConfig(config *HomerConfig, validationLevel ValidationLevel) e
 	if config == nil {
 		return fmt.Errorf("config: nil")
 	}
+	if strings.TrimSpace(config.ExternalConfig) != "" {
+		// Upstream Homer replaces the generated document with externalConfig
+		// before consuming any other root or service fields.
+		return nil
+	}
 
 	if config.Colors.Light.Background != "" && !isValidColor(config.Colors.Light.Background) {
 		return fmt.Errorf("light background color: %s", config.Colors.Light.Background)
@@ -4485,6 +4531,13 @@ func sortServicesAndItems(config *HomerConfig) {
 
 // marshalHomerConfigToYAML creates properly formatted YAML for Homer
 func marshalHomerConfigToYAML(config *HomerConfig) ([]byte, error) {
+	if strings.TrimSpace(config.ExternalConfig) != "" {
+		// Upstream Homer replaces this document with the external one before
+		// consuming any other fields. Keep ignored inline values, including
+		// credentials, out of the served ConfigMap as well.
+		return yaml.Marshal(map[string]any{"externalConfig": config.ExternalConfig})
+	}
+
 	configMap := make(map[string]any)
 
 	addBasicFields(configMap, config)
@@ -4938,6 +4991,7 @@ func flattenItemHeaders(item Item) map[string]any {
 		return nil
 	}
 
+	secretValues := resolvedSecretHeaderValues(&item)
 	headers := make(map[string]any, len(item.Headers))
 	for _, name := range headerMapKeys(item.Headers) {
 		if _, exists := findHeaderKey(headers, name); exists {
@@ -4975,6 +5029,9 @@ func flattenItemHeaders(item Item) map[string]any {
 				}
 			}
 		}
+	}
+	for name, value := range secretValues {
+		setHeaderValue(headers, name, value)
 	}
 	return headers
 }

@@ -1,5 +1,9 @@
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
+# Prerequisites: install the Gateway API CRDs and a Gateway controller that
+# owns the `istio` GatewayClass. The referenced Service and TLS Secret are not
+# created by this example. The operator needs permission to read Gateways and
+# GatewayClasses to resolve the generated URL scheme.
 metadata:
   name: example-httproute
   namespace: default

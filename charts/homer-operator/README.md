@@ -13,8 +13,11 @@ A Helm chart for deploying the Homer Operator on Kubernetes. The Homer Operator 
 
 ```bash
 helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator \
-  --version 1.2.3 -n homer-operator --create-namespace
+  -n homer-operator --create-namespace
 ```
+
+Helm selects the latest published chart when `--version` is omitted. Add
+`--version <version-from-GitHub-Releases>` when pinning a release.
 
 ### Install from Source
 
@@ -45,9 +48,12 @@ The following table lists the configurable parameters of the Homer Operator char
 | `image.digest` | Immutable operator image digest; takes precedence over `image.tag` | `""` |
 | `image.pullPolicy` | Image pull policy | `Always` |
 | `operator.enableGatewayAPI` | Enable Gateway API support | `false` |
+| `operator.leaderElection.enabled` | Enable controller leader election | `true` |
 | `homer.image.repository` | Homer dashboard image repository | `b4bz/homer` |
 | `homer.image.tag` | Homer dashboard image tag | `latest` |
 | `homer.configSyncImage` | Image used to stage Dashboard ConfigMaps into Homer assets | `alpine:3.18` |
+| `imagePullSecrets` | Image pull Secret references | `[]` |
+| `nameOverride` / `fullnameOverride` | Override generated resource names | `""` / `""` |
 | `operator.metrics.enabled` | Enable metrics collection | `true` |
 | `operator.metrics.secureMetrics` | Use secure metrics serving | `true` |
 | `operator.metrics.bindAddress` | Metrics bind address | `:8443` |
@@ -56,19 +62,48 @@ The following table lists the configurable parameters of the Homer Operator char
 | `services.metrics.port` | Metrics Service port | `8443` |
 | `operator.healthProbe.bindAddress` | Health probe bind address | `:8081` |
 | `serviceAccount.create` | Create service account | `true` |
+| `serviceAccount.automount` | Automount the service account token | `true` |
+| `serviceAccount.name` | Override the service account name | `""` |
+| `serviceAccount.annotations` | Service account annotations | `{}` |
 | `rbac.create` | Create RBAC resources | `true` |
+| `rbac.annotations` | RBAC object annotations | `{}` |
 | `crd.create` | Create CustomResourceDefinitions | `true` |
+| `crd.annotations` | CRD annotations | `{}` |
+| `podAnnotations` | Operator Pod annotations | `{}` |
+| `podLabels` | Operator Pod labels | `{}` |
+| `podSecurityContext` | Operator Pod security context | `runAsNonRoot: true` |
+| `securityContext` | Operator container security context | `allowPrivilegeEscalation: false` |
 | `serviceMonitor.enabled` | Create a Prometheus ServiceMonitor | `false` |
+| `serviceMonitor.interval` | ServiceMonitor scrape interval | `30s` |
+| `serviceMonitor.scrapeTimeout` | ServiceMonitor scrape timeout | `10s` |
+| `serviceMonitor.labels` / `annotations` | ServiceMonitor metadata | `{}` |
 | `serviceMonitor.auth.serviceAccountName` | Override the generated secure-metrics scraper ServiceAccount name | `""` |
 | `serviceMonitor.auth.tokenSecretName` | Override the generated secure-metrics token Secret name | `""` |
+| `services.metrics.annotations` | Metrics Service annotations | `{}` |
 | `resources.limits.memory` | Memory limit | `128Mi` |
 | `resources.limits.cpu` | CPU limit | `200m` |
 | `resources.requests.memory` | Memory request | `64Mi` |
 | `resources.requests.cpu` | CPU request | `50m` |
+| `livenessProbe` / `readinessProbe` | Health probe configuration | chart defaults |
+| `startupProbe.enabled` | Enable the startup probe | `false` |
+| `scheduling.nodeSelector` / `tolerations` / `affinity` | Pod scheduling constraints | `{}` / `[]` / `{}` |
+| `scheduling.priorityClassName` | Pod priority class | `""` |
+| `volumes` / `volumeMounts` | Additional operator volumes | `[]` |
 | `highAvailability.podDisruptionBudget.enabled` | Create a PodDisruptionBudget | `true` |
 | `highAvailability.podDisruptionBudget.minAvailable` | Minimum available Pods; rendered when `maxUnavailable` is null | `1` |
 | `highAvailability.podDisruptionBudget.maxUnavailable` | Maximum unavailable Pods or percentage; takes precedence when set | `null` |
 | `highAvailability.autoscaling.enabled` | Create an HPA | `false` |
+| `highAvailability.autoscaling.minReplicas` / `maxReplicas` | HPA replica bounds | `1` / `3` |
+| `highAvailability.autoscaling.targetCPUUtilizationPercentage` | HPA CPU target | `80` |
+| `highAvailability.autoscaling.targetMemoryUtilizationPercentage` | HPA memory target | `80` |
+| `vpa.enabled` | Create a VerticalPodAutoscaler | `false` |
+| `vpa.updateMode` / `controlledResources` | VPA update and resource policy | `Auto` / `[cpu, memory]` |
+| `topologySpreadConstraints` | Pod topology spread constraints | `[]` |
+| `prometheusRule.enabled` / `additionalRules` | Create Prometheus alerting rules | `false` / `[]` |
+| `grafanaDashboard.enabled` | Create a Grafana dashboard ConfigMap | `false` |
+| `deploymentStrategy` | Operator Deployment strategy | `RollingUpdate` |
+| `terminationGracePeriodSeconds` | Pod termination grace period | `10` |
+| `env` / `envFrom` | Additional operator environment sources | `[]` / `[]` |
 
 Legacy values for operator log formatting, reconcile tuning, leader-election
 timers, and `homer.image.pullPolicy` are intentionally unsupported because the
@@ -187,6 +222,21 @@ take precedence over `parameters.headers`, which takes precedence over
 `parameters.customHeaders`. All forms are normalized to Homer's `item.headers`
 object.
 
+To use Homer's upstream external configuration behavior, set
+`homerConfig.externalConfig` to a URL or path. Homer fetches that document and
+ignores the remaining fields in the generated inline document; the operator
+skips discovery and inline Secret injection in this mode. Use `spec.configMap`
+when the operator should manage a complete Homer YAML document from a
+Kubernetes ConfigMap.
+
+For example:
+
+```yaml
+spec:
+  homerConfig:
+    externalConfig: https://config.example.com/homer.yml
+```
+
 Secret-backed API key, token, username, and password references are resolved
 for configured smart-card service items (items with a `type`). Header Secrets
 configured under `spec.secrets.headers` are resolved for configured items and
@@ -251,7 +301,7 @@ the Gateway API default). Only Gateway API `Gateway` parent references are
 considered; omitted parent-reference group and kind use those same defaults.
 `sectionName` and `port` restrict the matching listener. Listener hostnames
 must overlap the route hostname, and a wildcard such as `*.example.com`
-matches exactly one DNS label, not the apex or a deeper subdomain.
+matches any non-apex subdomain, including deeper names, but not the apex.
 
 For URL scheme resolution, an explicitly rejected GatewayClass
 (`Accepted=False`), Gateway (`Accepted=False`, `Programmed=False`, or
@@ -263,7 +313,10 @@ required; statuses from other controllers are ignored. If a resource reports
 no status at all, the resolver keeps the compatibility fallback; when a
 Gateway reports listener statuses, the selected listener must have an eligible
 status. Missing matching-parent status does not by itself exclude the route.
-These checks affect protocol resolution, not selector-based discovery. HTTPS is
+These checks affect protocol resolution, not selector-based discovery. The
+operator must be able to read `gatewayclasses` in addition to `gateways` and
+`httproutes` to verify GatewayClass ownership; without that permission it does
+not trust a listener to select an HTTPS URL. HTTPS is
 preferred when multiple eligible listeners match, and the generated URL falls
 back to HTTP when no protocol is resolved.
 

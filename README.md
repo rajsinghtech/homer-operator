@@ -110,6 +110,21 @@ kubectl apply -f dashboard.yaml
 upstream Homer. The older `parameters`/annotation-oriented form remains
 supported for existing dashboards and discovery workflows.
 
+To use Homer's upstream external configuration behavior, set
+`homerConfig.externalConfig` to a URL or path. Homer fetches that document and
+ignores the remaining fields in the generated inline document; the operator
+therefore skips discovery and inline Secret injection in this mode. Use
+`spec.configMap` instead when the operator should manage a complete Homer YAML
+document from a Kubernetes ConfigMap.
+
+For example:
+
+```yaml
+spec:
+  homerConfig:
+    externalConfig: https://config.example.com/homer.yml
+```
+
 For legacy parameter data, prefer `headers` or `headers.<Header-Name>`; these
 are normalized to Homer's `item.headers` object. The legacy `customHeaders`
 alias remains supported: a bare `parameters.customHeaders` string such as
@@ -298,7 +313,7 @@ the Gateway API default). Only Gateway API `Gateway` parent references are
 considered; omitted parent-reference group and kind use those same defaults.
 `sectionName` and `port` restrict the matching listener. Listener hostnames
 must overlap the route hostname, and a wildcard such as `*.example.com`
-matches exactly one DNS label, not the apex or a deeper subdomain. The
+matches any non-apex subdomain, including deeper names, but not the apex. The
 checked-in example at
 `homer/httpRouteExample.yaml` keeps the HTTPRoute and Gateway in `default` and
 relies on the same-namespace default.
@@ -314,6 +329,9 @@ no status at all, the resolver keeps the compatibility fallback; when a
 Gateway reports listener statuses, the selected listener must have an eligible
 status. Missing matching-parent status does not by itself exclude the route.
 These checks affect protocol resolution rather than selector-based discovery.
+The operator must be able to read `gatewayclasses` in addition to `gateways`
+and `httproutes` to verify GatewayClass ownership; without that permission it
+does not trust a listener to select an HTTPS URL.
 Among multiple eligible HTTP/HTTPS listeners,
 HTTPS is preferred; if no protocol can be resolved, the generated URL uses
 HTTP.
@@ -649,9 +667,11 @@ serviceMonitor:
 ```bash
 kubectl create namespace homer-operator
 helm install homer-operator oci://ghcr.io/rajsinghtech/homer-operator/charts/homer-operator \
-  --namespace homer-operator \
-  --version 1.2.3 -f values.yaml
+  --namespace homer-operator -f values.yaml
 ```
+
+Helm selects the latest published chart when `--version` is omitted. Add
+`--version <version-from-GitHub-Releases>` when pinning a release.
 
 ---
 
@@ -784,7 +804,7 @@ rules:
   resources: ["ingresses"]
   verbs: ["get", "list", "watch"]
 - apiGroups: ["gateway.networking.k8s.io"]
-  resources: ["httproutes", "gateways"]
+  resources: ["httproutes", "gateways", "gatewayclasses"]
   verbs: ["get", "list", "watch"]
 - apiGroups: [""]
   resources: ["namespaces", "services"]

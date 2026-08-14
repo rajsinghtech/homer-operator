@@ -117,6 +117,7 @@ func (r *GenericResourceReconciler) getResourceInfo(ctx context.Context, req ctr
 		if err := r.Get(ctx, req.NamespacedName, &httproute); err != nil {
 			return nil, err
 		}
+		httproute.Annotations = canonicalizeLocalResourceAnnotations(httproute.Annotations)
 		return &ResourceInfo{
 			Name: httproute.Name, Namespace: httproute.Namespace,
 			Annotations: httproute.Annotations, Labels: httproute.Labels, Object: &httproute,
@@ -127,6 +128,7 @@ func (r *GenericResourceReconciler) getResourceInfo(ctx context.Context, req ctr
 	if err := r.Get(ctx, req.NamespacedName, &ingress); err != nil {
 		return nil, err
 	}
+	ingress.Annotations = canonicalizeLocalResourceAnnotations(ingress.Annotations)
 	return &ResourceInfo{
 		Name: ingress.Name, Namespace: ingress.Namespace,
 		Annotations: ingress.Annotations, Labels: ingress.Labels, Object: &ingress,
@@ -183,7 +185,7 @@ func (r *GenericResourceReconciler) shouldIncludeHTTPRoute(ctx context.Context, 
 		return false, err
 	}
 	for _, parentRef := range httproute.Spec.ParentRefs {
-		if parentRef.Kind != nil && string(*parentRef.Kind) != "Gateway" {
+		if !isGatewayParentReference(parentRef) {
 			continue
 		}
 		namespace := httproute.Namespace

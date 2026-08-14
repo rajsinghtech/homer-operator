@@ -200,6 +200,30 @@ func TestConfiguredSecretHeadersOverrideDirectAndDiscoveredHeadersCaseInsensitiv
 	}
 }
 
+func TestSecretHeaderValueSurvivesCaseVariantNormalization(t *testing.T) {
+	existing := &Item{
+		Source: CRDSource,
+		Headers: map[string]any{
+			"Authorization": "direct",
+			"authorization": "secret",
+		},
+		resolvedSecretHeaders: "authorization",
+	}
+	incoming := &Item{
+		Source:  "ingress/web",
+		Headers: map[string]any{"AUTHORIZATION": "discovered"},
+	}
+
+	smartMergeItems(existing, incoming)
+
+	if got, ok := getHeaderValue(existing.Headers, "Authorization"); !ok || got != "secret" {
+		t.Fatalf("case-variant Secret header = %#v, want secret", existing.Headers)
+	}
+	if len(existing.Headers) != 1 {
+		t.Fatalf("case-variant Secret header produced duplicates: %#v", existing.Headers)
+	}
+}
+
 func TestHeaderPrecedenceIsDirectThenDiscoveredThenHealth(t *testing.T) {
 	config := &HomerConfig{Services: []Service{{
 		Name: "apps",

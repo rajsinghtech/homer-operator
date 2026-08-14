@@ -59,14 +59,14 @@ func TestCreateConfigMapLocalHTTPRouteIgnoresSpoofedRemoteProvenance(t *testing.
 	}
 	localGateway := &gatewayv1.Gateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "shared-gateway", Namespace: "default"},
-		Spec: gatewayv1.GatewaySpec{Listeners: []gatewayv1.Listener{{
+		Spec: gatewayv1.GatewaySpec{GatewayClassName: "managed", Listeners: []gatewayv1.Listener{{
 			Name:     "web",
 			Protocol: gatewayv1.HTTPProtocolType,
 			Port:     80,
 		}}},
 	}
 	remoteClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	localClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(localRoute, localGateway).Build()
+	localClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(localRoute, localGateway, testGatewayClass()).Build()
 
 	manager := NewClusterManager(localClient, scheme)
 	manager.clients = map[string]*ClusterClient{
@@ -143,7 +143,7 @@ func TestCreateConfigMapRemoteHTTPRouteKeepsSourceNamespaceAnnotations(t *testin
 	}
 	remoteGateway := &gatewayv1.Gateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "remote-gateway", Namespace: provenanceTestNamespace},
-		Spec: gatewayv1.GatewaySpec{Listeners: []gatewayv1.Listener{{
+		Spec: gatewayv1.GatewaySpec{GatewayClassName: "managed", Listeners: []gatewayv1.Listener{{
 			Name:     "web",
 			Protocol: gatewayv1.HTTPProtocolType,
 			Port:     80,
@@ -151,7 +151,7 @@ func TestCreateConfigMapRemoteHTTPRouteKeepsSourceNamespaceAnnotations(t *testin
 	}
 
 	localClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(localNamespace).Build()
-	remoteClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(remoteNamespace, remoteRoute, remoteGateway).Build()
+	remoteClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(remoteNamespace, remoteRoute, remoteGateway, testGatewayClass()).Build()
 	manager := NewClusterManager(localClient, scheme)
 	manager.clients = map[string]*ClusterClient{
 		localClusterName: {Name: localClusterName, Client: localClient, Connected: true},

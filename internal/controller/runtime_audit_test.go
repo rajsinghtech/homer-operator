@@ -25,6 +25,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	homerv1alpha1 "github.com/rajsinghtech/homer-operator/api/v1alpha1"
 	"github.com/rajsinghtech/homer-operator/pkg/homer"
@@ -364,6 +365,168 @@ func TestDiscoveryPermissionErrorDoesNotDisconnectOtherResourceTypes(t *testing.
 	}
 }
 
+func TestRemoteIngressCacheIsInvalidatedWhenSelectorChanges(t *testing.T) {
+	scheme := runtimeAuditScheme(t)
+	baseClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(&networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "old",
+			Namespace: "apps",
+			Labels:    map[string]string{"discover": "yes"},
+		},
+	}).Build()
+	listForbidden := false
+	remoteClient := interceptor.NewClient(baseClient, interceptor.Funcs{
+		List: func(ctx context.Context, underlying client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if listForbidden {
+				return apierrors.NewForbidden(schema.GroupResource{Group: "networking.k8s.io", Resource: "ingresses"}, "all", errors.New("RBAC denied"))
+			}
+			return underlying.List(ctx, list, opts...)
+		},
+	})
+	manager := NewClusterManager(baseClient, scheme)
+	manager.clients = map[string]*ClusterClient{
+		"remote": {
+			Name: "remote", Client: remoteClient, Connected: true,
+			ClusterCfg: &homerv1alpha1.RemoteCluster{
+				Name:            "remote",
+				IngressSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"discover": "yes"}},
+			},
+		},
+	}
+	dashboard := &homerv1alpha1.Dashboard{}
+	if _, err := manager.DiscoverIngresses(context.Background(), dashboard); err != nil {
+		t.Fatalf("initial DiscoverIngresses() error = %v", err)
+	}
+
+	manager.clients["remote"].ClusterCfg = &homerv1alpha1.RemoteCluster{
+		Name:            "remote",
+		IngressSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"discover": "no"}},
+	}
+	listForbidden = true
+	results, err := manager.DiscoverIngresses(context.Background(), dashboard)
+	if err != nil {
+		t.Fatalf("DiscoverIngresses() after selector change error = %v", err)
+	}
+	if got := len(results["remote"]); got != 0 {
+		t.Fatalf("stale remote Ingresses after selector change = %d, want zero", got)
+	}
+}
+
+func TestRemoteNotFoundDiscoveryClearsIngressCache(t *testing.T) {
+	scheme := runtimeAuditScheme(t)
+	baseClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(testIngress("old")).Build()
+	listNotFound := false
+	remoteClient := interceptor.NewClient(baseClient, interceptor.Funcs{
+		List: func(ctx context.Context, underlying client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if listNotFound {
+				return apierrors.NewNotFound(schema.GroupResource{Group: "networking.k8s.io", Resource: "ingresses"}, "all")
+			}
+			return underlying.List(ctx, list, opts...)
+		},
+	})
+	manager := NewClusterManager(baseClient, scheme)
+	manager.clients = map[string]*ClusterClient{
+		"remote": {Name: "remote", Client: remoteClient, Connected: true, ClusterCfg: &homerv1alpha1.RemoteCluster{Name: "remote"}},
+	}
+	dashboard := &homerv1alpha1.Dashboard{}
+	if _, err := manager.DiscoverIngresses(context.Background(), dashboard); err != nil {
+		t.Fatalf("initial DiscoverIngresses() error = %v", err)
+	}
+	listNotFound = true
+	results, err := manager.DiscoverIngresses(context.Background(), dashboard)
+	if err != nil {
+		t.Fatalf("NotFound DiscoverIngresses() error = %v", err)
+	}
+	if got := len(results["remote"]); got != 0 {
+		t.Fatalf("cached Ingresses after remote NotFound = %d, want zero", got)
+	}
+}
+
+func TestRemoteGatewaySelectorReadFailureFailsDiscovery(t *testing.T) {
+	scheme := runtimeAuditScheme(t)
+	parentRef := gatewayv1.ParentReference{Name: "public"}
+	route := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+		Spec:       gatewayv1.HTTPRouteSpec{CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{parentRef}}},
+	}
+	baseClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(route).Build()
+	remoteClient := interceptor.NewClient(baseClient, interceptor.Funcs{
+		Get: func(ctx context.Context, underlying client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, isGateway := obj.(*gatewayv1.Gateway); isGateway {
+				return apierrors.NewForbidden(schema.GroupResource{Group: "gateway.networking.k8s.io", Resource: "gateways"}, key.Name, errors.New("RBAC denied"))
+			}
+			return underlying.Get(ctx, key, obj, opts...)
+		},
+	})
+	manager := NewClusterManager(baseClient, scheme)
+	manager.clients = map[string]*ClusterClient{
+		"remote": {
+			Name: "remote", Client: remoteClient, Connected: true,
+			ClusterCfg: &homerv1alpha1.RemoteCluster{
+				Name:            "remote",
+				GatewaySelector: &metav1.LabelSelector{MatchLabels: map[string]string{"managed": "yes"}},
+			},
+		},
+	}
+	_, err := manager.DiscoverHTTPRoutes(context.Background(), &homerv1alpha1.Dashboard{})
+	if err == nil {
+		t.Fatal("Gateway selector read failure was silently ignored")
+	}
+}
+
+func TestRemoteGatewayProtocolReadFailurePreservesLastGoodRoute(t *testing.T) {
+	scheme := runtimeAuditScheme(t)
+	parentRef := gatewayv1.ParentReference{Name: "public"}
+	route := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+		Spec:       gatewayv1.HTTPRouteSpec{CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{parentRef}}},
+	}
+	gateway := &gatewayv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "public", Namespace: "default"},
+		Spec: gatewayv1.GatewaySpec{
+			GatewayClassName: "managed",
+			Listeners:        []gatewayv1.Listener{{Name: "tls", Protocol: gatewayv1.HTTPSProtocolType, Port: 443}},
+		},
+	}
+	gatewayClass := testGatewayClass()
+	baseClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(route, gateway, gatewayClass).Build()
+	readFailure := false
+	remoteClient := interceptor.NewClient(baseClient, interceptor.Funcs{
+		Get: func(ctx context.Context, underlying client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if readFailure {
+				if _, isGateway := obj.(*gatewayv1.Gateway); isGateway {
+					return apierrors.NewInternalError(errors.New("temporary Gateway read failure"))
+				}
+			}
+			return underlying.Get(ctx, key, obj, opts...)
+		},
+	})
+	manager := NewClusterManager(baseClient, scheme)
+	manager.clients = map[string]*ClusterClient{
+		"remote": {
+			Name: "remote", Client: remoteClient, Connected: true,
+			ClusterCfg: &homerv1alpha1.RemoteCluster{Name: "remote"},
+		},
+	}
+	dashboard := &homerv1alpha1.Dashboard{}
+	initial, err := manager.DiscoverHTTPRoutes(context.Background(), dashboard)
+	if err != nil {
+		t.Fatalf("initial DiscoverHTTPRoutes() error = %v", err)
+	}
+	if got := initial["remote"][0].Annotations[homer.HTTPRouteProtocolAnnotation]; got != homer.ProtocolHTTPS {
+		t.Fatalf("initial remote protocol = %q, want %q", got, homer.ProtocolHTTPS)
+	}
+
+	readFailure = true
+	results, err := manager.DiscoverHTTPRoutes(context.Background(), dashboard)
+	if err == nil {
+		t.Fatal("Gateway protocol read failure was silently ignored")
+	}
+	if got := results["remote"][0].Annotations[homer.HTTPRouteProtocolAnnotation]; got != homer.ProtocolHTTPS {
+		t.Fatalf("cached remote protocol after Gateway read failure = %q, want %q", got, homer.ProtocolHTTPS)
+	}
+}
+
 func TestClusterManagerRetriesDisconnectedConnectionWithUnchangedSecret(t *testing.T) {
 	scheme := runtimeAuditScheme(t)
 	localClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(&corev1.Secret{
@@ -409,6 +572,83 @@ func TestClusterManagerRetriesDisconnectedConnectionWithUnchangedSecret(t *testi
 	}
 	if !manager.clients["remote"].Connected {
 		t.Fatal("remote cluster should reconnect on the second reconcile")
+	}
+}
+
+func TestEnabledClusterWithMissingSecretIsNotMarkedDisabled(t *testing.T) {
+	scheme := runtimeAuditScheme(t)
+	localClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	manager := NewClusterManager(localClient, scheme)
+
+	disabledDashboard := &homerv1alpha1.Dashboard{
+		ObjectMeta: metav1.ObjectMeta{Name: "dashboard", Namespace: "default"},
+		Spec: homerv1alpha1.DashboardSpec{RemoteClusters: []homerv1alpha1.RemoteCluster{{
+			Name: "remote", Enabled: false,
+		}}},
+	}
+	if err := manager.UpdateClusters(context.Background(), disabledDashboard); err != nil {
+		t.Fatalf("disabled UpdateClusters() error = %v", err)
+	}
+
+	enabledDashboard := disabledDashboard.DeepCopy()
+	enabledDashboard.Spec.RemoteClusters[0].Enabled = true
+	enabledDashboard.Spec.RemoteClusters[0].SecretRef.Name = "missing-kubeconfig"
+	if err := manager.UpdateClusters(context.Background(), enabledDashboard); err != nil {
+		t.Fatalf("enabled UpdateClusters() error = %v", err)
+	}
+	remote := manager.clients["remote"]
+	if remote.Disabled {
+		t.Fatal("enabled cluster with a missing Secret remained marked Disabled")
+	}
+	if remote.Connected {
+		t.Fatal("enabled cluster with a missing Secret unexpectedly connected")
+	}
+}
+
+func TestDisableDiscoverySynchronizesRemoteStateWithoutReadingSecrets(t *testing.T) {
+	scheme := runtimeAuditScheme(t)
+	localClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	manager := NewClusterManager(localClient, scheme)
+	connectedAt := time.Now().Add(-time.Minute)
+	manager.clients["old"] = &ClusterClient{
+		Name:                     "old",
+		Connected:                true,
+		LastSuccessfulConnection: connectedAt,
+	}
+	manager.lastIngresses["old"] = []networkingv1.Ingress{{}}
+
+	dashboard := &homerv1alpha1.Dashboard{
+		ObjectMeta: metav1.ObjectMeta{Name: "dashboard", Namespace: "default"},
+		Spec: homerv1alpha1.DashboardSpec{RemoteClusters: []homerv1alpha1.RemoteCluster{{
+			Name: "new", SecretRef: homerv1alpha1.KubeconfigSecretRef{Name: "not-read"}, Enabled: true,
+		}}},
+	}
+	if err := manager.DisableDiscovery(dashboard); err != nil {
+		t.Fatalf("DisableDiscovery() error = %v", err)
+	}
+	if _, ok := manager.clients["old"]; ok {
+		t.Fatal("removed remote cluster remained in manager")
+	}
+	remote := manager.clients["new"]
+	if !remote.Disabled || remote.Connected {
+		t.Fatalf("external-config remote state = %#v, want disabled and disconnected", remote)
+	}
+	if _, ok := manager.lastIngresses["old"]; ok {
+		t.Fatal("removed remote discovery cache was retained")
+	}
+	statuses := manager.GetClusterStatuses()
+	if len(statuses) != 1 || statuses[0].Name != "new" || statuses[0].Connected {
+		t.Fatalf("external-config cluster statuses = %#v", statuses)
+	}
+	if statuses[0].LastConnectionTime != nil {
+		t.Fatal("new never-connected remote cluster unexpectedly has a last connection time")
+	}
+
+	manager.clients["new"].LastSuccessfulConnection = connectedAt
+	manager.clients["new"].Connected = false
+	statuses = manager.GetClusterStatuses()
+	if statuses[0].LastConnectionTime == nil || !statuses[0].LastConnectionTime.Time.Equal(connectedAt) {
+		t.Fatalf("disconnected remote last connection time = %#v, want %v", statuses[0].LastConnectionTime, connectedAt)
 	}
 }
 
@@ -497,6 +737,50 @@ func TestEffectiveExternalConfigControlsValidationAndPWADefaults(t *testing.T) {
 	}
 	if decoded.Name != "External title" || decoded.Description != "External subtitle" || decoded.StartURL != dashboardRelativePath || decoded.Scope != dashboardRelativePath {
 		t.Fatalf("PWA defaults from effective config = %#v", decoded)
+	}
+}
+
+func TestInlineExternalConfigIsAuthoritative(t *testing.T) {
+	scheme := runtimeAuditScheme(t)
+	client := fake.NewClientBuilder().WithScheme(scheme).Build()
+	dashboard := &homerv1alpha1.Dashboard{
+		ObjectMeta: metav1.ObjectMeta{Name: "dashboard", Namespace: "default"},
+		Spec: homerv1alpha1.DashboardSpec{
+			HomerConfig: homer.HomerConfig{
+				ExternalConfig: "https://config.example.test/homer.yml",
+				Title:          "stale inline title",
+				Services: []homer.Service{{Items: []homer.Item{{
+					Name: "ignored-inline-item", URL: "not a URL",
+				}}}},
+			},
+		},
+	}
+	reconciler := &DashboardReconciler{Client: client}
+
+	effective, err := reconciler.buildHomerConfig(context.Background(), dashboard)
+	if err != nil {
+		t.Fatalf("buildHomerConfig() returned error: %v", err)
+	}
+	configMap, _, err := reconciler.createConfigMap(
+		context.Background(), effective, dashboard,
+		networkingv1.IngressList{Items: []networkingv1.Ingress{{
+			ObjectMeta: metav1.ObjectMeta{Name: "ignored-ingress", Namespace: "default"},
+			Spec:       networkingv1.IngressSpec{Rules: []networkingv1.IngressRule{{Host: "ignored.example.test"}}},
+		}}}, nil,
+	)
+	if err != nil {
+		t.Fatalf("createConfigMap() returned error: %v", err)
+	}
+	config := configMap.Data["config.yml"]
+	if !strings.Contains(config, "externalConfig: https://config.example.test/homer.yml") {
+		t.Fatalf("externalConfig was not emitted: %s", config)
+	}
+	if strings.Contains(config, "ignored-inline-item") || strings.Contains(config, "ignored.example.test") {
+		t.Fatalf("ignored inline/discovered data leaked into external configuration: %s", config)
+	}
+	deploymentConfig := reconciler.buildDeploymentConfig(dashboard, effective)
+	if strings.Contains(deploymentConfig.PWAManifest, "stale inline title") {
+		t.Fatalf("stale inline title leaked into the external-config PWA manifest: %s", deploymentConfig.PWAManifest)
 	}
 }
 

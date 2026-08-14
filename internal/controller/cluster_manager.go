@@ -20,6 +20,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"sort"
@@ -53,13 +55,15 @@ const (
 
 // ClusterClient represents a client connection to a Kubernetes cluster
 type ClusterClient struct {
-	Name       string
-	Client     client.Client
-	Config     *rest.Config
-	Connected  bool
-	LastError  error
-	LastCheck  time.Time
-	ClusterCfg *homerv1alpha1.RemoteCluster
+	Name                     string
+	Client                   client.Client
+	Config                   *rest.Config
+	Connected                bool
+	Disabled                 bool
+	LastError                error
+	LastCheck                time.Time
+	LastSuccessfulConnection time.Time
+	ClusterCfg               *homerv1alpha1.RemoteCluster
 }
 
 // ClusterManager manages connections to multiple Kubernetes clusters
@@ -68,6 +72,15 @@ type ClusterManager struct {
 	scheme       *runtime.Scheme
 	clients      map[string]*ClusterClient
 	secretHashes map[string]string // Track secret versions for change detection
+	// Last successful discovery results are retained per Dashboard-scoped
+	// manager so a transient remote read failure cannot erase valid cards from
+	// the generated configuration.
+	lastIngresses      map[string][]networkingv1.Ingress
+	lastHTTPRoutes     map[string][]gatewayv1.HTTPRoute
+	lastServices       map[string][]corev1.Service
+	ingressCacheKeys   map[string]string
+	httpRouteCacheKeys map[string]string
+	serviceCacheKeys   map[string]string
 	// createClusterClientFn is injectable for focused retry tests. Production
 	// connections use createClusterClient directly.
 	createClusterClientFn func(context.Context, *homerv1alpha1.Dashboard, *homerv1alpha1.RemoteCluster) (*ClusterClient, error)
@@ -78,11 +91,17 @@ type ClusterManager struct {
 // NewClusterManager creates a new ClusterManager instance
 func NewClusterManager(localClient client.Client, scheme *runtime.Scheme) *ClusterManager {
 	return &ClusterManager{
-		localClient:  localClient,
-		scheme:       scheme,
-		clients:      make(map[string]*ClusterClient),
-		secretHashes: make(map[string]string),
-		log:          ctrl.Log.WithName("cluster-manager"),
+		localClient:        localClient,
+		scheme:             scheme,
+		clients:            make(map[string]*ClusterClient),
+		secretHashes:       make(map[string]string),
+		lastIngresses:      make(map[string][]networkingv1.Ingress),
+		lastHTTPRoutes:     make(map[string][]gatewayv1.HTTPRoute),
+		lastServices:       make(map[string][]corev1.Service),
+		ingressCacheKeys:   make(map[string]string),
+		httpRouteCacheKeys: make(map[string]string),
+		serviceCacheKeys:   make(map[string]string),
+		log:                ctrl.Log.WithName("cluster-manager"),
 	}
 }
 
@@ -90,6 +109,7 @@ func NewClusterManager(localClient client.Client, scheme *runtime.Scheme) *Clust
 func (m *ClusterManager) UpdateClusters(ctx context.Context, dashboard *homerv1alpha1.Dashboard) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.ensureDiscoveryCaches()
 
 	if err := validateRemoteClusters(dashboard.Spec.RemoteClusters); err != nil {
 		return err
@@ -103,14 +123,17 @@ func (m *ClusterManager) UpdateClusters(ctx context.Context, dashboard *homerv1a
 		if !clusterCfg.Enabled {
 			m.log.V(1).Info("Skipping disabled cluster", "cluster", clusterCfg.Name)
 			activeClusters[clusterCfg.Name] = true
+			m.clearDiscoveryCache(clusterCfg.Name)
 			if existing, ok := m.clients[clusterCfg.Name]; ok {
 				existing.ClusterCfg = &clusterCfg
 				existing.Connected = false
+				existing.Disabled = true
 				existing.LastError = nil
 			} else {
 				m.clients[clusterCfg.Name] = &ClusterClient{
 					Name:       clusterCfg.Name,
 					Connected:  false,
+					Disabled:   true,
 					ClusterCfg: &clusterCfg,
 				}
 			}
@@ -118,22 +141,26 @@ func (m *ClusterManager) UpdateClusters(ctx context.Context, dashboard *homerv1a
 		}
 
 		activeClusters[clusterCfg.Name] = true
+		if existing, ok := m.clients[clusterCfg.Name]; ok {
+			// An enabled configuration must not inherit Disabled from an earlier
+			// disabled configuration, even when its Secret is currently missing.
+			existing.Disabled = false
+		}
 
 		// Get current secret hash to detect changes
 		secretHash, err := m.getSecretHash(ctx, dashboard, &clusterCfg)
 		if err != nil {
 			m.log.Error(err, "Failed to get secret hash", "cluster", clusterCfg.Name)
+			m.clearDiscoveryCache(clusterCfg.Name)
 			if existing, ok := m.clients[clusterCfg.Name]; ok {
 				existing.ClusterCfg = &clusterCfg
 				existing.Connected = false
 				existing.LastError = err
-				existing.LastCheck = time.Now()
 			} else {
 				m.clients[clusterCfg.Name] = &ClusterClient{
 					Name:       clusterCfg.Name,
 					Connected:  false,
 					LastError:  err,
-					LastCheck:  time.Now(),
 					ClusterCfg: &clusterCfg,
 				}
 			}
@@ -149,17 +176,25 @@ func (m *ClusterManager) UpdateClusters(ctx context.Context, dashboard *homerv1a
 			// not leave the cluster permanently disconnected.
 			if !existing.Connected || !hasHash || previousHash != secretHash {
 				m.log.Info("Connecting or reconnecting to cluster", "cluster", clusterCfg.Name)
+				if hasHash && previousHash != secretHash {
+					// A changed kubeconfig can point at a different cluster. Do not
+					// serve resources obtained from the old identity if the new
+					// connection cannot be established.
+					m.clearDiscoveryCache(clusterCfg.Name)
+				}
 				clusterClient, err := m.connectClusterClient(ctx, dashboard, &clusterCfg)
 				if err != nil {
 					m.log.Error(err, "Failed to connect to cluster", "cluster", clusterCfg.Name)
 					existing.ClusterCfg = &clusterCfg
 					existing.Connected = false
 					existing.LastError = err
-					existing.LastCheck = time.Now()
 					m.secretHashes[clusterCfg.Name] = secretHash
 					continue
 				}
 				m.clients[clusterCfg.Name] = clusterClient
+				clusterClient.Disabled = false
+				clusterClient.LastSuccessfulConnection = time.Now()
+				m.clearDiscoveryCache(clusterCfg.Name)
 				m.secretHashes[clusterCfg.Name] = secretHash
 				m.log.Info("Successfully connected to cluster", "cluster", clusterCfg.Name)
 			} else {
@@ -182,8 +217,8 @@ func (m *ClusterManager) UpdateClusters(ctx context.Context, dashboard *homerv1a
 				m.clients[clusterCfg.Name] = &ClusterClient{
 					Name:       clusterCfg.Name,
 					Connected:  false,
+					Disabled:   false,
 					LastError:  err,
-					LastCheck:  time.Now(),
 					ClusterCfg: &clusterCfg,
 				}
 				// Remember the hash even after a failed attempt. The disconnected
@@ -192,6 +227,9 @@ func (m *ClusterManager) UpdateClusters(ctx context.Context, dashboard *homerv1a
 				continue
 			}
 			m.clients[clusterCfg.Name] = clusterClient
+			clusterClient.Disabled = false
+			clusterClient.LastSuccessfulConnection = time.Now()
+			m.clearDiscoveryCache(clusterCfg.Name)
 			m.secretHashes[clusterCfg.Name] = secretHash
 			m.log.Info("Successfully connected to remote cluster", "cluster", clusterCfg.Name)
 		}
@@ -205,6 +243,8 @@ func (m *ClusterManager) UpdateClusters(ctx context.Context, dashboard *homerv1a
 		if !activeClusters[name] {
 			m.log.Info("Removing cluster connection", "cluster", name)
 			delete(m.clients, name)
+			delete(m.secretHashes, name)
+			m.clearDiscoveryCache(name)
 		}
 	}
 
@@ -335,9 +375,24 @@ func (m *ClusterManager) GetClusterStatuses() []homerv1alpha1.ClusterConnectionS
 			Connected: cluster.Connected,
 		}
 
-		if cluster.Connected {
-			lastTime := metav1.NewTime(cluster.LastCheck)
+		lastSuccessfulConnection := cluster.LastSuccessfulConnection
+		if lastSuccessfulConnection.IsZero() {
+			// Preserve compatibility for directly constructed clients in tests
+			// and for managers created before this field was introduced.
+			lastSuccessfulConnection = cluster.LastCheck
+		}
+		if !lastSuccessfulConnection.IsZero() {
+			lastTime := metav1.NewTime(lastSuccessfulConnection)
 			status.LastConnectionTime = &lastTime
+		}
+		if ingresses, ok := m.lastIngresses[name]; ok {
+			status.DiscoveredIngresses = len(ingresses)
+		}
+		if httpRoutes, ok := m.lastHTTPRoutes[name]; ok {
+			status.DiscoveredHTTPRoutes = len(httpRoutes)
+		}
+		if services, ok := m.lastServices[name]; ok {
+			status.DiscoveredServices = len(services)
 		}
 
 		if cluster.LastError != nil {
@@ -350,18 +405,260 @@ func (m *ClusterManager) GetClusterStatuses() []homerv1alpha1.ClusterConnectionS
 	return statuses
 }
 
+// DisableDiscovery synchronizes configured remote-cluster status without
+// connecting to any remote API. It is used when Homer externalConfig is
+// authoritative and the operator must not perform discovery or Secret reads.
+func (m *ClusterManager) DisableDiscovery(dashboard *homerv1alpha1.Dashboard) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ensureDiscoveryCaches()
+
+	if err := validateRemoteClusters(dashboard.Spec.RemoteClusters); err != nil {
+		return err
+	}
+	activeClusters := make(map[string]bool, len(dashboard.Spec.RemoteClusters))
+	for _, clusterCfg := range dashboard.Spec.RemoteClusters {
+		activeClusters[clusterCfg.Name] = true
+		m.clearDiscoveryCache(clusterCfg.Name)
+		if existing, ok := m.clients[clusterCfg.Name]; ok {
+			existing.ClusterCfg = &clusterCfg
+			existing.Connected = false
+			existing.Disabled = true
+			existing.LastError = nil
+			continue
+		}
+		m.clients[clusterCfg.Name] = &ClusterClient{
+			Name:       clusterCfg.Name,
+			Connected:  false,
+			Disabled:   true,
+			ClusterCfg: &clusterCfg,
+		}
+	}
+
+	for _, name := range sortedClusterNames(m.clients) {
+		if name == localClusterName || activeClusters[name] {
+			continue
+		}
+		delete(m.clients, name)
+		delete(m.secretHashes, name)
+		m.clearDiscoveryCache(name)
+	}
+	if _, ok := m.clients[localClusterName]; !ok {
+		m.clients[localClusterName] = &ClusterClient{
+			Name:      localClusterName,
+			Client:    m.localClient,
+			Connected: true,
+			LastCheck: time.Now(),
+		}
+	}
+	return nil
+}
+
+func isExpectedRemoteDiscoveryError(err error) bool {
+	var requiredErr *requiredRemoteDiscoveryError
+	if errors.As(err, &requiredErr) {
+		return false
+	}
+	return apierrors.IsForbidden(err) || apierrors.IsNotFound(err)
+}
+
+// requiredRemoteDiscoveryError marks a read needed to apply an explicit
+// selector or policy. A forbidden list of an optional resource kind can be
+// skipped, but a forbidden Gateway needed to honor GatewaySelector cannot be
+// silently converted into an empty result.
+type requiredRemoteDiscoveryError struct {
+	err error
+}
+
+func (e *requiredRemoteDiscoveryError) Error() string {
+	return e.err.Error()
+}
+
+func (e *requiredRemoteDiscoveryError) Unwrap() error {
+	return e.err
+}
+
+type discoveryCacheConfig struct {
+	NamespaceFilter []string              `json:"namespaceFilter,omitempty"`
+	Selector        *metav1.LabelSelector `json:"selector,omitempty"`
+	GatewaySelector *metav1.LabelSelector `json:"gatewaySelector,omitempty"`
+	DomainFilters   []string              `json:"domainFilters,omitempty"`
+	ClusterLabels   map[string]string     `json:"clusterLabels,omitempty"`
+}
+
+func discoveryConfigHash(config discoveryCacheConfig) string {
+	data, err := json.Marshal(config)
+	if err != nil {
+		// The fields above are all JSON-marshalable Kubernetes API types. Keep a
+		// deterministic fallback if that ever changes rather than disabling the
+		// cache invalidation protection.
+		data = []byte(fmt.Sprintf("%#v", config))
+	}
+	hash := sha256.Sum256(data)
+	return hex.EncodeToString(hash[:])
+}
+
+func ingressDiscoveryCacheKey(cluster *ClusterClient, dashboard *homerv1alpha1.Dashboard) string {
+	config := discoveryCacheConfig{}
+	if cluster.Name == localClusterName {
+		config.Selector = dashboard.Spec.IngressSelector
+		config.DomainFilters = dashboard.Spec.DomainFilters
+	} else if cluster.ClusterCfg != nil {
+		config.NamespaceFilter = cluster.ClusterCfg.NamespaceFilter
+		config.Selector = cluster.ClusterCfg.IngressSelector
+		config.DomainFilters = cluster.ClusterCfg.DomainFilters
+		config.ClusterLabels = cluster.ClusterCfg.ClusterLabels
+	}
+	return discoveryConfigHash(config)
+}
+
+func httpRouteDiscoveryCacheKey(cluster *ClusterClient, dashboard *homerv1alpha1.Dashboard) string {
+	config := discoveryCacheConfig{}
+	if cluster.Name == localClusterName {
+		config.Selector = dashboard.Spec.HTTPRouteSelector
+		config.GatewaySelector = dashboard.Spec.GatewaySelector
+		config.DomainFilters = dashboard.Spec.DomainFilters
+	} else if cluster.ClusterCfg != nil {
+		config.NamespaceFilter = cluster.ClusterCfg.NamespaceFilter
+		config.Selector = cluster.ClusterCfg.HTTPRouteSelector
+		config.GatewaySelector = cluster.ClusterCfg.GatewaySelector
+		config.DomainFilters = cluster.ClusterCfg.DomainFilters
+		config.ClusterLabels = cluster.ClusterCfg.ClusterLabels
+	}
+	return discoveryConfigHash(config)
+}
+
+func serviceDiscoveryCacheKey(cluster *ClusterClient, dashboard *homerv1alpha1.Dashboard) string {
+	config := discoveryCacheConfig{}
+	if cluster.Name == localClusterName {
+		config.Selector = dashboard.Spec.ServiceSelector
+	} else if cluster.ClusterCfg != nil {
+		config.NamespaceFilter = cluster.ClusterCfg.NamespaceFilter
+		config.Selector = cluster.ClusterCfg.ServiceSelector
+		if config.Selector == nil {
+			config.Selector = dashboard.Spec.ServiceSelector
+		}
+		config.ClusterLabels = cluster.ClusterCfg.ClusterLabels
+	} else {
+		config.Selector = dashboard.Spec.ServiceSelector
+	}
+	return discoveryConfigHash(config)
+}
+
+func (m *ClusterManager) ensureDiscoveryCaches() {
+	if m.clients == nil {
+		m.clients = make(map[string]*ClusterClient)
+	}
+	if m.secretHashes == nil {
+		m.secretHashes = make(map[string]string)
+	}
+	if m.lastIngresses == nil {
+		m.lastIngresses = make(map[string][]networkingv1.Ingress)
+	}
+	if m.lastHTTPRoutes == nil {
+		m.lastHTTPRoutes = make(map[string][]gatewayv1.HTTPRoute)
+	}
+	if m.lastServices == nil {
+		m.lastServices = make(map[string][]corev1.Service)
+	}
+	if m.ingressCacheKeys == nil {
+		m.ingressCacheKeys = make(map[string]string)
+	}
+	if m.httpRouteCacheKeys == nil {
+		m.httpRouteCacheKeys = make(map[string]string)
+	}
+	if m.serviceCacheKeys == nil {
+		m.serviceCacheKeys = make(map[string]string)
+	}
+}
+
+func (m *ClusterManager) clearDiscoveryCache(name string) {
+	delete(m.lastIngresses, name)
+	delete(m.lastHTTPRoutes, name)
+	delete(m.lastServices, name)
+	delete(m.ingressCacheKeys, name)
+	delete(m.httpRouteCacheKeys, name)
+	delete(m.serviceCacheKeys, name)
+}
+
+func (m *ClusterManager) clearServiceDiscoveryCache(name string) {
+	delete(m.lastServices, name)
+	delete(m.serviceCacheKeys, name)
+}
+
+func (m *ClusterManager) invalidateIngressCacheIfConfigChanged(cluster *ClusterClient, dashboard *homerv1alpha1.Dashboard) {
+	key := ingressDiscoveryCacheKey(cluster, dashboard)
+	if previous, ok := m.ingressCacheKeys[cluster.Name]; ok && previous != key {
+		delete(m.lastIngresses, cluster.Name)
+	}
+	m.ingressCacheKeys[cluster.Name] = key
+}
+
+func (m *ClusterManager) invalidateHTTPRouteCacheIfConfigChanged(cluster *ClusterClient, dashboard *homerv1alpha1.Dashboard) {
+	key := httpRouteDiscoveryCacheKey(cluster, dashboard)
+	if previous, ok := m.httpRouteCacheKeys[cluster.Name]; ok && previous != key {
+		delete(m.lastHTTPRoutes, cluster.Name)
+	}
+	m.httpRouteCacheKeys[cluster.Name] = key
+}
+
+func (m *ClusterManager) invalidateServiceCacheIfConfigChanged(cluster *ClusterClient, dashboard *homerv1alpha1.Dashboard) {
+	key := serviceDiscoveryCacheKey(cluster, dashboard)
+	if previous, ok := m.serviceCacheKeys[cluster.Name]; ok && previous != key {
+		delete(m.lastServices, cluster.Name)
+	}
+	m.serviceCacheKeys[cluster.Name] = key
+}
+
+func cloneIngresses(items []networkingv1.Ingress) []networkingv1.Ingress {
+	cloned := make([]networkingv1.Ingress, len(items))
+	for i := range items {
+		cloned[i] = *items[i].DeepCopy()
+	}
+	return cloned
+}
+
+func cloneHTTPRoutes(items []gatewayv1.HTTPRoute) []gatewayv1.HTTPRoute {
+	cloned := make([]gatewayv1.HTTPRoute, len(items))
+	for i := range items {
+		cloned[i] = *items[i].DeepCopy()
+	}
+	return cloned
+}
+
+func cloneServices(items []corev1.Service) []corev1.Service {
+	cloned := make([]corev1.Service, len(items))
+	for i := range items {
+		cloned[i] = *items[i].DeepCopy()
+	}
+	return cloned
+}
+
 // DiscoverIngresses discovers Ingress resources from all connected clusters
 func (m *ClusterManager) DiscoverIngresses(ctx context.Context, dashboard *homerv1alpha1.Dashboard) (map[string][]networkingv1.Ingress, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.ensureDiscoveryCaches()
 
 	results := make(map[string][]networkingv1.Ingress)
 	log := log.FromContext(ctx)
+	var discoveryErr error
 
 	for _, name := range sortedClusterNames(m.clients) {
 		cluster := m.clients[name]
+		if cluster.Disabled {
+			m.clearDiscoveryCache(name)
+			results[name] = nil
+			continue
+		}
+		m.invalidateIngressCacheIfConfigChanged(cluster, dashboard)
 		if !cluster.Connected && name != localClusterName {
 			log.V(1).Info("Skipping disconnected cluster", "cluster", name)
+			if cached, ok := m.lastIngresses[name]; ok {
+				results[name] = cloneIngresses(cached)
+			} else if discoveryErr == nil {
+				discoveryErr = fmt.Errorf("cluster %s is disconnected", name)
+			}
 			continue
 		}
 
@@ -374,21 +671,33 @@ func (m *ClusterManager) DiscoverIngresses(ctx context.Context, dashboard *homer
 			if name != localClusterName {
 				m.recordDiscoveryError(cluster, err)
 			}
+			if apierrors.IsNotFound(err) {
+				// A missing remote API/CRD is authoritative: retaining cards from
+				// an old discovery pass would make removed resources persist.
+				delete(m.lastIngresses, name)
+				results[name] = nil
+			} else if cached, ok := m.lastIngresses[name]; ok {
+				results[name] = cloneIngresses(cached)
+			}
+			if (name == localClusterName || !isExpectedRemoteDiscoveryError(err)) && discoveryErr == nil {
+				discoveryErr = fmt.Errorf("discover ingresses from cluster %s: %w", name, err)
+			}
 			continue
 		}
 
-		// Update connection status on success. LastCheck records the most
-		// recent successful connection, not every discovery pass; exposing a
+		// Update connection status on success. LastSuccessfulConnection records
+		// the most recent successful connection, not every discovery pass; exposing a
 		// fresh timestamp on every reconcile would cause a status-update loop.
 		if name != localClusterName {
 			cluster.Connected = true
 		}
 
 		results[name] = ingresses
+		m.lastIngresses[name] = cloneIngresses(ingresses)
 		log.V(1).Info("Discovered ingresses", "cluster", name, "count", len(ingresses))
 	}
 
-	return results, nil
+	return results, discoveryErr
 }
 
 // discoverClusterIngresses discovers Ingresses from a specific cluster
@@ -505,14 +814,27 @@ func (m *ClusterManager) discoverClusterIngresses(ctx context.Context, cluster *
 func (m *ClusterManager) DiscoverHTTPRoutes(ctx context.Context, dashboard *homerv1alpha1.Dashboard) (map[string][]gatewayv1.HTTPRoute, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.ensureDiscoveryCaches()
 
 	results := make(map[string][]gatewayv1.HTTPRoute)
 	log := log.FromContext(ctx)
+	var discoveryErr error
 
 	for _, name := range sortedClusterNames(m.clients) {
 		cluster := m.clients[name]
+		if cluster.Disabled {
+			m.clearDiscoveryCache(name)
+			results[name] = nil
+			continue
+		}
+		m.invalidateHTTPRouteCacheIfConfigChanged(cluster, dashboard)
 		if !cluster.Connected && name != localClusterName {
 			log.V(1).Info("Skipping disconnected cluster", "cluster", name)
+			if cached, ok := m.lastHTTPRoutes[name]; ok {
+				results[name] = cloneHTTPRoutes(cached)
+			} else if discoveryErr == nil {
+				discoveryErr = fmt.Errorf("cluster %s is disconnected", name)
+			}
 			continue
 		}
 
@@ -522,20 +844,30 @@ func (m *ClusterManager) DiscoverHTTPRoutes(ctx context.Context, dashboard *home
 			if name != localClusterName {
 				m.recordDiscoveryError(cluster, err)
 			}
+			if apierrors.IsNotFound(err) {
+				delete(m.lastHTTPRoutes, name)
+				results[name] = nil
+			} else if cached, ok := m.lastHTTPRoutes[name]; ok {
+				results[name] = cloneHTTPRoutes(cached)
+			}
+			if (name == localClusterName || !isExpectedRemoteDiscoveryError(err)) && discoveryErr == nil {
+				discoveryErr = fmt.Errorf("discover HTTPRoutes from cluster %s: %w", name, err)
+			}
 			continue
 		}
 
-		// LastCheck is updated when the connection is established or restored,
-		// not on every successful discovery pass.
+		// LastSuccessfulConnection is updated when the connection is established
+		// or restored, not on every successful discovery pass.
 		if name != localClusterName {
 			cluster.Connected = true
 		}
 
 		results[name] = httproutes
+		m.lastHTTPRoutes[name] = cloneHTTPRoutes(httproutes)
 		log.V(1).Info("Discovered HTTPRoutes", "cluster", name, "count", len(httproutes))
 	}
 
-	return results, nil
+	return results, discoveryErr
 }
 
 // discoverClusterHTTPRoutes discovers HTTPRoutes from a specific cluster
@@ -574,8 +906,7 @@ func (m *ClusterManager) discoverClusterHTTPRoutes(ctx context.Context, cluster 
 	for i := range clusterHTTPRoutes.Items {
 		shouldInclude, err := m.shouldIncludeHTTPRoute(ctx, cluster, &clusterHTTPRoutes.Items[i], dashboard)
 		if err != nil {
-			m.log.V(1).Error(err, "Error checking HTTPRoute inclusion", "httproute", clusterHTTPRoutes.Items[i].Name, "cluster", cluster.Name)
-			continue
+			return nil, &requiredRemoteDiscoveryError{err: fmt.Errorf("check HTTPRoute %s/%s inclusion: %w", clusterHTTPRoutes.Items[i].Namespace, clusterHTTPRoutes.Items[i].Name, err)}
 		}
 		if shouldInclude {
 			selectorPassed++
@@ -610,7 +941,9 @@ func (m *ClusterManager) discoverClusterHTTPRoutes(ctx context.Context, cluster 
 
 			// Merge namespace annotations from the source cluster
 			m.mergeHomerAnnotationsFromNamespace(ctx, cluster.Client, clusterHTTPRoutes.Items[i].Namespace, clusterHTTPRoutes.Items[i].Annotations)
-			setHTTPRouteProtocol(ctx, cluster.Client, &clusterHTTPRoutes.Items[i])
+			if err := setHTTPRouteProtocolWithError(ctx, cluster.Client, &clusterHTTPRoutes.Items[i]); err != nil {
+				return nil, &requiredRemoteDiscoveryError{err: fmt.Errorf("resolve HTTPRoute %s/%s protocol: %w", clusterHTTPRoutes.Items[i].Namespace, clusterHTTPRoutes.Items[i].Name, err)}
+			}
 
 			filtered = append(filtered, clusterHTTPRoutes.Items[i])
 		}
@@ -693,9 +1026,11 @@ func (m *ClusterManager) shouldIncludeHTTPRoute(ctx context.Context, cluster *Cl
 func (m *ClusterManager) DiscoverServices(ctx context.Context, dashboard *homerv1alpha1.Dashboard) (map[string][]corev1.Service, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.ensureDiscoveryCaches()
 
 	results := make(map[string][]corev1.Service)
 	log := log.FromContext(ctx)
+	var discoveryErr error
 
 	// If no ServiceSelector anywhere, skip entirely
 	if dashboard.Spec.ServiceSelector == nil {
@@ -707,14 +1042,31 @@ func (m *ClusterManager) DiscoverServices(ctx context.Context, dashboard *homerv
 			}
 		}
 		if !hasRemoteSelector {
+			for name := range m.lastServices {
+				m.clearServiceDiscoveryCache(name)
+			}
+			for name := range m.serviceCacheKeys {
+				m.clearServiceDiscoveryCache(name)
+			}
 			return results, nil
 		}
 	}
 
 	for _, name := range sortedClusterNames(m.clients) {
 		cluster := m.clients[name]
+		if cluster.Disabled {
+			m.clearServiceDiscoveryCache(name)
+			results[name] = nil
+			continue
+		}
+		m.invalidateServiceCacheIfConfigChanged(cluster, dashboard)
 		if !cluster.Connected && name != localClusterName {
 			log.V(1).Info("Skipping disconnected cluster for Service discovery", "cluster", name)
+			if cached, ok := m.lastServices[name]; ok {
+				results[name] = cloneServices(cached)
+			} else if discoveryErr == nil {
+				discoveryErr = fmt.Errorf("cluster %s is disconnected", name)
+			}
 			continue
 		}
 
@@ -724,6 +1076,15 @@ func (m *ClusterManager) DiscoverServices(ctx context.Context, dashboard *homerv
 			if name != localClusterName {
 				m.recordDiscoveryError(cluster, err)
 			}
+			if apierrors.IsNotFound(err) {
+				delete(m.lastServices, name)
+				results[name] = nil
+			} else if cached, ok := m.lastServices[name]; ok {
+				results[name] = cloneServices(cached)
+			}
+			if (name == localClusterName || !isExpectedRemoteDiscoveryError(err)) && discoveryErr == nil {
+				discoveryErr = fmt.Errorf("discover Services from cluster %s: %w", name, err)
+			}
 			continue
 		}
 
@@ -732,10 +1093,11 @@ func (m *ClusterManager) DiscoverServices(ctx context.Context, dashboard *homerv
 		}
 
 		results[name] = services
+		m.lastServices[name] = cloneServices(services)
 		log.V(1).Info("Discovered Services", "cluster", name, "count", len(services))
 	}
 
-	return results, nil
+	return results, discoveryErr
 }
 
 // recordDiscoveryError records the failed resource query while preserving an
