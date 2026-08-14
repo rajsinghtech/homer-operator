@@ -177,7 +177,7 @@ for verification_marker in \
     'make generate' \
     'make lint' \
     'make envtest' \
-    '--bin-dir "$PWD/bin"' \
+    "--bin-dir \"\$PWD/bin\"" \
     'KUBEBUILDER_ASSETS=' \
     'go vet ./...' \
     'go test' \
@@ -194,11 +194,11 @@ for verification_marker in \
 done
 
 for workflow in "$RELEASE_WORKFLOW" "$HELM_RELEASE"; do
-    if ! grep -Fq 'actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz' "$workflow"; then
+    if ! grep -Fq "actionlint_\${ACTIONLINT_VERSION}_linux_amd64.tar.gz" "$workflow"; then
         echo "$workflow downloads the wrong actionlint Linux asset" >&2
         exit 1
     fi
-    if grep -Fq 'actionlint_${ACTIONLINT_VERSION}_linux_x86_64.tar.gz' "$workflow"; then
+    if grep -Fq "actionlint_\${ACTIONLINT_VERSION}_linux_x86_64.tar.gz" "$workflow"; then
         echo "$workflow still references the nonexistent x86_64 actionlint asset" >&2
         exit 1
     fi
