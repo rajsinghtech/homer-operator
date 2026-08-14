@@ -20,10 +20,13 @@ func TestSetHTTPRouteProtocolUsesSelectedGatewayListener(t *testing.T) {
 	sectionName := gatewayv1.SectionName("tls")
 	route := &gatewayv1.HTTPRoute{
 		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
-		Spec: gatewayv1.HTTPRouteSpec{ParentRefs: []gatewayv1.ParentReference{{
-			Name:        "public",
-			SectionName: &sectionName,
-		}}, Hostnames: []gatewayv1.Hostname{"app.example.com"}},
+		Spec: gatewayv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{{
+				Name:        "public",
+				SectionName: &sectionName,
+			}}},
+			Hostnames: []gatewayv1.Hostname{"app.example.com"},
+		},
 	}
 	gateway := &gatewayv1.Gateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "public", Namespace: "default"},
@@ -51,8 +54,8 @@ func TestSetHTTPRouteProtocolDoesNotGuessFromHostname(t *testing.T) {
 	route := &gatewayv1.HTTPRoute{
 		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
 		Spec: gatewayv1.HTTPRouteSpec{
-			ParentRefs: []gatewayv1.ParentReference{{Name: "public"}},
-			Hostnames:  []gatewayv1.Hostname{"app.example.com"},
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{{Name: "public"}}},
+			Hostnames:       []gatewayv1.Hostname{"app.example.com"},
 		},
 	}
 	gateway := &gatewayv1.Gateway{
