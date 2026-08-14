@@ -77,7 +77,9 @@ const (
 		"resources/labeled/ing-128.png"
 	ServiceIconURL = "https://raw.githubusercontent.com/kubernetes/community/master/icons/png/" +
 		"resources/labeled/svc-128.png"
-	assetVolumeNamePrefix = "asset-volume-"
+	assetVolumeNamePrefix   = "asset-volume-"
+	headersObjectName       = "headers"
+	legacyHeadersObjectName = "customHeaders"
 )
 
 const (
@@ -3203,7 +3205,7 @@ func processItemField(item *Item, fieldName, value string, validationLevel Valid
 	// Homer expects item.headers to be an object. Support the documented
 	// comma-separated form, per-header dot notation, and the historical
 	// customHeaders slash form while storing all of them in that object.
-	if lowerFieldName == "headers" {
+	if lowerFieldName == headersObjectName {
 		processHeaderAnnotation(item, value)
 		return
 	}
@@ -3274,7 +3276,7 @@ func processNestedObjectField(item *Item, fieldName, value string) {
 
 	objectName := parts[0]
 	propertyName := parts[1]
-	if strings.EqualFold(objectName, "headers") || strings.EqualFold(objectName, "customHeaders") {
+	if strings.EqualFold(objectName, headersObjectName) || strings.EqualFold(objectName, legacyHeadersObjectName) {
 		setItemHeader(item, propertyName, value)
 		return
 	}
@@ -4379,7 +4381,7 @@ func addProxyConfig(configMap map[string]any, config *HomerConfig) {
 			proxyMap["useCredentials"] = config.Proxy.UseCredentials
 		}
 		if len(config.Proxy.Headers) > 0 {
-			proxyMap["headers"] = config.Proxy.Headers
+			proxyMap[headersObjectName] = config.Proxy.Headers
 		}
 		configMap["proxy"] = proxyMap
 	}
@@ -4569,14 +4571,14 @@ func flattenItemsForYAML(items []Item) []map[string]any {
 		// Add nested objects
 		if item.NestedObjects != nil {
 			for objectName, objectMap := range item.NestedObjects {
-				if strings.EqualFold(objectName, "headers") || strings.EqualFold(objectName, "customHeaders") {
+				if strings.EqualFold(objectName, headersObjectName) || strings.EqualFold(objectName, legacyHeadersObjectName) {
 					continue
 				}
 				itemMap[objectName] = objectMap
 			}
 		}
 		if len(headers) > 0 {
-			itemMap["headers"] = headers
+			itemMap[headersObjectName] = headers
 		}
 
 		// Add array objects (e.g., quick links)
@@ -4617,7 +4619,7 @@ func flattenItemHeaders(item Item) map[string]any {
 	for key, value := range item.Parameters {
 		lowerKey := strings.ToLower(key)
 		switch {
-		case lowerKey == "headers":
+		case lowerKey == headersObjectName:
 			for name, headerValue := range parseHeaderAnnotation(value) {
 				if _, exists := headers[name]; !exists {
 					headers[name] = headerValue
@@ -4632,7 +4634,7 @@ func flattenItemHeaders(item Item) map[string]any {
 	}
 
 	for objectName, objectMap := range item.NestedObjects {
-		if !strings.EqualFold(objectName, "headers") && !strings.EqualFold(objectName, "customHeaders") {
+		if !strings.EqualFold(objectName, headersObjectName) && !strings.EqualFold(objectName, legacyHeadersObjectName) {
 			continue
 		}
 		for name, value := range objectMap {
@@ -4646,7 +4648,7 @@ func flattenItemHeaders(item Item) map[string]any {
 
 func isLegacyHeaderParameter(key string) bool {
 	lowerKey := strings.ToLower(key)
-	return lowerKey == "headers" || strings.HasPrefix(lowerKey, "headers.")
+	return lowerKey == headersObjectName || strings.HasPrefix(lowerKey, headersObjectName+".")
 }
 
 func addDirectItemFields(itemMap map[string]any, item Item) {
@@ -4693,7 +4695,7 @@ func addDirectItemFields(itemMap map[string]any, item Item) {
 		itemMap["useCredentials"] = *item.UseCredentials
 	}
 	if len(item.Headers) > 0 {
-		itemMap["headers"] = item.Headers
+		itemMap[headersObjectName] = item.Headers
 	}
 	if len(item.SuccessCodes) > 0 {
 		itemMap["successCodes"] = item.SuccessCodes
