@@ -34,7 +34,7 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@v4
         with:
-          version: v3.21.3
+          version: v3.21.4
 
       - name: Install verification tools
         run: |
@@ -91,7 +91,7 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@v4
         with:
-          version: v3.21.3
+          version: v3.21.4
 
       - name: Validate chart
         run: |
