@@ -122,11 +122,16 @@ The following table lists the configurable parameters of the Homer Operator char
 | `deploymentStrategy.rollingUpdate.maxUnavailable` | Maximum unavailable Pods during rolling updates | `1` |
 | `deploymentStrategy.rollingUpdate.maxSurge` | Maximum additional Pods during rolling updates | `1` |
 | `terminationGracePeriodSeconds` | Pod termination grace period | `10` |
-| `env` / `envFrom` | Additional operator environment sources | `[]` / `[]` |
+| `env` / `envFrom` | Additional operator environment sources; `LOG_LEVEL` supports `debug`, `info`, `error`, `panic`, or a positive integer verbosity | `[]` / `[]` |
 
-Legacy values for operator log formatting, reconcile tuning, leader-election
-timers, and `homer.image.pullPolicy` are intentionally unsupported because the
-operator binary has no corresponding runtime settings; Helm rejects them.
+The operator uses production logging defaults (JSON output at `info` level).
+Use `env` to set `LOG_LEVEL`, or pass controller-runtime's `--zap-log-level`
+and `--zap-devel` flags through a custom deployment when needed. An explicit
+`--zap-log-level` flag takes precedence over `LOG_LEVEL`.
+
+Legacy values for reconcile tuning, leader-election timers, and
+`homer.image.pullPolicy` are intentionally unsupported because the operator
+binary has no corresponding runtime settings; Helm rejects them.
 
 ## Examples
 
