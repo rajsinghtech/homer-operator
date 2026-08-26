@@ -19,6 +19,7 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"os"
 	"strconv"
 
@@ -73,11 +74,12 @@ func main() {
 	flag.BoolVar(&enableGatewayAPI, "enable-gateway-api", false, "Enable Gateway API support")
 	flag.StringVar(&homerImage, "homer-image", "b4bz/homer:latest", "Homer dashboard container image")
 	flag.StringVar(&configSyncImage, "config-sync-image", "alpine:3.18", "Config-sync sidecar container image")
-	opts := zap.Options{
-		Development: true,
-	}
-	opts.BindFlags(flag.CommandLine)
+	opts := newLogOptions(flag.CommandLine)
 	flag.Parse()
+	if err := applyLogLevelEnv(flag.CommandLine, os.Getenv("LOG_LEVEL")); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
 
 	if envGateway := os.Getenv("ENABLE_GATEWAY_API"); envGateway != "" {
 		if parsed, err := strconv.ParseBool(envGateway); err == nil {
@@ -85,7 +87,7 @@ func main() {
 		}
 	}
 
-	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+	ctrl.SetLogger(zap.New(zap.UseFlagOptions(opts)))
 
 	var tlsOpts []func(*tls.Config)
 	if !enableHTTP2 {

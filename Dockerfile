@@ -27,7 +27,7 @@ COPY pkg/ pkg/
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -ldflags="-w -s" -trimpath -o manager cmd/main.go
+    go build -ldflags="-w -s" -trimpath -o manager ./cmd
 
 # Runtime stage
 FROM gcr.io/distroless/static:nonroot

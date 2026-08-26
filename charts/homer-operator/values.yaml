@@ -203,7 +203,9 @@ terminationGracePeriodSeconds: 10
 env: []
 # Example:
 # - name: LOG_LEVEL
-#   value: "debug"
+#   value: "info"
+# LOG_LEVEL accepts the controller-runtime zap levels: debug, info, error,
+# panic, or a positive integer for a custom logr verbosity.
 # - name: SECRET_VALUE
 #   valueFrom:
 #     secretKeyRef:
