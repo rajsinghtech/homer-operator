@@ -53,7 +53,7 @@ require (
 	google.golang.org/grpc v1.78.0 // indirect
 	k8s.io/apiserver v0.34.10 // indirect
 	k8s.io/component-base v0.34.10 // indirect
-	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.31.2 // indirect
+	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.31.4 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.3 // indirect
 )
 
